@@ -192,7 +192,7 @@ uv sync
 echo "OPENAI_API_KEY=your-openai-api-key-here" > .env
 
 # 4. Start the demo
-cuga start demo_crm
+cuga start demo_crm --read-only
 
 # Chrome will open automatically at https://localhost:7860
 # then try sending your task to CUGA: 'from contacts.txt show me which users belong to the crm system'
