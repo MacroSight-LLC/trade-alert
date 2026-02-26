@@ -1,5 +1,5 @@
 import asyncio
-import datetime
+from datetime import datetime
 import platform
 import re
 import shutil
@@ -8,21 +8,21 @@ import subprocess
 import uuid
 import yaml
 import httpx
+import json
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Union, Optional
 from pathlib import Path
-from cuga.backend.utils.id_utils import random_id_with_timestamp
 import traceback
 from pydantic import BaseModel, ValidationError
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from loguru import logger
 
 from cuga.backend.activity_tracker.tracker import ActivityTracker
 from cuga.configurations.instructions_manager import InstructionsManager
-from cuga.backend.tools_env.registry.utils.api_utils import get_apps, get_apis
+from cuga.backend.tools_env.registry.utils.api_utils import get_agent_id, get_apps, get_apis
 from cuga.cli import start_extension_browser_if_configured
 from cuga.backend.browser_env.browser.extension_env_async import ExtensionEnv
 from cuga.backend.browser_env.browser.gym_obs.http_stream_comm import (
@@ -49,7 +49,11 @@ from cuga.config import (
     LOGGING_DIR,
     TRACES_DIR,
 )
+from cuga.backend.server import manage_routes
+from cuga.backend.server.conversation_history import get_conversation_db
 
+# Default user ID for conversation history
+DEFAULT_USER_ID = "default_user"
 
 try:
     from langfuse.langchain import CallbackHandler
@@ -58,8 +62,6 @@ except ImportError:
         from langfuse.callback.langchain import LangchainCallbackHandler as CallbackHandler
     except ImportError:
         CallbackHandler = None
-from fastapi.responses import StreamingResponse, JSONResponse
-import json
 
 # Import embedded assets with feature flag
 USE_EMBEDDED_ASSETS = os.getenv("USE_EMBEDDED_ASSETS", "false").lower() in ("true", "1", "yes", "on")
@@ -142,6 +144,10 @@ class AppState:
             self.EXTENSION_PATH: Optional[str] = EXTENSION_DIR
         self.STATIC_DIR_FLOWS: str = STATIC_DIR_FLOWS_PATH
         self.save_reuse_process: Optional[asyncio.subprocess.Process] = None
+        self.agent_id: str = "cuga-default"
+        self.config_version: Optional[int] = None
+        self.tools_include_by_app: Optional[Dict[str, List[str]]] = None
+        self.tools_include_version: int = 0
         self.initialize_sdk()
 
     def initialize_sdk(self):
@@ -161,8 +167,20 @@ class AppState:
             )
 
 
+class DraftAppState:
+    """State for the draft agent (Manage chat). Isolated from published app_state."""
+
+    def __init__(self):
+        self.tools_include_by_app: Optional[Dict[str, List[str]]] = None
+        self.tools_include_version: int = 0
+        self.agent: Optional[DynamicAgentGraph] = None
+        self.policy_system: Optional[Any] = None
+        self.policy_filesystem_sync: Optional[Any] = None  # PolicyFilesystemSync instance for draft
+
+
 # Create a single instance of the AppState class to be used throughout the application.
 app_state = AppState()
+draft_app_state = DraftAppState()
 
 
 class ChatRequest(BaseModel):
@@ -301,6 +319,50 @@ async def lifespan(app: FastAPI):
         app_state.policy_system = None
         app_state.policy_filesystem_sync = None
 
+    if os.getenv("CUGA_MANAGER_MODE", "").lower() in ("true", "1", "yes", "on"):
+        try:
+            from cuga.backend.server.config_store import load_config
+            from cuga.backend.server.managed_mcp import get_managed_mcp_path, write_managed_mcp_yaml
+            from cuga.backend.cuga_graph.policy.utils import apply_policies_data_to_storage
+
+            config, version = await load_config(None)
+            app_state.config_version = version
+            app_state.agent_id = "cuga-default"
+            tools_list = (config or {}).get("tools") or []
+            app_state.tools_include_by_app = {
+                t["name"]: t["include"]
+                for t in tools_list
+                if t.get("name") and isinstance(t.get("include"), list) and len(t["include"]) > 0
+            } or None
+            app_state.tools_include_version = version or 0
+            write_managed_mcp_yaml(config or {}, get_managed_mcp_path())
+            raw_policies = (config or {}).get("policies")
+            policies_list = (
+                raw_policies.get("policies", [])
+                if isinstance(raw_policies, dict) and "policies" in raw_policies
+                else raw_policies
+                if isinstance(raw_policies, list)
+                else []
+            )
+            if policies_list and app_state.policy_system and app_state.policy_system.storage:
+                await apply_policies_data_to_storage(
+                    app_state.policy_system.storage,
+                    policies_list,
+                    clear_existing=True,
+                    filesystem_sync=app_state.policy_filesystem_sync,
+                )
+                await app_state.policy_system.initialize()
+                logger.info("Manager mode: applied %s policies from config", len(policies_list))
+            registry_url = get_registry_base_url()
+            async with httpx.AsyncClient() as client:
+                r = await client.post(f"{registry_url}/reload", timeout=10.0)
+                r.raise_for_status()
+            logger.info(
+                "Manager mode: config loaded (version=%s), managed MCP written, registry reloaded", version
+            )
+        except Exception as e:
+            logger.warning("Manager mode startup: %s", e)
+
     # Start the save_reuse server if configured
 
     await manage_save_reuse_server()
@@ -339,16 +401,102 @@ async def lifespan(app: FastAPI):
         if settings.advanced_features.langfuse_tracing and CallbackHandler is not None
         else None
     )
+    from cuga.backend.cuga_graph.nodes.cuga_lite.combined_tool_provider import CombinedToolProvider
+    from cuga.backend.server.config_store import load_config, load_draft
+
+    def _get_include_by_app():
+        return (
+            getattr(app_state, "tools_include_by_app", None),
+            getattr(app_state, "tools_include_version", 0),
+        )
+
+    tool_provider = CombinedToolProvider(get_include_by_app=_get_include_by_app, agent_id="cuga-default")
     app_state.agent = DynamicAgentGraph(
-        None, langfuse_handler=langfuse_handler, policy_system=app_state.policy_system
+        None,
+        langfuse_handler=langfuse_handler,
+        policy_system=app_state.policy_system,
+        tool_provider=tool_provider,
     )
     await app_state.agent.build_graph()
 
+    draft_config = await load_draft()
+    if draft_config is None:
+        draft_config, _ = await load_config(None) or (None, None)
+    if draft_config:
+        tools_list = (draft_config or {}).get("tools") or []
+        draft_app_state.tools_include_by_app = {
+            t["name"]: t["include"]
+            for t in tools_list
+            if t.get("name") and isinstance(t.get("include"), list) and len(t["include"]) > 0
+        } or None
+        draft_app_state.tools_include_version = 0
+    else:
+        draft_app_state.tools_include_by_app = getattr(app_state, "tools_include_by_app", None)
+        draft_app_state.tools_include_version = getattr(app_state, "tools_include_version", 0)
+
+    # Create versioned agent_id for draft to track configuration changes
+    # Using '--' separator for better compatibility (URL-safe, filesystem-safe)
+    # Single agent_id "cuga-default" with version "draft" for draft configs
+    draft_version = "draft"
+    draft_agent_id = f"cuga-default--{draft_version}"
+
+    def _get_draft_include_by_app():
+        return (
+            getattr(draft_app_state, "tools_include_by_app", None),
+            getattr(draft_app_state, "tools_include_version", 0),
+        )
+
+    if settings.policy.enabled and app_state.policy_system:
+        from cuga.backend.cuga_graph.policy.storage import PolicyStorage
+        from cuga.backend.cuga_graph.policy.configurable import PolicyConfigurable
+
+        policy_config = getattr(settings, "policy", None)
+        base_name = policy_config.collection_name if policy_config else "cuga_policies"
+        draft_collection = f"{base_name}_draft"
+        from cuga.backend.storage.embedding import get_embedding_config
+
+        emb_cfg = get_embedding_config()
+        draft_storage = PolicyStorage(
+            collection_name=draft_collection,
+            embedding_provider=os.getenv("STORAGE_EMBEDDING_PROVIDER")
+            or os.getenv("POLICY_EMBEDDING_PROVIDER")
+            or emb_cfg["provider"],
+            embedding_model=os.getenv("STORAGE_EMBEDDING_MODEL")
+            or os.getenv("POLICY_EMBEDDING_MODEL")
+            or emb_cfg["model"],
+            embedding_base_url=os.getenv("STORAGE_EMBEDDING_BASE_URL")
+            or os.getenv("POLICY_EMBEDDING_BASE_URL")
+            or emb_cfg["base_url"],
+            embedding_api_key=os.getenv("STORAGE_EMBEDDING_API_KEY")
+            or os.getenv("POLICY_EMBEDDING_API_KEY")
+            or emb_cfg["api_key"],
+        )
+        await draft_storage.initialize_async()
+        draft_app_state.policy_system = PolicyConfigurable(storage=draft_storage)
+        await draft_app_state.policy_system.initialize()
+        logger.info("Draft policy system initialized (collection: %s)", draft_collection)
+
+    draft_tool_provider = CombinedToolProvider(
+        get_include_by_app=_get_draft_include_by_app, agent_id=draft_agent_id
+    )
+    draft_policy = getattr(draft_app_state, "policy_system", None) or app_state.policy_system
+    from cuga.backend.server.manage_routes import _extract_agent_feature_overrides
+
+    draft_overrides = _extract_agent_feature_overrides(draft_config or {}) if draft_config else {}
+    draft_app_state.agent = DynamicAgentGraph(
+        None,
+        langfuse_handler=langfuse_handler,
+        policy_system=draft_policy,
+        tool_provider=draft_tool_provider,
+        enable_todos=draft_overrides.get("enable_todos"),
+        reflection_enabled=draft_overrides.get("reflection_enabled"),
+        shortlisting_tool_threshold=draft_overrides.get("shortlisting_tool_threshold"),
+        cuga_lite_max_steps=draft_overrides.get("cuga_lite_max_steps"),
+    )
+    await draft_app_state.agent.build_graph()
+
     logger.info("Application finished starting up...")
-    url = f"http://localhost:{settings.server_ports.demo}?t={random_id_with_timestamp()}"
-    # Set by cli.py only for 'cuga start demo' (not demo_crm)
-    if os.getenv("CUGA_DEMO_ADVANCED", "false").lower() in ("true", "1"):
-        url += "&mode=advanced"
+    url = f"http://localhost:{settings.server_ports.demo}/manage/cuga-default"
     if settings.advanced_features.mode == "api" and os.getenv("CUGA_TEST_ENV", "false").lower() not in (
         "true",
         "1",
@@ -481,8 +629,145 @@ async def setup_page_info(state: AgentState, env: ExtensionEnv | BrowserEnvGymAs
     state.current_app_description = f"web application for '{title}' and url '{url_app_name}'"
 
 
-async def event_stream(query: str, api_mode=False, resume=None, thread_id: str = None):
-    """Handles the main agent event stream."""
+async def _save_conversation_and_events_async(
+    agent_id: str, thread_id: str, user_id: str, state: AgentState, events: List[Dict[str, Any]]
+):
+    """Save conversation history and stream events asynchronously."""
+    try:
+        await save_conversation_to_db(agent_id, thread_id, state, user_id)
+        if events:
+            conversation_db = get_conversation_db()
+            await conversation_db.save_stream_events(agent_id, thread_id, user_id, events)
+            logger.debug(f"Batch saved {len(events)} stream events for thread {thread_id}")
+    except Exception as e:
+        logger.error(f"Error in async save: {e}")
+
+
+async def save_conversation_to_db(
+    agent_id: str, thread_id: str, state: AgentState, user_id: str = DEFAULT_USER_ID
+):
+    """
+    Save conversation history to database.
+
+    Args:
+        agent_id: The agent identifier
+        thread_id: The thread/conversation identifier
+        state: The current agent state containing messages
+        user_id: The user identifier (defaults to DEFAULT_USER_ID)
+    """
+    try:
+        if not thread_id or not state:
+            return
+
+        conversation_db = get_conversation_db()
+
+        # Get the latest version and increment
+        latest_version = await conversation_db.get_latest_version(agent_id, thread_id, user_id)
+        new_version = latest_version + 1
+
+        # Debug logging
+        logger.info(f"=== SAVE DEBUG === thread_id={thread_id}, version={new_version}")
+        logger.info(f"State has chat_messages: {len(state.chat_messages) if state.chat_messages else 0}")
+        logger.info(
+            f"State has chat_agent_messages: {len(state.chat_agent_messages) if state.chat_agent_messages else 0}"
+        )
+        logger.info(
+            f"State has supervisor_chat_messages: {len(state.supervisor_chat_messages) if state.supervisor_chat_messages else 0}"
+        )
+
+        # Convert messages to serializable format
+        messages = []
+
+        # Add chat_messages if available
+        if state.chat_messages:
+            logger.info(f"Processing {len(state.chat_messages)} chat_messages")
+            for i, msg in enumerate(state.chat_messages):
+                # Determine role based on message type or position (alternating user/assistant)
+                if isinstance(msg, HumanMessage):
+                    role = "user"
+                elif isinstance(msg, AIMessage):
+                    role = "assistant"
+                else:
+                    # For BaseMessage, alternate between user and assistant based on position
+                    role = "user" if i % 2 == 0 else "assistant"
+
+                logger.debug(
+                    f"Message {i}: type={type(msg).__name__}, role={role}, content={str(msg.content if hasattr(msg, 'content') else msg)[:50]}..."
+                )
+
+                messages.append(
+                    {
+                        "role": role,
+                        "content": msg.content if hasattr(msg, 'content') else str(msg),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "metadata": {"type": type(msg).__name__, "message_type": "chat_messages"},
+                    }
+                )
+
+        # Add chat_agent_messages if available
+        if state.chat_agent_messages:
+            logger.info(f"Processing {len(state.chat_agent_messages)} chat_agent_messages")
+            for msg in state.chat_agent_messages:
+                messages.append(
+                    {
+                        "role": "user"
+                        if isinstance(msg, HumanMessage)
+                        else "assistant"
+                        if isinstance(msg, AIMessage)
+                        else "system",
+                        "content": msg.content if hasattr(msg, 'content') else str(msg),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "metadata": {"type": type(msg).__name__, "message_type": "chat_agent_messages"},
+                    }
+                )
+
+        # Add supervisor_chat_messages if available
+        if state.supervisor_chat_messages:
+            logger.info(f"Processing {len(state.supervisor_chat_messages)} supervisor_chat_messages")
+            for msg in state.supervisor_chat_messages:
+                messages.append(
+                    {
+                        "role": "user"
+                        if isinstance(msg, HumanMessage)
+                        else "assistant"
+                        if isinstance(msg, AIMessage)
+                        else "system",
+                        "content": msg.content if hasattr(msg, 'content') else str(msg),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "metadata": {"type": type(msg).__name__, "message_type": "supervisor_chat_messages"},
+                    }
+                )
+
+        # Save to database
+        if messages:
+            logger.info(f"Total messages to save: {len(messages)}")
+            success = await conversation_db.save_conversation(
+                agent_id=agent_id,
+                thread_id=thread_id,
+                version=new_version,
+                user_id=user_id,
+                messages=messages,
+            )
+            if success:
+                logger.info(
+                    f"✓ Saved conversation history: thread_id={thread_id}, version={new_version}, messages={len(messages)}"
+                )
+            else:
+                logger.warning(f"✗ Failed to save conversation history: thread_id={thread_id}")
+        else:
+            logger.warning(f"No messages to save for thread_id={thread_id}")
+    except Exception as e:
+        logger.error(f"Error saving conversation to database: {e}")
+
+
+async def event_stream(
+    query: str, api_mode=False, resume=None, thread_id: str = None, agent=None, disable_history: bool = False
+):
+    """Handles the main agent event stream. If agent is None, uses app_state.agent (published)."""
+    run_agent = agent if agent is not None else app_state.agent
+    if not run_agent or not run_agent.graph:
+        yield StreamEvent(name="Error", data="Agent not available.").format()
+        return
     # Create or get cancellation event for this thread
     if thread_id:
         if thread_id not in app_state.stop_events:
@@ -505,7 +790,7 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
         # Check if we have existing state for this thread_id (for followup questions)
         if thread_id:
             try:
-                latest_state_values = app_state.agent.graph.get_state(
+                latest_state_values = run_agent.graph.get_state(
                     {"configurable": {"thread_id": thread_id}}
                 ).values
                 if latest_state_values:
@@ -540,12 +825,15 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
     else:
         # For resume, fetch state from LangGraph
         if thread_id:
-            latest_state_values = app_state.agent.graph.get_state(
-                {"configurable": {"thread_id": thread_id}}
-            ).values
+            latest_state_values = run_agent.graph.get_state({"configurable": {"thread_id": thread_id}}).values
             if latest_state_values:
                 local_state = AgentState(**latest_state_values)
                 local_state.thread_id = thread_id
+
+    if local_state:
+        from cuga.config import get_service_instance_id, get_tenant_id
+
+        local_state.service_scope = {"tenant_id": get_tenant_id(), "instance_id": get_service_instance_id()}
 
     if not api_mode:
         local_obs, _, _, _, local_info = await app_state.env.step("")
@@ -562,6 +850,22 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
 
     local_tracker.task_id = 'demo'
 
+    # Initialize event sequence counter and buffer for stream event tracking
+    event_sequence = 0
+    stream_events_buffer = []  # Buffer to collect events during streaming
+
+    # Add user message to buffer as first event
+    if query and thread_id:
+        stream_events_buffer.append(
+            {
+                "event_name": "UserMessage",
+                "event_data": query,
+                "timestamp": datetime.utcnow().isoformat(),
+                "sequence": event_sequence,
+            }
+        )
+        event_sequence += 1
+
     langfuse_handler = (
         CallbackHandler()
         if settings.advanced_features.langfuse_tracing and CallbackHandler is not None
@@ -575,10 +879,15 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
         print("Note: Trace ID will be available after the first LLM operation")
 
     agent_loop_obj = AgentLoop(
-        graph=app_state.agent.graph,
+        graph=run_agent.graph,
         langfuse_handler=langfuse_handler,
         thread_id=thread_id,
         tracker=local_tracker,
+        policy_system=run_agent.policy_system,
+        enable_todos=getattr(run_agent, "enable_todos", None),
+        reflection_enabled=getattr(run_agent, "reflection_enabled", None),
+        shortlisting_tool_threshold=getattr(run_agent, "shortlisting_tool_threshold", None),
+        cuga_lite_max_steps=getattr(run_agent, "cuga_lite_max_steps", None),
     )
     logger.debug(f"Resume: {resume.model_dump_json() if resume else ''}")
 
@@ -617,13 +926,13 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                 if isinstance(event, AgentLoopAnswer):
                     if event.flow_generalized:
                         await manage_save_reuse_server()
-                        await app_state.agent.chat.chat_agent.cleanup()
-                        await app_state.agent.chat.chat_agent.setup()
+                        await run_agent.chat.chat_agent.cleanup()
+                        await run_agent.chat.chat_agent.setup()
 
                     if event.interrupt and not event.has_tools:
                         # Update local state from graph
                         if thread_id:
-                            latest_state_values = app_state.agent.graph.get_state(
+                            latest_state_values = run_agent.graph.get_state(
                                 {"configurable": {"thread_id": thread_id}}
                             ).values
                             if latest_state_values:
@@ -651,7 +960,7 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                         variables_metadata = {}
                         active_policies = []
                         if thread_id:
-                            latest_state_values = app_state.agent.graph.get_state(
+                            latest_state_values = run_agent.graph.get_state(
                                 {"configurable": {"thread_id": thread_id}}
                             ).values
 
@@ -660,6 +969,8 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                                 variables_metadata = (
                                     local_state.variables_manager.get_all_variables_metadata()
                                 )
+
+                                # Conversation history will be saved at the end with stream events
                                 # Extract active policies from cuga_lite_metadata
                                 if local_state.cuga_lite_metadata:
                                     metadata = local_state.cuga_lite_metadata
@@ -706,13 +1017,39 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                         logger.info("=" * 80)
                         logger.info(f"{event.answer if event.answer else 'Done.'}")
                         logger.info("=" * 80)
+
+                        # Add Answer event to buffer
+                        if thread_id:
+                            stream_events_buffer.append(
+                                {
+                                    "event_name": "Answer",
+                                    "event_data": final_answer_text,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "sequence": event_sequence,
+                                }
+                            )
+                            event_sequence += 1
+
+                            # Batch save all events and conversation history synchronously (for debugging)
+                            # Skip saving if disable_history is True
+                            if not disable_history:
+                                await _save_conversation_and_events_async(
+                                    agent_id=app_state.agent_id,
+                                    thread_id=thread_id,
+                                    user_id=DEFAULT_USER_ID,
+                                    state=local_state if local_state else AgentState(),
+                                    events=stream_events_buffer.copy(),
+                                )
+                            else:
+                                logger.info(f"History saving disabled for thread_id: {thread_id}")
+
                         yield StreamEvent(
                             name="Answer",
                             data=final_answer_text,
                         ).format(app_state.output_format, thread_id=thread_id)
 
                         if thread_id:
-                            latest_state_values = app_state.agent.graph.get_state(
+                            latest_state_values = run_agent.graph.get_state(
                                 {"configurable": {"thread_id": thread_id}}
                             ).values
                             if latest_state_values:
@@ -729,7 +1066,7 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                         return
                     elif event.has_tools:
                         if thread_id:
-                            latest_state_values = app_state.agent.graph.get_state(
+                            latest_state_values = run_agent.graph.get_state(
                                 {"configurable": {"thread_id": thread_id}}
                             ).values
                             if latest_state_values:
@@ -765,15 +1102,16 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                             local_state.url = app_state.env.get_url()
 
                         if thread_id and local_state:
-                            app_state.agent.graph.update_state(
+                            run_agent.graph.update_state(
                                 {"configurable": {"thread_id": thread_id}}, local_state.model_dump()
                             )
+                            # Conversation history will be saved at the end with stream events
                         agent_stream_gen = agent_loop_obj.run_stream(state=None)
                         break
                 else:
                     logger.debug("Yield {}".format(event))
                     if thread_id:
-                        latest_state_values = app_state.agent.graph.get_state(
+                        latest_state_values = run_agent.graph.get_state(
                             {"configurable": {"thread_id": thread_id}}
                         ).values
                         if latest_state_values:
@@ -781,6 +1119,18 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
                     name = ((event.split("\n")[0]).split(":")[1]).strip()
                     logger.debug("Yield {}".format(event))
                     if name not in ["ChatAgent"]:
+                        # Add stream event to buffer instead of immediate DB write
+                        if thread_id:
+                            stream_events_buffer.append(
+                                {
+                                    "event_name": name,
+                                    "event_data": event,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "sequence": event_sequence,
+                                }
+                            )
+                            event_sequence += 1
+
                         yield StreamEvent(name=name, data=event).format(
                             app_state.output_format, thread_id=thread_id
                         )
@@ -806,6 +1156,8 @@ async def event_stream(query: str, api_mode=False, resume=None, thread_id: str =
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.app_state = app_state
+app.state.draft_app_state = draft_app_state
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -813,6 +1165,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(manage_routes.router)
 
 if getattr(settings.advanced_features, "use_extension", False):
     print(settings.advanced_features.use_extension)
@@ -902,10 +1256,8 @@ if getattr(settings.advanced_features, "use_extension", False):
 
 @app.post("/stream")
 async def stream(request: Request):
-    """Endpoint to start the agent stream."""
+    """Endpoint to start the agent stream. Use draft agent when X-Use-Draft is set."""
     query = await get_query(request)
-
-    # Get thread_id from header or generate new one
     thread_id = request.headers.get("X-Thread-ID")
     if not thread_id:
         thread_id = str(uuid.uuid4())
@@ -913,12 +1265,34 @@ async def stream(request: Request):
     else:
         logger.info(f"Using provided thread_id: {thread_id}")
 
+    # User message will be saved as part of the event stream buffer
+    # No need to save it separately here to avoid race conditions
+
+    use_draft = str(request.headers.get("X-Use-Draft", "") or "").lower() in ("1", "true", "yes", "on")
+    disable_history = str(request.headers.get("X-Disable-History", "") or "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    if disable_history:
+        logger.info(f"History saving disabled for thread_id: {thread_id}")
+
+    run_agent = None
+    if use_draft:
+        draft_state = getattr(request.app.state, "draft_app_state", None)
+        if draft_state and getattr(draft_state, "agent", None):
+            run_agent = draft_state.agent
+
     return StreamingResponse(
         event_stream(
             query if isinstance(query, str) else None,
             api_mode=settings.advanced_features.mode == "api",
             resume=query if isinstance(query, ActionResponse) else None,
             thread_id=thread_id,
+            agent=run_agent,
+            disable_history=disable_history,
         ),
         media_type="text/event-stream",
     )
@@ -995,6 +1369,80 @@ async def reset_agent_state(request: Request):
     except Exception as e:
         logger.error(f"Failed to reset agent state: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset agent state: {str(e)}")
+
+
+@app.get("/api/conversation-threads")
+async def get_conversation_threads(agent_id: str = "cuga-default", user_id: str = DEFAULT_USER_ID):
+    """
+    Endpoint to retrieve all conversation threads for an agent.
+    Returns list of threads with their latest version and first user message.
+    """
+    try:
+        conversation_db = get_conversation_db()
+        threads = await conversation_db.get_all_threads_for_agent(agent_id, user_id)
+        return JSONResponse({"threads": threads})
+    except Exception as e:
+        logger.error(f"Failed to get conversation threads: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get conversation threads: {str(e)}")
+
+
+@app.get("/api/conversation-messages/{thread_id}")
+async def get_conversation_messages(
+    thread_id: str, agent_id: str = "cuga-default", user_id: str = DEFAULT_USER_ID
+):
+    """
+    Endpoint to retrieve all messages for a specific conversation thread.
+    Returns the latest version of the conversation.
+    """
+    try:
+        conversation_db = get_conversation_db()
+
+        # Get the latest version for this thread
+        latest_version = await conversation_db.get_latest_version(agent_id, thread_id, user_id)
+
+        if latest_version == 0:
+            return JSONResponse({"messages": []})
+
+        # Get the conversation
+        conversation = await conversation_db.get_conversation(agent_id, thread_id, latest_version, user_id)
+
+        if not conversation:
+            return JSONResponse({"messages": []})
+
+        # Convert Pydantic models to dictionaries for JSON serialization
+        messages_dict = [msg.model_dump() for msg in conversation.messages]
+        return JSONResponse({"messages": messages_dict})
+    except Exception as e:
+        logger.error(f"Failed to get conversation messages: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get conversation messages: {str(e)}")
+
+
+@app.get("/api/conversation-stream-events/{thread_id}")
+async def get_conversation_stream_events(
+    thread_id: str, agent_id: str = "cuga-default", user_id: str = DEFAULT_USER_ID
+):
+    """
+    Endpoint to retrieve all streaming events for a specific conversation thread.
+    Returns the events that were streamed during the conversation for replay.
+    """
+    try:
+        conversation_db = get_conversation_db()
+
+        # Get the stream events
+        stream_history = await conversation_db.get_stream_events(agent_id, thread_id, user_id)
+
+        if not stream_history:
+            return JSONResponse({"events": []})
+
+        # Convert Pydantic models to dictionaries for JSON serialization
+        events_dict = [
+            event.model_dump() if hasattr(event, 'model_dump') else dict(event)
+            for event in stream_history.events
+        ]
+        return JSONResponse({"events": events_dict})
+    except Exception as e:
+        logger.error(f"Failed to get conversation stream events: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get conversation stream events: {str(e)}")
 
 
 @app.get("/api/config/tools")
@@ -1123,12 +1571,19 @@ async def create_conversation(request: Request):
 
 
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
-    """Endpoint to delete a conversation."""
+async def delete_conversation(
+    conversation_id: str, agent_id: str = "cuga-default", user_id: str = DEFAULT_USER_ID
+):
+    """Endpoint to delete a conversation thread and its stream events."""
     try:
-        # TODO: Implement actual conversation storage
-        logger.info(f"Deleted conversation: {conversation_id}")
-        return JSONResponse({"status": "success", "message": "Conversation deleted"})
+        conversation_db = get_conversation_db()
+        success = await conversation_db.delete_thread(agent_id, conversation_id, user_id)
+
+        if success:
+            logger.info(f"Deleted conversation and stream events: {conversation_id}")
+            return JSONResponse({"status": "success", "message": "Conversation deleted"})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete conversation")
     except Exception as e:
         logger.error(f"Failed to delete conversation: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete conversation: {str(e)}")
@@ -1157,41 +1612,45 @@ async def save_memory_config(request: Request):
 
 
 @app.get("/api/config/policies")
-async def get_policies_config():
-    """Endpoint to retrieve policies configuration."""
-    # Return early if policies are disabled
+async def get_policies_config(request: Request):
+    """Endpoint to retrieve policies configuration. Use draft collection when X-Use-Draft header is set."""
     if not settings.policy.enabled:
         return JSONResponse({"enablePolicies": False, "policies": []})
 
+    use_draft = str(request.headers.get("X-Use-Draft", "") or "").lower() in ("1", "true", "yes", "on")
     try:
         from cuga.backend.cuga_graph.policy.storage import PolicyStorage
 
-        # Use the policy system's storage if available, otherwise create a new one
-        if app_state.policy_system and app_state.policy_system.storage:
+        need_disconnect = False
+        if use_draft:
+            draft_state = getattr(request.app.state, "draft_app_state", None)
+            if (
+                draft_state
+                and getattr(draft_state, "policy_system", None)
+                and draft_state.policy_system.storage
+            ):
+                storage = draft_state.policy_system.storage
+                logger.info("Using draft policy storage for GET")
+            else:
+                need_disconnect = True
+                policy_config = getattr(settings, "policy", None)
+                base_name = policy_config.collection_name if policy_config else "cuga_policies"
+                draft_collection = f"{base_name}_draft"
+                storage = PolicyStorage(collection_name=draft_collection)
+                await storage.initialize_async()
+                logger.info(f"Created draft storage for GET (collection: {draft_collection})")
+        elif app_state.policy_system and app_state.policy_system.storage:
             storage = app_state.policy_system.storage
             logger.info("Using existing policy system storage for GET")
         else:
-            # Get policy configuration from settings.toml
+            need_disconnect = True
             collection_name = settings.policy.collection_name
-            milvus_host = settings.policy.milvus_host
-            milvus_port = settings.policy.milvus_port
-            milvus_uri = settings.policy.milvus_uri
-
-            storage = PolicyStorage(
-                collection_name=collection_name,
-                host=milvus_host,
-                port=milvus_port,
-                milvus_uri=milvus_uri,
-            )
+            storage = PolicyStorage(collection_name=collection_name)
             await storage.initialize_async()
             logger.info(f"Created new storage instance for GET (collection: {collection_name})")
 
         # List all policies (this IS async)
         policies_objs = await storage.list_policies(enabled_only=False)
-
-        # Don't disconnect if using the policy system's storage
-        if not (app_state.policy_system and app_state.policy_system.storage):
-            storage.disconnect()
 
         # Convert Policy objects to frontend format
         policies = []
@@ -1234,6 +1693,9 @@ async def get_policies_config():
 
             policies.append(frontend_policy)
 
+        if need_disconnect:
+            await storage.disconnect()
+
         logger.info(f"Loaded {len(policies)} policies from storage")
         return JSONResponse({"enablePolicies": settings.policy.enabled, "policies": policies})
     except Exception as e:
@@ -1246,205 +1708,107 @@ async def get_policies_config():
 
 @app.post("/api/config/policies")
 async def save_policies_config(request: Request):
-    """Endpoint to save policies configuration."""
-    # Return early if policies are disabled
+    """Endpoint to save policies configuration. Use draft collection when X-Use-Draft header is set."""
     if not settings.policy.enabled:
         return JSONResponse(
             {"status": "error", "message": "Policy system is disabled in settings"},
             status_code=403,
         )
 
+    use_draft = str(request.headers.get("X-Use-Draft", "") or "").lower() in ("1", "true", "yes", "on")
     try:
         from cuga.backend.cuga_graph.policy.storage import PolicyStorage
-        from cuga.backend.cuga_graph.policy.models import (
-            IntentGuard,
-            Playbook,
-            ToolGuide,
-            ToolApproval,
-            OutputFormatter,
-            IntentGuardResponse,
-            PlaybookStep,
-        )
+        from cuga.backend.cuga_graph.policy.utils import apply_policies_data_to_storage
 
         data = await request.json()
         logger.info(f"Received policy save request with {len(data.get('policies', []))} policies")
         policies = data.get("policies", [])
 
-        # Use the policy system's storage if available, otherwise create a new one
-        # Storage will handle all embedding configuration internally
-        if app_state.policy_system and app_state.policy_system.storage:
-            storage = app_state.policy_system.storage
-            logger.info("Using existing policy system storage")
-        else:
-            # Get basic config from settings, storage will handle embedding config internally
-            collection_name = settings.policy.collection_name
-            milvus_host = settings.policy.milvus_host
-            milvus_port = settings.policy.milvus_port
-            milvus_uri = settings.policy.milvus_uri
+        if use_draft:
+            draft_state = getattr(request.app.state, "draft_app_state", None)
+            draft_need_disconnect = False
+            if (
+                draft_state
+                and getattr(draft_state, "policy_system", None)
+                and draft_state.policy_system.storage
+            ):
+                storage = draft_state.policy_system.storage
+                logger.info("Saving to draft policy storage")
+            else:
+                draft_need_disconnect = True
+                policy_config = getattr(settings, "policy", None)
+                base_name = policy_config.collection_name if policy_config else "cuga_policies"
+                draft_collection = f"{base_name}_draft"
+                from cuga.backend.storage.embedding import get_embedding_config
 
-            # Embedding config - storage will auto-detect dimensions during initialization
-            embedding_provider = os.getenv("POLICY_EMBEDDING_PROVIDER") or settings.policy.embedding_provider
-            embedding_model = os.getenv("POLICY_EMBEDDING_MODEL") or settings.policy.embedding_model
-
-            storage = PolicyStorage(
-                collection_name=collection_name,
-                host=milvus_host,
-                port=milvus_port,
-                milvus_uri=milvus_uri,
-                embedding_provider=embedding_provider,
-                embedding_model=embedding_model,
-                # embedding_dim will be auto-detected during initialize_async()
+                emb_cfg = get_embedding_config()
+                storage = PolicyStorage(
+                    collection_name=draft_collection,
+                    embedding_provider=os.getenv("STORAGE_EMBEDDING_PROVIDER")
+                    or os.getenv("POLICY_EMBEDDING_PROVIDER")
+                    or emb_cfg["provider"],
+                    embedding_model=os.getenv("STORAGE_EMBEDDING_MODEL")
+                    or os.getenv("POLICY_EMBEDDING_MODEL")
+                    or emb_cfg["model"],
+                    embedding_base_url=os.getenv("STORAGE_EMBEDDING_BASE_URL")
+                    or os.getenv("POLICY_EMBEDDING_BASE_URL")
+                    or emb_cfg["base_url"],
+                    embedding_api_key=os.getenv("STORAGE_EMBEDDING_API_KEY")
+                    or os.getenv("POLICY_EMBEDDING_API_KEY")
+                    or emb_cfg["api_key"],
+                )
+                await storage.initialize_async()
+                logger.info(f"Created draft storage for POST (collection: {draft_collection})")
+            await apply_policies_data_to_storage(
+                storage,
+                policies,
+                clear_existing=True,
+                filesystem_sync=None,
             )
-            await storage.initialize_async()
-            logger.info(
-                f"Created new storage instance from settings (collection: {collection_name}, "
-                f"embedding: {embedding_provider}, dim: {storage.embedding_dim})"
+            if draft_need_disconnect:
+                await storage.disconnect()
+        else:
+            if app_state.policy_system and app_state.policy_system.storage:
+                storage = app_state.policy_system.storage
+                logger.info("Using existing policy system storage")
+            else:
+                collection_name = settings.policy.collection_name
+                from cuga.backend.storage.embedding import get_embedding_config
+
+                emb_cfg = get_embedding_config()
+                storage = PolicyStorage(
+                    collection_name=collection_name,
+                    embedding_provider=os.getenv("STORAGE_EMBEDDING_PROVIDER")
+                    or os.getenv("POLICY_EMBEDDING_PROVIDER")
+                    or emb_cfg["provider"],
+                    embedding_model=os.getenv("STORAGE_EMBEDDING_MODEL")
+                    or os.getenv("POLICY_EMBEDDING_MODEL")
+                    or emb_cfg["model"],
+                    embedding_base_url=os.getenv("STORAGE_EMBEDDING_BASE_URL")
+                    or os.getenv("POLICY_EMBEDDING_BASE_URL")
+                    or emb_cfg["base_url"],
+                    embedding_api_key=os.getenv("STORAGE_EMBEDDING_API_KEY")
+                    or os.getenv("POLICY_EMBEDDING_API_KEY")
+                    or emb_cfg["api_key"],
+                )
+                await storage.initialize_async()
+                logger.info(
+                    f"Created new storage instance from settings (collection: {collection_name}, "
+                    f"embedding: {storage.embedding_provider}, dim: {storage.embedding_dim})"
+                )
+
+            await apply_policies_data_to_storage(
+                storage,
+                policies,
+                clear_existing=True,
+                filesystem_sync=app_state.policy_filesystem_sync,
             )
 
-        # Clear existing policies (simple approach - in production, do incremental updates)
-        existing_policies = await storage.list_policies(enabled_only=False)
-        for policy_obj in existing_policies:
-            await storage.delete_policy(policy_obj.id)
-
-        # Add new policies
-        for policy_data in policies:
-            try:
-                policy_type = policy_data.get("policy_type")
-                logger.info(f"Processing policy: {policy_data.get('name')} (type: {policy_type})")
-                logger.info(f"Triggers data: {policy_data.get('triggers')}")
-
-                # Validate and log keyword trigger operators
-                for trigger in policy_data.get('triggers', []):
-                    if trigger.get('type') == 'keyword':
-                        operator = trigger.get('operator', 'NOT_SET')
-                        keywords = trigger.get('value', [])
-                        logger.info(f"  Keyword trigger: operator={operator}, keywords={keywords}")
-
-                if policy_type == "intent_guard":
-                    # Convert to IntentGuard model
-                    response_data = policy_data.get("response", {})
-                    policy = IntentGuard(
-                        id=policy_data["id"],
-                        name=policy_data["name"],
-                        description=policy_data["description"],
-                        triggers=policy_data["triggers"],
-                        intent_examples=policy_data.get("intent_examples", []),
-                        response=IntentGuardResponse(
-                            response_type=response_data.get("response_type", "natural_language"),
-                            content=response_data.get("content", ""),
-                        ),
-                        allow_override=policy_data.get("allow_override", False),
-                        priority=policy_data.get("priority", 50),
-                        enabled=policy_data.get("enabled", True),
-                    )
-                    logger.info(f"Created IntentGuard policy with triggers: {policy.triggers}")
-                    # Validate keyword trigger operators after Pydantic parsing
-                    for trigger in policy.triggers:
-                        if hasattr(trigger, 'type') and trigger.type == 'keyword':
-                            operator = getattr(trigger, 'operator', 'NOT_SET')
-                            logger.info(
-                                f"  IntentGuard keyword trigger validated: operator={operator}, keywords={trigger.value}"
-                            )
-                elif policy_type == "playbook":
-                    # Convert to Playbook model
-                    steps_data = policy_data.get("steps", [])
-                    steps = [
-                        PlaybookStep(
-                            step_number=step["step_number"],
-                            instruction=step["instruction"],
-                            expected_outcome=step["expected_outcome"],
-                            tools_allowed=step.get("tools_allowed", []),
-                        )
-                        for step in steps_data
-                    ]
-
-                    policy = Playbook(
-                        id=policy_data["id"],
-                        name=policy_data["name"],
-                        description=policy_data["description"],
-                        triggers=policy_data["triggers"],
-                        markdown_content=policy_data.get("markdown_content", ""),
-                        steps=steps,
-                        priority=policy_data.get("priority", 50),
-                        enabled=policy_data.get("enabled", True),
-                    )
-                    logger.info(f"Created Playbook policy with triggers: {policy.triggers}")
-                    # Validate keyword trigger operators after Pydantic parsing
-                    for trigger in policy.triggers:
-                        if hasattr(trigger, 'type') and trigger.type == 'keyword':
-                            operator = getattr(trigger, 'operator', 'NOT_SET')
-                            logger.info(
-                                f"  Playbook keyword trigger validated: operator={operator}, keywords={trigger.value}"
-                            )
-                elif policy_type == "tool_guide":
-                    # Convert to ToolGuide model
-                    policy = ToolGuide(
-                        id=policy_data["id"],
-                        name=policy_data["name"],
-                        description=policy_data["description"],
-                        triggers=policy_data["triggers"],
-                        target_tools=policy_data.get("target_tools", []),
-                        target_apps=policy_data.get("target_apps"),
-                        guide_content=policy_data.get("guide_content", ""),
-                        prepend=policy_data.get("prepend", False),
-                        priority=policy_data.get("priority", 50),
-                        enabled=policy_data.get("enabled", True),
-                    )
-                elif policy_type == "tool_approval":
-                    # Convert to ToolApproval model
-                    policy = ToolApproval(
-                        id=policy_data["id"],
-                        name=policy_data["name"],
-                        description=policy_data["description"],
-                        triggers=policy_data["triggers"],
-                        required_tools=policy_data.get("required_tools", []),
-                        required_apps=policy_data.get("required_apps"),
-                        approval_message=policy_data.get("approval_message"),
-                        show_code_preview=policy_data.get("show_code_preview", True),
-                        auto_approve_after=policy_data.get("auto_approve_after"),
-                        priority=policy_data.get("priority", 50),
-                        enabled=policy_data.get("enabled", True),
-                    )
-                elif policy_type == "output_formatter":
-                    # Convert to OutputFormatter model
-                    policy = OutputFormatter(
-                        id=policy_data["id"],
-                        name=policy_data["name"],
-                        description=policy_data["description"],
-                        triggers=policy_data["triggers"],
-                        format_type=policy_data.get("format_type", "markdown"),
-                        format_config=policy_data.get("format_config", ""),
-                        priority=policy_data.get("priority", 50),
-                        enabled=policy_data.get("enabled", True),
-                        metadata=policy_data.get("metadata", {}),
-                    )
-                else:
-                    logger.warning(f"Unknown policy type: {policy_type}")
-                    continue
-
-                # Add to storage (embedding will be generated automatically)
-                await storage.add_policy(policy)
-                logger.info(f"Saved policy: {policy.id}")
-
-                # Save to filesystem if sync is enabled
-                if app_state.policy_filesystem_sync:
-                    try:
-                        app_state.policy_filesystem_sync.save_policy_to_file(policy)
-                        logger.debug(f"Saved policy '{policy.id}' to filesystem")
-                    except Exception as e:
-                        logger.warning(f"Failed to save policy to filesystem: {e}")
-
-            except Exception as e:
-                logger.error(f"Failed to save policy {policy_data.get('id')}: {e}")
-                logger.exception(e)
-                continue
-
-        # Don't disconnect if using the policy system's storage
-        if not (app_state.policy_system and app_state.policy_system.storage):
-            storage.disconnect()
-            logger.info("Storage disconnected")
-        else:
-            logger.info("Keeping policy system storage connected")
+            if not (app_state.policy_system and app_state.policy_system.storage):
+                await storage.disconnect()
+                logger.info("Storage disconnected")
+            else:
+                logger.info("Keeping policy system storage connected")
 
         logger.info(f"Policies configuration saved: {len(policies)} policies")
         return JSONResponse({"status": "success", "message": f"Saved {len(policies)} policies successfully"})
@@ -1464,26 +1828,52 @@ async def save_policies_config(request: Request):
 
 
 @app.get("/api/tools/list")
-async def get_tools_list():
-    """Endpoint to retrieve detailed list of all available tools."""
+async def get_tools_list(request: Request, agent_id: Optional[str] = None, draft: Optional[str] = None):
+    """Endpoint to retrieve detailed list of all available tools.
+
+    Args:
+        agent_id: Optional agent ID to filter tools by agent
+        draft: Optional draft mode parameter (can also use X-Use-Draft header)
+    """
     try:
-        apps = await get_apps()
+        # Check for draft mode from query parameter or header
+        use_draft = False
+        if draft is not None:
+            use_draft = str(draft).lower() in ("1", "true", "yes", "on")
+        else:
+            use_draft = str(request.headers.get("X-Use-Draft", "") or "").lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+
+        # When draft mode, use draft agent_id so registry returns draft config's tools
+        effective_agent_id = agent_id
+        if use_draft:
+            from cuga.backend.server.config_store import _parse_agent_id
+
+            base = _parse_agent_id(agent_id or get_agent_id() or "cuga-default")
+            effective_agent_id = f"{base}--draft"
+
+        apps = await get_apps(agent_id=effective_agent_id)
         tools_list = []
         apps_list = []
 
         for app in apps:
             try:
-                apis = await get_apis(app.name)
+                apis = await get_apis(app.name, agent_id=effective_agent_id)
                 app_type = getattr(app, "type", "api").upper()
 
                 # Add app to apps list
                 apps_list.append({"name": app.name, "type": app_type, "tool_count": len(apis)})
 
-                # Add each tool with its app information
+                # Add each tool with its app information (id = operation_id for OpenAPI, tool name for MCP)
                 for tool_name, tool_def in apis.items():
                     tools_list.append(
                         {
                             "name": tool_name,
+                            "id": tool_def.get("operation_id", tool_name),
                             "app": app.name,
                             "app_type": app_type,
                             "description": tool_def.get("description", ""),
@@ -1495,6 +1885,9 @@ async def get_tools_list():
                     {"name": app.name, "type": getattr(app, "type", "api").upper(), "tool_count": 0}
                 )
 
+        logger.info(
+            f"Retrieved {len(tools_list)} tools from {len(apps_list)} apps (agent_id={agent_id}, draft={use_draft})"
+        )
         return JSONResponse({"tools": tools_list, "apps": apps_list})
     except Exception as e:
         logger.error(f"Failed to get tools list: {e}")
@@ -1818,6 +2211,58 @@ async def save_agent_mode_config(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to save agent mode: {str(e)}")
 
 
+@app.get("/api/agents")
+async def get_agents_list():
+    """List configured agents (dashboard)."""
+    try:
+        tools_count = 0
+        try:
+            apps = await get_apps()
+            for app in apps:
+                apis = await get_apis(app.name)
+                tools_count += len(apis)
+        except Exception:
+            pass
+        logs_url = (
+            os.environ.get("CUGA_LOKI_LOGS_URL")
+            or os.environ.get("LOKI_URL")
+            or "https://grafana.com/docs/loki/latest/"
+        )
+        latest_version = None
+        latest_version_created_at = None
+        try:
+            from cuga.backend.server.config_store import get_latest_version
+
+            latest_version, latest_version_created_at = await get_latest_version()
+        except Exception:
+            pass
+        agents = [
+            {
+                "id": "cuga-default",
+                "description": "Default CUGA agent with policy engine, tools, and chat.",
+                "tools_count": tools_count,
+                "logs_url": logs_url,
+                "latest_version": latest_version,
+                "latest_version_created_at": latest_version_created_at,
+            }
+        ]
+        return JSONResponse({"agents": agents})
+    except Exception as e:
+        logger.error(f"Failed to list agents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/context")
+async def get_agent_context():
+    """Return current agent id and config version for UI."""
+    return JSONResponse(
+        {
+            "agent_id": getattr(app_state, "agent_id", "cuga-default"),
+            "config_version": getattr(app_state, "config_version", None),
+        }
+    )
+
+
 @app.get("/api/workspace/tree")
 async def get_workspace_tree():
     """Endpoint to retrieve the workspace folder tree."""
@@ -2123,7 +2568,8 @@ async def serve_react(full_path: str, request: Request):
     if not app_state.STATIC_DIR_HTML:
         raise HTTPException(status_code=500, detail="Frontend build directory not found.")
 
-    file_path = os.path.join(app_state.STATIC_DIR_HTML, full_path)
+    lookup_path = full_path[7:] if full_path.startswith("manage/") else full_path
+    file_path = os.path.join(app_state.STATIC_DIR_HTML, lookup_path)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
 
