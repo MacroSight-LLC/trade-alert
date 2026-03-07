@@ -1,0 +1,142 @@
+# collector-ta.yaml
+# SSOT Reference: Section 8 - Collector Workflows (collector-ta)
+# Purpose: Collect technical analysis signals for the universe.
+# Reads universe:equities and universe:crypto from Redis; writes snapshots:15m and snapshots:1h.
+
+name: collector-ta
+description: Collect TA signals from TradingView and trading-mcp for all universe symbols
+llm_model: grok-beta
+
+mcp_servers:
+  - name: tradingview-mcp
+    endpoint: http://tradingview-mcp:8001
+  - name: trading-mcp
+    endpoint: http://trading-mcp:8008
+
+steps:
+  # Step 1 -- Read universes from Redis
+  # SSOT S8: read universe:equities and universe:crypto set by collector-market
+  - name: read-universes
+    type: code
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+      crypto_raw   = r.get("universe:crypto")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      crypto   = json.loads(crypto_raw)   if crypto_raw   else ["BTC", "ETH", "SOL"]
+
+      result = {"equities": equities, "crypto": crypto}
+
+  # Step 2 -- Parallel: TradingView bollinger_scan + rsi_scan for all symbols
+  # SSOT S3: TradingView MCP -- batch symbols/timeframes to respect rate limits (max 20 per call)
+  # Timeframes: 15m and 1h per SSOT S8
+  - name: fetch-tradingview-signals
+    type: parallel_tool_calls
+    calls:
+      # Equity scans -- 15m
+      - tool: tradingview-mcp
+        method: bollinger_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          timeframe: "15m"
+      - tool: tradingview-mcp
+        method: rsi_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          timeframe: "15m"
+      # Equity scans -- 1h
+      - tool: tradingview-mcp
+        method: bollinger_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          timeframe: "1h"
+      - tool: tradingview-mcp
+        method: rsi_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          timeframe: "1h"
+      # Crypto scans -- 15m
+      - tool: tradingview-mcp
+        method: bollinger_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          timeframe: "15m"
+      - tool: tradingview-mcp
+        method: rsi_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          timeframe: "15m"
+      # Crypto scans -- 1h
+      - tool: tradingview-mcp
+        method: bollinger_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          timeframe: "1h"
+      - tool: tradingview-mcp
+        method: rsi_scan
+        params:
+          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          timeframe: "1h"
+
+  # Step 3 -- trading-mcp screen for fundamental context on equities only
+  # SSOT S3: trading-mcp fundamental filters (P/E, sector) as context, not final signal
+  - name: fetch-fundamentals
+    type: tool_call
+    tool: trading-mcp
+    method: screen
+    params:
+      symbols: '{{ steps[''read-universes''][''equities''] }}'
+      fields: ["pe_ratio", "sector", "market_cap"]
+      limit: 50
+
+  # Step 4 -- Code agent: normalize raw results, push snapshots to Redis
+  # SSOT S7: pass raw results to ta_normalizer.normalize -- do not call MCPs inside normalizer
+  # Redis keys: snapshots:15m and snapshots:1h, TTL 900s
+  - name: normalize-and-store-snapshots
+    type: code
+    code: |
+      import json
+      import redis
+      from normalizers.ta_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      raw_results = steps["fetch-tradingview-signals"]
+      n_pushed = 0
+
+      for timeframe in ["15m", "1h"]:
+          snapshots = normalize(raw_results, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, 900)
+              n_pushed += 1
+
+      result = {"n_snapshots": n_pushed}
+
+  # Step 5 -- Log completion
+  - name: log-completion
+    type: llm
+    prompt: |
+      Output exactly this single log line and nothing else:
+      "TA collector: {n} snapshots pushed to Redis"
+      substituting n from steps[normalize-and-store-snapshots][n_snapshots].
+
+error_handling:
+  # SSOT S8: skip symbols where TradingView returns rate limit errors; continue with partial results.
+  # SSOT S3: respect rate limits -- batch max 20 symbols per call.
+  on_rate_limit:
+    strategy: skip_symbol
+    log: true
+  on_mcp_error:
+    strategy: continue_partial
+    log: true
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 5

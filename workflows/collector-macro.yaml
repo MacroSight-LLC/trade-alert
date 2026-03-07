@@ -1,0 +1,52 @@
+# collector-macro.yaml
+# SSOT Reference: Section 8 - Collector Workflows (collector-macro)
+# Purpose: Collect macro regime signals.
+# Calls FRED MCP; writes macro:regime to Redis (TTL 900s).
+
+name: collector-macro
+description: Collect macro regime context from FRED -- VIX, yield curve, risk flags
+llm_model: grok-beta
+
+mcp_servers:
+  - name: fred-mcp
+    endpoint: http://fred-mcp:8009
+
+steps:
+  # Step 1 -- Parallel: FRED vix_level + yield_curve + fed_funds_rate
+  # SSOT S3: FRED bundle MCP -- macro regime: volatility, curve slope, risk-on/off flags
+  # SSOT S8: collector-macro calls FRED bundle; passes result to macro_normalizer.normalize
+  - name: fetch-macro-data
+    type: parallel_tool_calls
+    calls:
+      - tool: fred-mcp
+        method: vix_level
+        params: {}
+      - tool: fred-mcp
+        method: yield_curve
+        params:
+          spread: "10Y-2Y"
+      - tool: fred-mcp
+        method: fed_funds_rate
+        params: {}
+
+  # Step 2 -- Compute risk_on flag
+  # risk_on = vix < 20 AND yield_curve_slope > -25
+  - name: compute-risk-flag
+    type: code
+    code: |
+      vix_result       = steps["fetch-macro-data"][0]
+      yc_result        = steps["fetch-macro-data"][1]
+      ffr_result       = steps["fetch-macro-data"][2]
+
+      vix_level            = vix_result.get("vix_level") or vix_result.get("value", 20.0)
+      yield_curve_slope    = yc_result.get("spread_bps") or yc_result.get("value", 0.0)
+      fed_funds_rate       = ffr_result.get("rate") or ffr_result.get("value", 5.0)
+
+      risk_on = (vix_level < 20.0) and (yield_curve_slope > -25.0)
+
+      result = {
+          "vix":               vix_level,
+          "yield_curve_slope": yield_curve_slope,
+          "fed_funds_rate":    fed_funds_rate,
+          "risk_on":           risk_on,
+      }

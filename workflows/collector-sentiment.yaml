@@ -1,0 +1,180 @@
+# collector-sentiment.yaml
+# SSOT Reference: Section 8 - Collector Workflows (collector-sentiment)
+# Purpose: Collect social and news sentiment signals.
+# Reads universe:equities and universe:crypto from Redis; writes to snapshots:15m.
+
+name: collector-sentiment
+description: Collect and quality-filter social sentiment and news signals
+llm_model: grok-beta
+
+mcp_servers:
+  - name: finnhub-mcp
+    endpoint: http://finnhub-mcp:8004
+  - name: rot-mcp
+    endpoint: http://rot-mcp:8005
+  - name: spamshield-mcp
+    endpoint: http://spamshield-mcp:8010
+
+steps:
+  # Step 1 -- Read universes from Redis
+  # SSOT S8: read universe:equities and universe:crypto set by collector-market
+  - name: read-universes
+    type: code
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+      crypto_raw   = r.get("universe:crypto")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      crypto   = json.loads(crypto_raw)   if crypto_raw   else ["BTC", "ETH", "SOL"]
+      all_symbols = equities + crypto
+
+      result = {"equities": equities, "crypto": crypto, "all_symbols": all_symbols}
+
+  # Step 2 -- Parallel: Finnhub sentiment + ROT trending_tickers + options_flow
+  # SSOT S3: Finnhub -- prefer aggregate scores, not raw headlines (batch 20)
+  # SSOT S3: ROT -- use structured outputs only (tickers, flow metrics, signals); do not fetch raw posts
+  - name: fetch-sentiment-signals
+    type: parallel_tool_calls
+    calls:
+      # Finnhub sentiment -- aggregate scores only, batch 20
+      - tool: finnhub-mcp
+        method: sentiment
+        params:
+          symbols: '{{ steps[''read-universes''][''all_symbols''][:20] }}'
+          aggregate: true
+      # ROT trending tickers -- structured output only
+      - tool: rot-mcp
+        method: trending_tickers
+        params:
+          limit: 30
+      # ROT options flow -- structured flow metrics
+      - tool: rot-mcp
+        method: options_flow
+        params:
+          limit: 30
+
+  # Step 3 -- SpamShield filter (only if raw text bodies returned)
+  # SSOT S8: for any raw text body, call spamshield-mcp classify_text; drop spam before normalizing
+  # SSOT S3: SpamShieldpro -- apply to any raw text if present; skip items classified as spam
+  - name: spamshield-filter
+    type: code
+    code: |
+      import json
+
+      finnhub_results = steps["fetch-sentiment-signals"][0].get("results", [])
+      rot_tickers     = steps["fetch-sentiment-signals"][1].get("results", [])
+      rot_flow        = steps["fetch-sentiment-signals"][2].get("results", [])
+
+      # Collect any raw text bodies for SpamShield classification
+      text_items = []
+      for item in finnhub_results + rot_tickers + rot_flow:
+          if item.get("text") or item.get("body") or item.get("headline"):
+              text_items.append(item)
+
+      result = {
+          "has_raw_text": len(text_items) > 0,
+          "text_items": text_items,
+          "finnhub_results": finnhub_results,
+          "rot_tickers": rot_tickers,
+          "rot_flow": rot_flow,
+      }
+
+  - name: classify-spam
+    type: conditional
+    condition: '{{ steps[''spamshield-filter''][''has_raw_text''] }}'
+    if_true:
+      type: code
+      code: |
+        # Call SpamShield for each raw text item
+        spam_ids = set()
+        for item in steps["spamshield-filter"]["text_items"]:
+            text = item.get("text") or item.get("body") or item.get("headline", "")
+            # SpamShield call -- fail open: if classify_text fails, treat as not spam
+            try:
+                classification = mcp_call("spamshield-mcp", "classify_text", {"text": text})
+                if classification.get("label") == "spam":
+                    spam_ids.add(id(item))
+            except Exception:
+                # SSOT S8: spam filter failure = treat as not spam (fail open)
+                pass
+        spam_filtered_count = len(spam_ids)
+        result = {"spam_ids": list(spam_ids), "spam_filtered_count": spam_filtered_count}
+    if_false:
+      type: code
+      code: |
+        result = {"spam_ids": [], "spam_filtered_count": 0}
+
+  # Step 4 -- Code agent: merge Finnhub + ROT, normalize, push to Redis
+  # SSOT S7 Sentiment: Finnhub score -1..+1 => score = clamp(sentiment * 2.0, -2.0, +2.0)
+  # SSOT S7 Sentiment: ROT strong bullish/bearish flags map to +/-2.5
+  # Redis key: snapshots:15m, TTL 900s
+  - name: normalize-and-store-snapshots
+    type: code
+    code: |
+      import json
+      import redis
+      from normalizers.sentiment_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      finnhub_results = steps["spamshield-filter"]["finnhub_results"]
+      rot_tickers     = steps["spamshield-filter"]["rot_tickers"]
+      rot_flow        = steps["spamshield-filter"]["rot_flow"]
+      spam_ids        = set(steps["classify-spam"].get("spam_ids", []))
+
+      raw = {}
+      for item in finnhub_results:
+          if id(item) in spam_ids:
+              continue
+          sym = item.get("symbol") or item.get("ticker")
+          if sym:
+              raw.setdefault(sym, {})["finnhub_score"] = item.get("score")
+      for item in rot_tickers + rot_flow:
+          if id(item) in spam_ids:
+              continue
+          sym = item.get("symbol") or item.get("ticker")
+          if sym:
+              raw.setdefault(sym, {})["rot_signal"] = item
+
+      snapshots = normalize(raw, timeframe="15m")
+      n_pushed  = 0
+      for snap in snapshots:
+          r.lpush("snapshots:15m", snap.model_dump_json())
+          r.expire("snapshots:15m", 900)
+          n_pushed += 1
+
+      result = {
+          "n_snapshots": n_pushed,
+          "n_filtered": steps["classify-spam"].get("spam_filtered_count", 0),
+      }
+
+  # Step 5 -- Log completion
+  - name: log-completion
+    type: llm
+    prompt: |
+      Output exactly this single log line and nothing else:
+      "Sentiment collector: {n} snapshots, {n_filtered} spam filtered"
+      substituting n from steps[normalize-and-store-snapshots][n_snapshots]
+      and n_filtered from steps[normalize-and-store-snapshots][n_filtered].
+
+error_handling:
+  # SSOT S8: if ROT unavailable -- continue with Finnhub only, note lower confidence.
+  # SSOT S8: spam filter failure = treat as not spam (fail open, not closed).
+  on_mcp_error:
+    rot-mcp:
+      strategy: skip
+      log: true
+      message: "ROT MCP unavailable -- continuing with Finnhub only (lower confidence)"
+    spamshield-mcp:
+      strategy: fail_open
+      log: true
+      message: "SpamShield unavailable -- treating all items as not spam"
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 5
