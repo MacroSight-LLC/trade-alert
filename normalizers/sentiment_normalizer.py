@@ -78,12 +78,18 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             signals.append(
                 Signal(
                     source="rot",
-                    type=cast(Literal[
-                        "technical_trend", "volume_spike",
-                        "sentiment_bull", "sentiment_bear",
-                        "order_imbalance_long", "order_imbalance_short",
-                        "macro_risk_off",
-                    ], rot_type),
+                    type=cast(
+                        Literal[
+                            "technical_trend",
+                            "volume_spike",
+                            "sentiment_bull",
+                            "sentiment_bear",
+                            "order_imbalance_long",
+                            "order_imbalance_short",
+                            "macro_risk_off",
+                        ],
+                        rot_type,
+                    ),
                     score=rot_score,
                     confidence=rot_conf,
                     reason=f"ROT social signal: {rot_signal}",

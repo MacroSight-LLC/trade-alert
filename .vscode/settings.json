@@ -3,9 +3,17 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/src"
     ],
+    "python.analysis.diagnosticMode": "openFiles",
     "python.analysis.exclude": [
-        "${workspaceFolder}/.venv/**",
-        "${workspaceFolder}/src/cuga/**"
+        ".venv",
+        "src/cuga",
+        "src/scripts",
+        "src/system_tests",
+        "src/frontend_workspaces",
+        "tests",
+        "docs",
+        "normalizers",
+        "run_stability_tests.py"
     ],
     "editor.rulers": [
         88,
@@ -31,8 +39,14 @@
         "**/node_modules": true,
         "**/.DS_Store": true,
         "**/*.egg-info": true,
+        ".venv": true,
         "data/": true,
+        "docs/": true,
         "logs/": true,
+        "tests/": true,
+        "src/scripts/": true,
+        "src/system_tests/": true,
+        "src/frontend_workspaces/": true,
         "uv.lock": true,
         ".env": true
     },
