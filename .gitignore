@@ -77,3 +77,13 @@ deployment/certs/*.crt
 deployment/helm/openshift.env
 deployment/helm/*.env
 !deployment/helm/openshift.example.env
+
+# === trade-alert additions ===
+.env.local
+.env.*.local
+data/
+.vscode/settings.json
+dump.rdb
+dist/
+build/
+*.whl

@@ -1,16 +1,60 @@
 {
-    "python.envFile": "${workspaceFolder}/.env",
-    "debugpy.debugJustMyCode": true,
-    "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter",
-        "editor.formatOnSave": true,
-        "editor.codeActionsOnSave": {
-            "source.organizeImports": "explicit",
-        },
-    },
-    "isort.args": [
-        "--profile",
-        "black"
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/src"
     ],
-    "ruff.enable": false
+    "editor.rulers": [
+        88,
+        100,
+        120
+    ],
+    "yaml.validate": true,
+    "yaml.schemas": {
+        "https://json.schemastore.org/github-workflow.json": ".github/workflows/*.yml",
+        "https://json.schemastore.org/github-action.json": "action.yml"
+    },
+    "files.associations": {
+        "*.yaml": "yaml",
+        "*.yml": "yaml",
+        "*.md": "markdown"
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.pytest_cache": true,
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true,
+        "**/*.pyc": true,
+        "**/node_modules": true,
+        "**/.DS_Store": true,
+        "**/*.egg-info": true,
+        "data/": true,
+        "logs/": true,
+        "uv.lock": true,
+        ".env": true
+    },
+    "github.copilot.enable": {
+        "*": false,
+        "python": true,
+        "yaml": true,
+        "dockerfile": true,
+        "markdown": true,
+        "toml": true,
+        "shellscript": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/__pycache__": true,
+        "**/.venv": true,
+        "**/output": true,
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true,
+        "data/": true,
+        "logs/": true
+    },
+    "rest-client.environmentVariables": {
+        "$shared": {},
+        "local": {
+            "baseUrl": "http://localhost:8000"
+        }
+    }
 }

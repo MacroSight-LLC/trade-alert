@@ -1,0 +1,35 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-python.vscode-python-envs",
+    "charliermarsh.ruff",
+    "github.copilot-chat",
+    "eamodio.gitlens",
+    "github.vscode-github-actions",
+    "ms-azuretools.vscode-docker",
+    "ms-vscode-remote.remote-containers",
+    "ms-vscode-remote.remote-ssh",
+    "ms-vscode-remote.remote-ssh-edit",
+    "ms-vscode.remote-explorer",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml",
+    "mikestead.dotenv",
+    "mechatroner.rainbow-csv",
+    "aaron-bond.better-comments",
+    "gruntfuggly.todo-tree",
+    "usernamehw.errorlens",
+    "yzhang.markdown-all-in-one",
+    "streetsidesoftware.code-spell-checker",
+    "humao.rest-client",
+    "ckolkman.vscode-postgres"
+  ],
+  "unwantedRecommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "ms-azuretools.vscode-containers",
+    "ms-kubernetes-tools.vscode-kubernetes-tools",
+    "ms-vsliveshare.vsliveshare"
+  ]
+}
