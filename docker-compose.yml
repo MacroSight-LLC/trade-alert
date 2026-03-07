@@ -1,0 +1,95 @@
+# trade-alert Docker Compose — development/local topology (SSOT §5, §13)
+# Full service stack: Redis, Postgres, MCP servers, app runner.
+# Usage: docker compose up
+
+version: "3.9"
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tradealert
+      POSTGRES_USER: tradealert
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradealert"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fred-mcp:
+    build: ./mcp_servers/fred
+    environment:
+      FRED_API_KEY: ${FRED_API_KEY}
+    ports:
+      - "8009:8009"
+    restart: unless-stopped
+
+  finnhub-mcp:
+    build: ./mcp_servers/finnhub
+    environment:
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
+
+  reddit-mcp:
+    build: ./mcp_servers/reddit
+    environment:
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
+    ports:
+      - "8011:8011"
+    restart: unless-stopped
+
+  discord-mcp:
+    build: ./mcp_servers/discord
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_ALERT_CHANNEL_ID: ${DISCORD_ALERT_CHANNEL_ID}
+      DISCORD_OPS_CHANNEL_ID: ${DISCORD_OPS_CHANNEL_ID}
+    ports:
+      - "8012:8012"
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://tradealert:${POSTGRES_PASSWORD}@postgres:5432/tradealert
+      DISCORD_WEBHOOK: ${DISCORD_WEBHOOK}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_ALERT_CHANNEL_ID: ${DISCORD_ALERT_CHANNEL_ID}
+      DISCORD_OPS_CHANNEL_ID: ${DISCORD_OPS_CHANNEL_ID}
+      FRED_API_KEY: ${FRED_API_KEY}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

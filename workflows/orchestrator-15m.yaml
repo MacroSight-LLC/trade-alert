@@ -1,0 +1,94 @@
+# orchestrator-15m.yaml
+# SSOT Reference: Section 2, 5, 13 — Cron orchestrator for 15m pipeline
+# Purpose: Top-level cron workflow that sequences every collector → merger →
+#   decision → notifier for the 15m timeframe. Runs every 15 minutes.
+
+name: orchestrator-15m
+description: >
+  Cron orchestrator — 15m pipeline. Runs every 15 minutes.
+  Sequences: collectors → merger → decision → notifier.
+schedule: "*/15 * * * *"
+llm_model: claude-3-5-sonnet-20241022
+
+error_handling:
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 10
+
+steps:
+  # Step 1 — Run all 5 collector workflows in parallel
+  # SSOT §8: collectors must handle partial failures without aborting
+  - name: run-collectors
+    type: parallel
+    abort_on_failure: false
+    workflows:
+      - collector-market.yaml
+      - collector-ta.yaml
+      - collector-flow.yaml
+      - collector-sentiment.yaml
+      - collector-macro.yaml
+
+  # Step 2 — Merge snapshots from Redis and get macro regime
+  # SSOT §9: merger.merge returns top N symbols by aggregate strength
+  - name: run-merger
+    type: code
+    code: |
+      import json
+      import logging
+      from merger import merge, get_macro_regime
+
+      logger = logging.getLogger(__name__)
+
+      try:
+          snapshots = merge("15m", limit=20)
+          macro = get_macro_regime()
+
+          snapshots_json = json.dumps(
+              [snap.model_dump() for snap in snapshots], indent=2
+          )
+          logger.info(
+              "Orchestrator-15m merger: %d candidates, macro risk_on=%s",
+              len(snapshots),
+              macro.get("risk_on", "unknown"),
+          )
+          result = {
+              "snapshots_json": snapshots_json,
+              "macro": macro,
+              "n": len(snapshots),
+          }
+      except Exception as exc:
+          logger.error("Orchestrator-15m merger failed: %s", exc)
+          result = {"snapshots_json": "[]", "macro": {}, "n": 0}
+
+  # Step 3 — Run decision engine for 15m timeframe
+  # SSOT §10.2: ensemble reasoning via Claude Sonnet
+  - name: run-decision
+    type: workflow
+    workflow: decision-15m.yaml
+
+  # Step 4 — Healthcheck: verify Redis, Postgres, recent alerts
+  # SSOT §13: log results, alert ops channel on failure
+  - name: healthcheck
+    type: code
+    code: |
+      import logging
+      logger = logging.getLogger(__name__)
+      try:
+          from healthcheck import run_healthcheck
+          run_healthcheck(timeframe="15m")
+      except Exception as exc:
+          logger.error("Healthcheck step failed: %s", exc)
+
+  # On total pipeline failure, notify ops channel
+  - name: on-failure-notify
+    type: code
+    run_on: failure
+    code: |
+      import logging
+      logger = logging.getLogger(__name__)
+      try:
+          from notifier_and_logger import send_ops_message
+          send_ops_message("⚠️ orchestrator-15m failed")
+      except Exception as exc:
+          logger.error("Failed to send ops failure message: %s", exc)
