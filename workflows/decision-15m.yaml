@@ -11,7 +11,6 @@ description: >
   Ensemble decision agent — merges 15m snapshots, reasons across all
   signal types using Claude Sonnet, produces PlaybookAlert JSON.
 llm_model: claude-3-5-sonnet-20241022
-
 mcp_servers:
   - name: fred-mcp
     endpoint: http://fred-mcp:8009
@@ -226,18 +225,19 @@ steps:
       code: |
         import json
         import logging
+        from notifier_and_logger import notify
 
         logger = logging.getLogger(__name__)
 
         alerts_json = steps["validate-and-filter"]["alerts_json"]
-        count = steps["validate-and-filter"]["count"]
+        snapshots = json.loads(steps["merge-snapshots"]["snapshots_json"])
 
-        # TODO: Phase 6 — call notifier_and_logger.py with alerts_json
-        # from notifier_and_logger import notify
-        # notify(alerts_json)
-
-        logger.info("Decision-15m: handed %d alerts to notifier", count)
-        result = {"notified": True, "count": count}
+        n_sent = notify(
+            alerts_json=alerts_json,
+            raw_snapshots=snapshots,
+        )
+        logger.info("Decision-15m: handed %d alerts to Discord via notifier", n_sent)
+        result = {"notified": True, "count": n_sent}
     if_false:
       type: code
       code: |
