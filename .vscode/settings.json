@@ -56,5 +56,6 @@
         "local": {
             "baseUrl": "http://localhost:8000"
         }
-    }
+    },
+    "git.defaultRemote": "origin"
 }
