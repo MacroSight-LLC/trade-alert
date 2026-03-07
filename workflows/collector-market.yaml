@@ -148,7 +148,19 @@ error_handling:
       If no cache is available, use the hardcoded fallback symbol lists.
       Never abort — always produce a universe.
     fallback:
-      equities: ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+      equities:
+        [
+          "AAPL",
+          "MSFT",
+          "NVDA",
+          "TSLA",
+          "SPY",
+          "QQQ",
+          "AMD",
+          "META",
+          "AMZN",
+          "GOOGL",
+        ]
       crypto: ["BTC", "ETH", "SOL", "BNB", "AVAX"]
     redis_fallback_keys:
       equities: universe:equities
