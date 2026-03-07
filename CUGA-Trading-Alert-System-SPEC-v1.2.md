@@ -4,6 +4,20 @@
 > This document is the authoritative specification for the `/trade-alert` repository.
 > All AI tools (Claude Opus 4.6 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
 
+## Implementation Status
+
+| Phase   | Description                              | Status     | Tag    |
+|---------|------------------------------------------|------------|--------|
+| Phase 1 | Models, Redis collectors                 | ✅ Done    | v0.1.0 |
+| Phase 2 | TA collector                             | ✅ Done    | v0.2.0 |
+| Phase 3 | Sentiment, orderbook, macro collectors   | ✅ Done    | v0.3.0 |
+| Phase 4 | Merger, Postgres DB layer                | ✅ Done    | v0.4.0 |
+| Phase 5 | Decision engine workflows                | ✅ Done    | v0.5.0 |
+| Phase 6 | Notifier, Discord embeds, Postgres log   | ✅ Done    | v0.6.0 |
+| Phase 7 | Orchestration, healthcheck, Docker       | ✅ Done    | v0.7.0 |
+| Phase 8 | Outcome tracker, winrate reporting       | ✅ Done    | v0.8.0 |
+| Phase 9 | Dashboard — not yet in spec (TBD)        | ⬜ Pending | —      |
+
 ---
 
 ## 0. Global Guardrails (Read Me Before Generating Any Code)
