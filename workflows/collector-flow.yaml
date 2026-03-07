@@ -1,0 +1,175 @@
+# SSOT Reference: CUGA-Trading-Alert-System-SPEC-v1.2.md § 8 (Collector Workflows)
+# collector-flow.yaml — Collect volume spikes and order book imbalance signals
+
+name: collector-flow
+description: Collect volume spikes and order book imbalance signals
+llm_model: grok-beta
+
+tools:
+  - name: polygon-mcp
+    url: http://polygon-mcp:8002
+    tools:
+      - unusual_activity
+      - aggs
+  - name: crypto-orderbook-mcp
+    url: http://crypto-orderbook-mcp:8006
+    tools:
+      - imbalance
+      - depth
+
+steps:
+  - id: step_1_read_universe
+    type: code
+    description: >
+      Read universe:equities and universe:crypto from Redis
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+      crypto_raw = r.get("universe:crypto")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      crypto = json.loads(crypto_raw) if crypto_raw else ["BTC", "ETH", "SOL"]
+
+      output = {
+          "equities": equities,
+          "crypto": crypto,
+      }
+
+  - id: step_2_parallel_flow_fetch
+    type: parallel
+    description: >
+      In parallel: fetch Polygon unusual_activity (batch 25), Polygon aggs for volume
+      multiples, and crypto-orderbook imbalance (batch 15).
+    actions:
+      - id: polygon_unusual_b1
+        tool: polygon-mcp
+        action: unusual_activity
+        params:
+          symbols: "{{ equities[:25] }}"
+      - id: polygon_unusual_b2
+        tool: polygon-mcp
+        action: unusual_activity
+        params:
+          symbols: "{{ equities[25:] }}"
+      - id: polygon_aggs_b1
+        tool: polygon-mcp
+        action: aggs
+        params:
+          symbols: "{{ equities[:25] }}"
+          include_avg_volume: true
+          lookback_days: 20
+      - id: polygon_aggs_b2
+        tool: polygon-mcp
+        action: aggs
+        params:
+          symbols: "{{ equities[25:] }}"
+          include_avg_volume: true
+          lookback_days: 20
+      - id: crypto_imbalance_b1
+        tool: crypto-orderbook-mcp
+        action: imbalance
+        params:
+          symbols: "{{ crypto[:15] }}"
+      - id: crypto_imbalance_b2
+        tool: crypto-orderbook-mcp
+        action: imbalance
+        params:
+          symbols: "{{ crypto[15:] }}"
+
+  - id: step_3_normalize_and_store
+    type: code
+    description: >
+      Merge Polygon + orderbook results by symbol, compute volume_multiple,
+      pass to flow_normalizer.normalize, push snapshots:15m to Redis (TTL 900s).
+    code: |
+      import json
+      import redis
+      from normalizers.flow_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      raw = {}
+
+      # --- Merge Polygon unusual_activity ---
+      def merge_unusual(result_data):
+          if not result_data:
+              return
+          items = result_data if isinstance(result_data, list) else result_data.get("results", [])
+          for item in items:
+              sym = (item.get("symbol") or item.get("ticker") or "").upper()
+              if not sym:
+                  continue
+              entry = raw.setdefault(sym, {})
+              entry.setdefault("unusual_options", []).append(item)
+
+      merge_unusual(outputs.get("polygon_unusual_b1"))
+      merge_unusual(outputs.get("polygon_unusual_b2"))
+
+      # --- Merge Polygon aggs → compute volume_multiple ---
+      def merge_aggs(result_data):
+          if not result_data:
+              return
+          items = result_data if isinstance(result_data, list) else result_data.get("results", [])
+          for item in items:
+              sym = (item.get("symbol") or item.get("ticker") or item.get("T") or "").upper()
+              if not sym:
+                  continue
+              entry = raw.setdefault(sym, {})
+              current_vol = item.get("v") or item.get("volume") or 0
+              avg_vol = item.get("avg_20d_volume") or item.get("vw") or 1
+              if avg_vol and avg_vol > 0:
+                  entry["volume_multiple"] = round(current_vol / avg_vol, 4)
+              else:
+                  entry["volume_multiple"] = 0.0
+
+      merge_aggs(outputs.get("polygon_aggs_b1"))
+      merge_aggs(outputs.get("polygon_aggs_b2"))
+
+      # --- Merge crypto-orderbook imbalance ---
+      def merge_orderbook(result_data):
+          if not result_data:
+              return
+          items = result_data if isinstance(result_data, list) else result_data.get("results", [])
+          for item in items:
+              sym = (item.get("symbol") or item.get("ticker") or "").upper()
+              if not sym:
+                  continue
+              entry = raw.setdefault(sym, {})
+              entry["imbalance"] = item.get("imbalance") or item.get("bid_ask_imbalance")
+
+      merge_orderbook(outputs.get("crypto_imbalance_b1"))
+      merge_orderbook(outputs.get("crypto_imbalance_b2"))
+
+      # --- Normalize and push to Redis ---
+      snapshots = normalize(raw, timeframe="15m")
+
+      for snap in snapshots:
+          r.lpush("snapshots:15m", snap.model_dump_json())
+      if snapshots:
+          r.expire("snapshots:15m", 900)
+
+      output = {"n_snapshots": len(snapshots)}
+
+  - id: step_4_log
+    type: log
+    message: "Flow collector: {n_snapshots} snapshots pushed to Redis"
+
+error_handling:
+  on_orderbook_unavailable:
+    strategy: skip_crypto_flow
+    description: >
+      If crypto-orderbook-mcp is unavailable, skip crypto flow signals and continue
+      processing equities only. Log that crypto flow confidence is reduced.
+  on_polygon_rate_limited:
+    strategy: use_previous_tick
+    description: >
+      If Polygon is rate limited, read last tick's flow data from Redis (snapshots:15m)
+      and reuse those flow signals for this tick. Log the fallback.
+  on_mcp_failure:
+    strategy: continue_partial
+    description: >
+      On any other MCP failure, continue with partial results — never abort.

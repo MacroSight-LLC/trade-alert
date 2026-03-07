@@ -1,0 +1,155 @@
+# SSOT Reference: CUGA-Trading-Alert-System-SPEC-v1.2.md § 8 (Collector Workflows)
+# collector-market.yaml — Build equity and crypto symbol universes for this 5-minute tick
+
+name: collector-market
+description: Build equity and crypto symbol universes for this 5-minute tick
+llm_model: grok-beta
+
+tools:
+  - name: coingecko-mcp
+    url: http://coingecko-mcp:8007
+    tools:
+      - top_gainers
+      - dominance
+  - name: trading-mcp
+    url: http://trading-mcp:8008
+    tools:
+      - screen
+      - insiders
+  - name: polygon-mcp
+    url: http://polygon-mcp:8002
+    tools:
+      - aggs
+
+steps:
+  - id: step_1_parallel_fetch
+    type: parallel
+    description: >
+      Fetch CoinGecko top gainers (limit=30) and BTC dominance in parallel
+    actions:
+      - id: coingecko_top_gainers
+        tool: coingecko-mcp
+        action: top_gainers
+        params:
+          limit: 30
+      - id: coingecko_dominance
+        tool: coingecko-mcp
+        action: dominance
+
+  - id: step_2_equity_screen
+    type: tool_call
+    description: >
+      Screen equities via trading-mcp: volume > 1M, |price_change_pct| > 2%, market_cap > 500M
+    tool: trading-mcp
+    action: screen
+    params:
+      filters:
+        volume_min: 1000000
+        price_change_pct_abs_min: 2.0
+        market_cap_min: 500000000
+      limit: 30
+
+  - id: step_3_polygon_volume_leaders
+    type: tool_call
+    description: >
+      Fetch Polygon aggs to find top 20 equity volume leaders by volume ratio
+    tool: polygon-mcp
+    action: aggs
+    params:
+      top_n_by_volume_ratio: 20
+
+  - id: step_4_build_universe
+    type: code
+    description: >
+      Merge results, deduplicate symbols, build universe:equities (max 50) and
+      universe:crypto (max 30), then store both to Redis with TTL 900s.
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      # --- Build crypto universe from CoinGecko results ---
+      crypto_symbols = []
+      gainers_data = outputs.get("coingecko_top_gainers", {})
+      if isinstance(gainers_data, dict):
+          gainers_list = gainers_data.get("coins", gainers_data.get("top_gainers", []))
+      elif isinstance(gainers_data, list):
+          gainers_list = gainers_data
+      else:
+          gainers_list = []
+
+      for item in gainers_list:
+          sym = item.get("symbol") or item.get("id")
+          if sym and sym not in crypto_symbols:
+              crypto_symbols.append(sym.upper())
+
+      crypto_symbols = crypto_symbols[:30]
+
+      # --- Build equity universe from trading-mcp screen + Polygon aggs ---
+      equity_symbols = []
+      screen_data = outputs.get("step_2_equity_screen", {})
+      if isinstance(screen_data, dict):
+          screen_list = screen_data.get("results", screen_data.get("tickers", []))
+      elif isinstance(screen_data, list):
+          screen_list = screen_data
+      else:
+          screen_list = []
+
+      for item in screen_list:
+          sym = item.get("symbol") or item.get("ticker")
+          if sym and sym not in equity_symbols:
+              equity_symbols.append(sym.upper())
+
+      polygon_data = outputs.get("step_3_polygon_volume_leaders", {})
+      if isinstance(polygon_data, dict):
+          polygon_list = polygon_data.get("results", polygon_data.get("tickers", []))
+      elif isinstance(polygon_data, list):
+          polygon_list = polygon_data
+      else:
+          polygon_list = []
+
+      for item in polygon_list:
+          sym = item.get("symbol") or item.get("ticker") or item.get("T")
+          if sym and sym not in equity_symbols:
+              equity_symbols.append(sym.upper())
+
+      equity_symbols = equity_symbols[:50]
+
+      # --- Fallback: hardcoded lists if results are empty ---
+      if not equity_symbols:
+          equity_symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+
+      if not crypto_symbols:
+          crypto_symbols = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+
+      # --- Write to Redis with 900s TTL ---
+      r.setex("universe:equities", 900, json.dumps(equity_symbols))
+      r.setex("universe:crypto", 900, json.dumps(crypto_symbols))
+
+      n_equities = len(equity_symbols)
+      n_crypto = len(crypto_symbols)
+      output = {
+          "n_equities": n_equities,
+          "n_crypto": n_crypto,
+          "universe_equities": equity_symbols,
+          "universe_crypto": crypto_symbols,
+      }
+
+  - id: step_5_log
+    type: log
+    message: "Universe built: {n_equities} equities, {n_crypto} crypto"
+
+error_handling:
+  on_mcp_failure:
+    strategy: use_cache_or_fallback
+    description: >
+      If any MCP call fails, attempt to read the existing universe from Redis.
+      If no cache is available, use the hardcoded fallback symbol lists.
+      Never abort — always produce a universe.
+    fallback:
+      equities: ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+      crypto: ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+    redis_fallback_keys:
+      equities: universe:equities
+      crypto: universe:crypto

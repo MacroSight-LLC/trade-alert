@@ -1,0 +1,205 @@
+# SSOT Reference: CUGA-Trading-Alert-System-SPEC-v1.2.md § 8 (Collector Workflows)
+# collector-sentiment.yaml — Collect and quality-filter social sentiment and news signals
+
+name: collector-sentiment
+description: Collect and quality-filter social sentiment and news signals
+llm_model: grok-beta
+
+tools:
+  - name: finnhub-mcp
+    url: http://finnhub-mcp:8004
+    tools:
+      - sentiment
+      - news_symbol
+  - name: rot-mcp
+    url: http://rot-mcp:8005
+    tools:
+      - trending_tickers
+      - options_flow
+  - name: spamshield-mcp
+    url: http://spamshield-mcp:8010
+    tools:
+      - classify_text
+
+steps:
+  - id: step_1_read_universe
+    type: code
+    description: >
+      Read universe:equities and universe:crypto from Redis
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+      crypto_raw = r.get("universe:crypto")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      crypto = json.loads(crypto_raw) if crypto_raw else ["BTC", "ETH", "SOL"]
+      all_symbols = list(dict.fromkeys(equities + crypto))
+
+      output = {
+          "equities": equities,
+          "crypto": crypto,
+          "all_symbols": all_symbols,
+      }
+
+  - id: step_2_parallel_sentiment_fetch
+    type: parallel
+    description: >
+      In parallel: fetch Finnhub aggregate sentiment scores (batch 20) and ROT
+      trending_tickers + options_flow. Use structured outputs only — no raw headlines.
+    actions:
+      - id: finnhub_sentiment_b1
+        tool: finnhub-mcp
+        action: sentiment
+        params:
+          symbols: "{{ all_symbols[:20] }}"
+          use_aggregate_scores: true
+      - id: finnhub_sentiment_b2
+        tool: finnhub-mcp
+        action: sentiment
+        params:
+          symbols: "{{ all_symbols[20:40] }}"
+          use_aggregate_scores: true
+      - id: finnhub_sentiment_b3
+        tool: finnhub-mcp
+        action: sentiment
+        params:
+          symbols: "{{ all_symbols[40:] }}"
+          use_aggregate_scores: true
+      - id: rot_trending
+        tool: rot-mcp
+        action: trending_tickers
+      - id: rot_options_flow
+        tool: rot-mcp
+        action: options_flow
+
+  - id: step_3_spamshield_filter
+    type: code
+    description: >
+      If any raw text bodies are present in the fetched results, call spamshield-mcp
+      classify_text on each. Drop items classified as spam before normalizing.
+      Only applies if raw text bodies are present — skip otherwise.
+    code: |
+      import asyncio
+
+      # Collect any raw text bodies from results
+      text_items = []
+
+      for action_id in ["finnhub_sentiment_b1", "finnhub_sentiment_b2", "finnhub_sentiment_b3"]:
+          result = outputs.get(action_id, {})
+          items = result if isinstance(result, list) else result.get("results", [])
+          for item in items:
+              # Only process items that expose raw text, not just aggregate scores
+              body = item.get("body") or item.get("text") or item.get("headline")
+              if body:
+                  text_items.append({"id": item.get("id"), "text": body, "source_item": item})
+
+      spam_ids = set()
+
+      if text_items:
+          # Call spamshield-mcp classify_text for each raw text body (fail open on error)
+          for text_item in text_items:
+              try:
+                  result = tools["spamshield-mcp"].classify_text(text=text_item["text"])
+                  if result.get("is_spam") is True:
+                      spam_ids.add(text_item["id"])
+              except Exception:
+                  # Spam filter failure = treat as not spam (fail open)
+                  pass
+
+      output = {"spam_ids": list(spam_ids), "n_spam_filtered": len(spam_ids)}
+
+  - id: step_4_normalize_and_store
+    type: code
+    description: >
+      Merge Finnhub + ROT results by symbol, drop spam items, pass to
+      sentiment_normalizer.normalize, push snapshots:15m to Redis (TTL 900s).
+    code: |
+      import json
+      import redis
+      from normalizers.sentiment_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      spam_ids = set(outputs.get("step_3_spamshield_filter", {}).get("spam_ids", []))
+      n_filtered = len(spam_ids)
+
+      raw = {}
+
+      # --- Merge Finnhub aggregate sentiment ---
+      def merge_finnhub(result_data):
+          if not result_data:
+              return
+          items = result_data if isinstance(result_data, list) else result_data.get("results", [])
+          for item in items:
+              item_id = item.get("id")
+              if item_id and item_id in spam_ids:
+                  continue
+              sym = (item.get("symbol") or item.get("ticker") or "").upper()
+              if not sym:
+                  continue
+              entry = raw.setdefault(sym, {})
+              # Use aggregate score; prefer finnhub_score key
+              score = item.get("finnhub_score") or item.get("score") or item.get("sentiment")
+              if score is not None:
+                  entry["finnhub_score"] = score
+
+      merge_finnhub(outputs.get("finnhub_sentiment_b1"))
+      merge_finnhub(outputs.get("finnhub_sentiment_b2"))
+      merge_finnhub(outputs.get("finnhub_sentiment_b3"))
+
+      # --- Merge ROT structured signals ---
+      rot_trending = outputs.get("rot_trending", {})
+      rot_flow = outputs.get("rot_options_flow", {})
+
+      trending_tickers = rot_trending if isinstance(rot_trending, list) else rot_trending.get("tickers", [])
+      for item in trending_tickers:
+          sym = (item.get("symbol") or item.get("ticker") or "").upper()
+          if not sym:
+              continue
+          entry = raw.setdefault(sym, {})
+          entry["rot_signal"] = item.get("signal") or item.get("sentiment") or item.get("direction")
+
+      flow_items = rot_flow if isinstance(rot_flow, list) else rot_flow.get("results", [])
+      for item in flow_items:
+          sym = (item.get("symbol") or item.get("ticker") or "").upper()
+          if not sym:
+              continue
+          entry = raw.setdefault(sym, {})
+          entry["rot_options_flow"] = item.get("flow_direction") or item.get("signal")
+
+      for sym in raw:
+          raw[sym]["spam_filtered"] = sym in spam_ids
+
+      # --- Normalize and push to Redis ---
+      snapshots = normalize(raw, timeframe="15m")
+
+      for snap in snapshots:
+          r.lpush("snapshots:15m", snap.model_dump_json())
+      if snapshots:
+          r.expire("snapshots:15m", 900)
+
+      output = {"n_snapshots": len(snapshots), "n_filtered": n_filtered}
+
+  - id: step_5_log
+    type: log
+    message: "Sentiment collector: {n_snapshots} snapshots, {n_filtered} spam filtered"
+
+error_handling:
+  on_rot_unavailable:
+    strategy: finnhub_only
+    description: >
+      If ROT MCP is unavailable, continue with Finnhub sentiment signals only.
+      Mark the resulting snapshots with lower confidence to reflect missing ROT signal.
+  on_spamshield_failure:
+    strategy: fail_open
+    description: >
+      If SpamShield classification fails for any item, treat that item as not spam
+      (fail open, not closed). Never drop items due to SpamShield errors.
+  on_mcp_failure:
+    strategy: continue_partial
+    description: >
+      On any other MCP failure, continue with partial results — never abort.

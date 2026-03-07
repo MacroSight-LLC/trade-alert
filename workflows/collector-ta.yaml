@@ -1,0 +1,239 @@
+# SSOT Reference: CUGA-Trading-Alert-System-SPEC-v1.2.md § 8 (Collector Workflows)
+# collector-ta.yaml — Collect TA signals from TradingView and trading-mcp for all universe symbols
+
+name: collector-ta
+description: Collect TA signals from TradingView and trading-mcp for all universe symbols
+llm_model: grok-beta
+
+tools:
+  - name: tradingview-mcp
+    url: http://tradingview-mcp:8001
+    tools:
+      - bollinger_scan
+      - rsi_scan
+  - name: trading-mcp
+    url: http://trading-mcp:8008
+    tools:
+      - screen
+
+steps:
+  - id: step_1_read_universe
+    type: code
+    description: >
+      Read universe:equities and universe:crypto from Redis
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+      crypto_raw = r.get("universe:crypto")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      crypto = json.loads(crypto_raw) if crypto_raw else ["BTC", "ETH", "SOL"]
+
+      output = {
+          "equities": equities,
+          "crypto": crypto,
+      }
+
+  - id: step_2_tradingview_parallel
+    type: parallel
+    description: >
+      Call TradingView bollinger_scan and rsi_scan in parallel for all equity and crypto
+      symbols across timeframes 15m and 1h. Batch max 20 symbols per call.
+    actions:
+      - id: tv_bollinger_equities_15m
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[:20] }}"
+          timeframe: "15m"
+      - id: tv_bollinger_equities_15m_b2
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[20:40] }}"
+          timeframe: "15m"
+      - id: tv_bollinger_equities_15m_b3
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[40:] }}"
+          timeframe: "15m"
+      - id: tv_bollinger_equities_1h
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[:20] }}"
+          timeframe: "1h"
+      - id: tv_bollinger_equities_1h_b2
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[20:40] }}"
+          timeframe: "1h"
+      - id: tv_bollinger_equities_1h_b3
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ equities[40:] }}"
+          timeframe: "1h"
+      - id: tv_rsi_equities_15m
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[:20] }}"
+          timeframe: "15m"
+      - id: tv_rsi_equities_15m_b2
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[20:40] }}"
+          timeframe: "15m"
+      - id: tv_rsi_equities_15m_b3
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[40:] }}"
+          timeframe: "15m"
+      - id: tv_rsi_equities_1h
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[:20] }}"
+          timeframe: "1h"
+      - id: tv_rsi_equities_1h_b2
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[20:40] }}"
+          timeframe: "1h"
+      - id: tv_rsi_equities_1h_b3
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ equities[40:] }}"
+          timeframe: "1h"
+      - id: tv_bollinger_crypto_15m
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ crypto[:20] }}"
+          timeframe: "15m"
+      - id: tv_bollinger_crypto_1h
+        tool: tradingview-mcp
+        action: bollinger_scan
+        params:
+          symbols: "{{ crypto[:20] }}"
+          timeframe: "1h"
+      - id: tv_rsi_crypto_15m
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ crypto[:20] }}"
+          timeframe: "15m"
+      - id: tv_rsi_crypto_1h
+        tool: tradingview-mcp
+        action: rsi_scan
+        params:
+          symbols: "{{ crypto[:20] }}"
+          timeframe: "1h"
+
+  - id: step_3_fundamentals_equities
+    type: tool_call
+    description: >
+      Fetch fundamental context (P/E, sector) for equities only from trading-mcp screen
+    tool: trading-mcp
+    action: screen
+    params:
+      symbols: "{{ equities }}"
+      fields: ["pe_ratio", "sector", "industry"]
+
+  - id: step_4_normalize_and_store
+    type: code
+    description: >
+      Merge all TradingView results, normalize into Snapshots, and push to Redis
+      snapshots:15m and snapshots:1h with TTL 900s.
+    code: |
+      import json
+      import redis
+      from normalizers.ta_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      # Collect raw results keyed by (symbol, timeframe)
+      raw_15m = {}
+      raw_1h = {}
+
+      def merge_tv_results(result_data, timeframe_bucket):
+          """Accumulate TradingView scan results into a flat dict by symbol."""
+          if not result_data:
+              return
+          items = result_data if isinstance(result_data, list) else result_data.get("results", [])
+          for item in items:
+              sym = item.get("symbol") or item.get("ticker")
+              if not sym:
+                  continue
+              sym = sym.upper()
+              target = timeframe_bucket.setdefault(sym, {})
+              target.update(item)
+
+      # 15m equity batches
+      merge_tv_results(outputs.get("tv_bollinger_equities_15m"), raw_15m)
+      merge_tv_results(outputs.get("tv_bollinger_equities_15m_b2"), raw_15m)
+      merge_tv_results(outputs.get("tv_bollinger_equities_15m_b3"), raw_15m)
+      merge_tv_results(outputs.get("tv_rsi_equities_15m"), raw_15m)
+      merge_tv_results(outputs.get("tv_rsi_equities_15m_b2"), raw_15m)
+      merge_tv_results(outputs.get("tv_rsi_equities_15m_b3"), raw_15m)
+
+      # 1h equity batches
+      merge_tv_results(outputs.get("tv_bollinger_equities_1h"), raw_1h)
+      merge_tv_results(outputs.get("tv_bollinger_equities_1h_b2"), raw_1h)
+      merge_tv_results(outputs.get("tv_bollinger_equities_1h_b3"), raw_1h)
+      merge_tv_results(outputs.get("tv_rsi_equities_1h"), raw_1h)
+      merge_tv_results(outputs.get("tv_rsi_equities_1h_b2"), raw_1h)
+      merge_tv_results(outputs.get("tv_rsi_equities_1h_b3"), raw_1h)
+
+      # 15m crypto
+      merge_tv_results(outputs.get("tv_bollinger_crypto_15m"), raw_15m)
+      merge_tv_results(outputs.get("tv_rsi_crypto_15m"), raw_15m)
+
+      # 1h crypto
+      merge_tv_results(outputs.get("tv_bollinger_crypto_1h"), raw_1h)
+      merge_tv_results(outputs.get("tv_rsi_crypto_1h"), raw_1h)
+
+      # Normalize
+      snapshots_15m = normalize(raw_15m, timeframe="15m")
+      snapshots_1h = normalize(raw_1h, timeframe="1h")
+
+      # Push to Redis
+      for snap in snapshots_15m:
+          r.lpush("snapshots:15m", snap.model_dump_json())
+      if snapshots_15m:
+          r.expire("snapshots:15m", 900)
+
+      for snap in snapshots_1h:
+          r.lpush("snapshots:1h", snap.model_dump_json())
+      if snapshots_1h:
+          r.expire("snapshots:1h", 900)
+
+      n = len(snapshots_15m) + len(snapshots_1h)
+      output = {"n_snapshots": n}
+
+  - id: step_5_log
+    type: log
+    message: "TA collector: {n_snapshots} snapshots pushed to Redis"
+
+error_handling:
+  on_rate_limit:
+    strategy: skip_symbol
+    description: >
+      Skip symbols where TradingView returns rate limit errors.
+      Continue with partial results — never abort.
+  on_mcp_failure:
+    strategy: continue_partial
+    description: >
+      If TradingView MCP is unavailable for a batch, skip that batch and continue
+      processing remaining batches. Log the failure.

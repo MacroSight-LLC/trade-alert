@@ -1,0 +1,149 @@
+# SSOT Reference: CUGA-Trading-Alert-System-SPEC-v1.2.md § 8 (Collector Workflows)
+# collector-macro.yaml — Collect macro regime context from FRED — VIX, yield curve, risk flags
+
+name: collector-macro
+description: Collect macro regime context from FRED — VIX, yield curve, risk flags
+llm_model: grok-beta
+
+tools:
+  - name: fred-mcp
+    url: http://fred-mcp:8009
+    tools:
+      - vix_level
+      - yield_curve
+      - fed_funds_rate
+
+steps:
+  - id: step_1_parallel_fred_fetch
+    type: parallel
+    description: >
+      Call FRED MCP in parallel for VIX level, yield curve (10Y-2Y spread),
+      and federal funds rate.
+    actions:
+      - id: fred_vix
+        tool: fred-mcp
+        action: vix_level
+      - id: fred_yield_curve
+        tool: fred-mcp
+        action: yield_curve
+        params:
+          spread: "10Y-2Y"
+      - id: fred_fed_funds
+        tool: fred-mcp
+        action: fed_funds_rate
+
+  - id: step_2_compute_risk_on
+    type: code
+    description: >
+      Extract VIX, yield curve slope (bps), and fed funds rate from FRED results.
+      Compute risk_on flag: risk_on = (vix < 20) AND (yield_curve_slope > -25).
+    code: |
+      # Parse VIX
+      vix_result = outputs.get("fred_vix", {})
+      if isinstance(vix_result, dict):
+          vix_level = vix_result.get("value") or vix_result.get("vix") or vix_result.get("level")
+      elif isinstance(vix_result, (int, float)):
+          vix_level = float(vix_result)
+      else:
+          vix_level = None
+
+      # Parse yield curve slope (bps)
+      yc_result = outputs.get("fred_yield_curve", {})
+      if isinstance(yc_result, dict):
+          yield_curve_slope_bps = (
+              yc_result.get("spread_bps")
+              or yc_result.get("value")
+              or yc_result.get("slope_bps")
+              or yc_result.get("yield_curve_slope")
+          )
+      elif isinstance(yc_result, (int, float)):
+          yield_curve_slope_bps = float(yc_result)
+      else:
+          yield_curve_slope_bps = None
+
+      # Parse fed funds rate
+      ff_result = outputs.get("fred_fed_funds", {})
+      if isinstance(ff_result, dict):
+          fed_funds_rate = ff_result.get("value") or ff_result.get("rate") or ff_result.get("fed_funds_rate")
+      elif isinstance(ff_result, (int, float)):
+          fed_funds_rate = float(ff_result)
+      else:
+          fed_funds_rate = None
+
+      # Compute risk_on flag (default to True on missing data)
+      vix_ok = (vix_level is None) or (float(vix_level) < 20)
+      curve_ok = (yield_curve_slope_bps is None) or (float(yield_curve_slope_bps) > -25)
+      risk_on = vix_ok and curve_ok
+
+      output = {
+          "vix_level": vix_level,
+          "yield_curve_slope_bps": yield_curve_slope_bps,
+          "fed_funds_rate": fed_funds_rate,
+          "risk_on": risk_on,
+      }
+
+  - id: step_3_normalize_and_store
+    type: code
+    description: >
+      Pass FRED macro data to macro_normalizer.normalize.
+      Store the resulting macro regime snapshot to Redis key macro:regime (TTL 900s).
+      Emit the __GLOBAL_MACRO__ symbol per SSOT § 8 so the decision engine can consume it.
+    code: |
+      import json
+      import redis
+      from normalizers.macro_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      vix_level = outputs.get("step_2_compute_risk_on", {}).get("vix_level")
+      yield_curve_slope_bps = outputs.get("step_2_compute_risk_on", {}).get("yield_curve_slope_bps")
+      fed_funds_rate = outputs.get("step_2_compute_risk_on", {}).get("fed_funds_rate")
+      risk_on = outputs.get("step_2_compute_risk_on", {}).get("risk_on", True)
+
+      raw = {
+          "vix": vix_level,
+          "yield_curve_slope": yield_curve_slope_bps,
+          "fed_funds_rate": fed_funds_rate,
+          "risk_on": risk_on,
+          "symbol": "__GLOBAL_MACRO__",
+      }
+
+      snapshots = normalize(raw, timeframe="15m")
+
+      if snapshots:
+          snap_json = snapshots[0].model_dump_json()
+          r.setex("macro:regime", 900, snap_json)
+
+          # Detect risk-off signals for logging
+          risk_off_signals = [
+              s.reason for snap in snapshots for s in snap.signals if s.type == "macro_risk_off"
+          ]
+          if risk_off_signals:
+              signals_str = "; ".join(risk_off_signals)
+              output = {"log_msg": f"Macro: RISK-OFF signals detected — {signals_str}", "risk_on": False}
+          else:
+              output = {"log_msg": "Macro: Risk-on regime confirmed", "risk_on": True}
+      else:
+          # No snapshots — default to risk-on
+          r.setex("macro:regime", 900, json.dumps({"risk_on": True}))
+          output = {"log_msg": "Macro: Risk-on regime confirmed (no signals)", "risk_on": True}
+
+  - id: step_4_log
+    type: log
+    message: "{log_msg}"
+
+error_handling:
+  on_fred_unavailable:
+    strategy: use_cache_or_default
+    description: >
+      If FRED MCP is unavailable, read the cached macro:regime from Redis.
+      If no cache exists, default to risk_on=True (neutral assumption).
+      Never abort — macro always produces an output.
+    redis_fallback_key: macro:regime
+    ultimate_fallback:
+      risk_on: true
+  on_mcp_failure:
+    strategy: continue_with_default
+    description: >
+      On any FRED failure, fall back gracefully. Do not propagate the error
+      to downstream decision workflows.
