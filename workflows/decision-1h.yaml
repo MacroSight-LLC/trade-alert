@@ -14,7 +14,6 @@ description: >
   signal types using Claude Sonnet, produces PlaybookAlert JSON.
   Stricter gates and macro veto logic for longer holding periods.
 llm_model: claude-3-5-sonnet-20241022
-
 mcp_servers:
   - name: fred-mcp
     endpoint: http://fred-mcp:8009

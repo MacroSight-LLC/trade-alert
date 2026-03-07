@@ -69,10 +69,7 @@ def format_embed(alert: PlaybookAlert) -> dict:
     return {
         "embeds": [
             {
-                "title": (
-                    f"\U0001f6a8 {alert.symbol} {alert.direction}"
-                    f" | Edge: {ep_pct} | Conf: {conf_pct}"
-                ),
+                "title": (f"\U0001f6a8 {alert.symbol} {alert.direction} | Edge: {ep_pct} | Conf: {conf_pct}"),
                 "color": _COLOR_MAP.get(alert.direction, 3447003),
                 "fields": [
                     {
@@ -124,13 +121,13 @@ def send_discord_embed(embed_payload: dict) -> bool:
             return True
 
         if DISCORD_BOT_TOKEN and DISCORD_ALERT_CHANNEL_ID:
-            url = (
-                f"https://discord.com/api/v10/channels"
-                f"/{DISCORD_ALERT_CHANNEL_ID}/messages"
-            )
+            url = f"https://discord.com/api/v10/channels/{DISCORD_ALERT_CHANNEL_ID}/messages"
             headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
             resp = httpx.post(
-                url, json=embed_payload, headers=headers, timeout=10.0,
+                url,
+                json=embed_payload,
+                headers=headers,
+                timeout=10.0,
             )
             resp.raise_for_status()
             return True
@@ -155,10 +152,7 @@ def send_ops_message(message: str) -> None:
         logger.warning("Ops channel not configured — skipping ops message")
         return
     try:
-        url = (
-            f"https://discord.com/api/v10/channels"
-            f"/{DISCORD_OPS_CHANNEL_ID}/messages"
-        )
+        url = f"https://discord.com/api/v10/channels/{DISCORD_OPS_CHANNEL_ID}/messages"
         headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
         resp = httpx.post(
             url,
@@ -223,7 +217,7 @@ if __name__ == "__main__":
         confidence=0.85,
         timeframe="15m",
         thesis="Bollinger Band squeeze breaking out with 3x volume and "
-               "strong retail sentiment. Institutional order flow confirms.",
+        "strong retail sentiment. Institutional order flow confirms.",
         entry={"level": 875.0, "stop": 865.0, "target": 900.0},
         timeframe_rationale="15m breakout aligning with 1h uptrend structure.",
         sentiment_context="ROT strong_bullish, Finnhub +0.6 aggregate score.",

@@ -9,7 +9,6 @@ description: >
   Receive validated PlaybookAlert JSON from decision engine,
   format and send Discord embeds, log to Postgres.
 llm_model: grok-beta
-
 steps:
   # Step 1 — Receive and validate alerts input
   - name: receive-alerts
