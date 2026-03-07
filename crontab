@@ -1,0 +1,10 @@
+# trade-alert cron schedule (SSOT §5)
+# Every 5 minutes — run all collectors then decisions
+*/5 * * * * cd /app && python -m workflows.collector-market >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && python -m workflows.collector-ta >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && python -m workflows.collector-flow >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && python -m workflows.collector-sentiment >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && python -m workflows.collector-macro >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && python -m workflows.decision-15m >> /app/logs/cron.log 2>&1
+# Every hour — healthcheck
+0 * * * * cd /app && python workflows/healthcheck.py >> /app/logs/health.log 2>&1
