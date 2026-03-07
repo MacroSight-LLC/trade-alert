@@ -4,7 +4,7 @@
 
 10 MCP ensemble (TA · flow · sentiment · macro) → Claude Sonnet probabilistic reasoning → Discord trade playbooks with entry, stop, target, thesis & edge probability.
 
-![Architecture](./docs/images/architecture.png)
+![Architecture](./docs/images/Architecture.png)
 
 ## Documentation
 - **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.2.md`](./CUGA-Trading-Alert-System-SPEC-v1.2.md)
