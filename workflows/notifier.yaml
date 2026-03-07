@@ -1,0 +1,60 @@
+# notifier.yaml
+# SSOT Reference: Section 11 - Discord Notifier & Output
+# Purpose: Receive validated PlaybookAlert JSON from decision engine,
+#   format and send Discord embeds, log to Postgres.
+# Called by: decision-15m.yaml and decision-1h.yaml (step 6)
+
+name: notifier
+description: >
+  Receive validated PlaybookAlert JSON from decision engine,
+  format and send Discord embeds, log to Postgres.
+llm_model: grok-beta
+
+steps:
+  # Step 1 — Receive and validate alerts input
+  - name: receive-alerts
+    type: code
+    code: |
+      import json
+      import logging
+
+      logger = logging.getLogger(__name__)
+
+      alerts = json.loads(alerts_json)
+      if not alerts:
+          logger.info("Notifier: no alerts to send this tick")
+          result = {"skip": True, "count": 0}
+      else:
+          logger.info("Notifier: received %d alerts", len(alerts))
+          result = {"skip": False, "count": len(alerts)}
+
+  # Step 2 — Send to Discord and log to Postgres
+  - name: send-and-log
+    type: conditional
+    condition: '{{ not steps["receive-alerts"]["skip"] }}'
+    if_true:
+      type: code
+      code: |
+        import logging
+        from notifier_and_logger import notify
+
+        logger = logging.getLogger(__name__)
+
+        n_sent = notify(
+            alerts_json=alerts_json,
+            raw_snapshots=[],
+        )
+        logger.info("Notifier complete: %d alerts sent to Discord", n_sent)
+        result = {"n_sent": n_sent}
+    if_false:
+      type: code
+      code: |
+        result = {"n_sent": 0}
+
+error_handling:
+  # SSOT §11: never block the cron cycle
+  # Any exception in notify(): log and continue
+  abort_on_failure: false
+  retry:
+    max_attempts: 1
+    backoff_seconds: 0
