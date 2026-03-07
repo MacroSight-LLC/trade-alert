@@ -1,0 +1,244 @@
+# trade-alert production stack (SSOT §§3, 5)
+# MCP services (8001-8010), Redis, Postgres, CUGA runtime, Cron
+
+services:
+  # --- Infrastructure ---
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: trade_alert
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  # --- MCP Services (ports 8001-8010, SSOT §3) ---
+
+  tradingview-mcp:
+    image: ghcr.io/macrosight-llc/tradingview-mcp:latest
+    ports:
+      - "8001:8001"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  polygon-mcp:
+    image: ghcr.io/macrosight-llc/polygon-mcp:latest
+    ports:
+      - "8002:8002"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  discord-mcp:
+    image: ghcr.io/macrosight-llc/discord-mcp:latest
+    ports:
+      - "8003:8003"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  finnhub-mcp:
+    image: ghcr.io/macrosight-llc/finnhub-mcp:latest
+    ports:
+      - "8004:8004"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  rot-mcp:
+    image: ghcr.io/macrosight-llc/rot-mcp:latest
+    ports:
+      - "8005:8005"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  crypto-orderbook-mcp:
+    image: ghcr.io/macrosight-llc/crypto-orderbook-mcp:latest
+    ports:
+      - "8006:8006"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8006/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  coingecko-mcp:
+    image: ghcr.io/macrosight-llc/coingecko-mcp:latest
+    ports:
+      - "8007:8007"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8007/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  trading-mcp:
+    image: ghcr.io/macrosight-llc/trading-mcp:latest
+    ports:
+      - "8008:8008"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  fred-mcp:
+    image: ghcr.io/macrosight-llc/fred-mcp:latest
+    ports:
+      - "8009:8009"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8009/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  spamshield-mcp:
+    image: ghcr.io/macrosight-llc/spamshield-mcp:latest
+    ports:
+      - "8010:8010"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8010/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  # --- Application ---
+
+  cuga:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuga
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      tradingview-mcp:
+        condition: service_healthy
+      polygon-mcp:
+        condition: service_healthy
+      discord-mcp:
+        condition: service_healthy
+      finnhub-mcp:
+        condition: service_healthy
+      rot-mcp:
+        condition: service_healthy
+      crypto-orderbook-mcp:
+        condition: service_healthy
+      coingecko-mcp:
+        condition: service_healthy
+      trading-mcp:
+        condition: service_healthy
+      fred-mcp:
+        condition: service_healthy
+      spamshield-mcp:
+        condition: service_healthy
+    volumes:
+      - ./workflows:/app/workflows
+      - ./normalizers:/app/normalizers
+      - ./models.py:/app/models.py
+      - ./logs:/app/logs
+    env_file: .env
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  cron:
+    image: alpine:3.19
+    depends_on:
+      - cuga
+    volumes:
+      - ./workflows:/app/workflows
+      - ./normalizers:/app/normalizers
+      - ./models.py:/app/models.py
+      - ./logs:/app/logs
+      - ./crontab:/etc/crontabs/root
+    command: crond -f -l 2
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+
+networks:
+  trade-net:

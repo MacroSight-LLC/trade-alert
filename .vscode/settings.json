@@ -3,6 +3,10 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/src"
     ],
+    "python.analysis.exclude": [
+        "${workspaceFolder}/.venv/**",
+        "${workspaceFolder}/src/cuga/**"
+    ],
     "editor.rulers": [
         88,
         100,
@@ -56,5 +60,6 @@
         "local": {
             "baseUrl": "http://localhost:8000"
         }
-    }
+    },
+    "git.defaultRemote": "origin"
 }
