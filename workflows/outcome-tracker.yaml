@@ -1,0 +1,62 @@
+# outcome-tracker.yaml
+# SSOT Reference: Section 12 — Postgres Schema & Analytics
+# Purpose: Poll open alert outcomes every 15 minutes. Fetch current prices
+#   from Polygon.io, evaluate WIN/LOSS/EXPIRED, write results back to Postgres
+#   via db.update_outcome(). Report winrate by edge_probability bucket.
+
+name: outcome-tracker
+description: >
+  Polls open alert outcomes every 15 minutes.
+  Fetches current price from Polygon, evaluates WIN/LOSS/EXPIRED,
+  writes result back to Postgres via db.update_outcome().
+schedule: "*/15 * * * *"
+llm_model: claude-3-5-sonnet-20241022
+
+steps:
+  # Step 1 — Run the tracker cycle to resolve open alerts
+  - name: run-tracker
+    type: code
+    code: |
+      import logging
+      from outcome_tracker import run_tracker_cycle
+
+      logger = logging.getLogger(__name__)
+
+      resolved = run_tracker_cycle()
+      logger.info("Outcome tracker: %d outcomes resolved this cycle", resolved)
+      result = {"resolved": resolved}
+
+  # Step 2 — Report winrate statistics by edge_probability bucket
+  - name: report
+    type: code
+    code: |
+      import logging
+      from db import get_winrate_by_bucket
+
+      logger = logging.getLogger(__name__)
+
+      buckets = get_winrate_by_bucket()
+      if buckets:
+          for row in buckets:
+              wins = row["wins"]
+              total = row["total"]
+              win_rate = wins / total if total else 0.0
+              logger.info(
+                  "Winrate [bucket %.1f]: %.1f%% (%d/%d trades, avg_pnl=%.4f)",
+                  float(row["bucket"]),
+                  win_rate * 100,
+                  wins,
+                  total,
+                  float(row["avg_pnl"] or 0),
+              )
+          result = {"buckets": len(buckets)}
+      else:
+          logger.info("No completed trades yet for winrate reporting")
+          result = {"buckets": 0}
+
+error_handling:
+  # Never crash — all exceptions caught in run_tracker_cycle()
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 5
