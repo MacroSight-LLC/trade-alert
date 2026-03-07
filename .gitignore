@@ -87,3 +87,4 @@ dump.rdb
 dist/
 build/
 *.whl
+.venv/
