@@ -1,0 +1,129 @@
+# collector-market.yaml
+# SSOT Reference: Section 8 - Collector Workflows (collector-market)
+# Purpose: Build the trading universe -- which symbols to watch this tick.
+# Runs every 5 minutes via cron; produces universe:equities and universe:crypto in Redis (TTL 900s).
+
+name: collector-market
+description: Build equity and crypto symbol universes for this 5-minute tick
+llm_model: grok-beta
+
+mcp_servers:
+  - name: coingecko-mcp
+    endpoint: http://coingecko-mcp:8007
+  - name: trading-mcp
+    endpoint: http://trading-mcp:8008
+  - name: polygon-mcp
+    endpoint: http://polygon-mcp:8002
+
+steps:
+  # Step 1 -- Parallel: CoinGecko top_gainers + dominance
+  # SSOT S8: universe:crypto built from CoinGecko top gainers and dominance data
+  - name: fetch-coingecko
+    type: parallel_tool_calls
+    calls:
+      - tool: coingecko-mcp
+        method: top_gainers
+        params:
+          limit: 30
+      - tool: coingecko-mcp
+        method: dominance
+        params: {}
+
+  # Step 2 -- trading-mcp screen for equity candidates
+  # SSOT S8: universe:equities from trading-mcp screen + Polygon volume leaders
+  # SSOT S3: Use structured outputs only; limit to screener subset
+  - name: fetch-equity-screen
+    type: tool_call
+    tool: trading-mcp
+    method: screen
+    params:
+      filters:
+        volume_gt: 1000000
+        price_change_pct_abs_gt: 2.0
+        market_cap_gt: 500000000
+      limit: 30
+
+  # Step 2b -- trading-mcp insiders (supplementary universe quality signal)
+  - name: fetch-insider-activity
+    type: tool_call
+    tool: trading-mcp
+    method: insiders
+    params:
+      limit: 20
+
+  # Step 3 -- Polygon aggs for top 20 volume leaders
+  # SSOT S3: Polygon aggs -- query only screener subset
+  - name: fetch-polygon-volume-leaders
+    type: tool_call
+    tool: polygon-mcp
+    method: aggs
+    params:
+      sort_by: volume_ratio
+      limit: 20
+
+  # Step 4 -- Code agent: merge, deduplicate, build universes, write to Redis
+  # Redis keys: universe:equities (max 50), universe:crypto (max 30)
+  # Redis TTL: 900s per SSOT S8
+  - name: build-and-store-universes
+    type: code
+    code: |
+      import json
+      import redis
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+      fallback_equities = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+      fallback_crypto   = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+
+      equity_symbols = set()
+      for item in steps["fetch-equity-screen"].get("results", []):
+          sym = item.get("symbol") or item.get("ticker")
+          if sym:
+              equity_symbols.add(sym.upper())
+      for item in steps["fetch-polygon-volume-leaders"].get("results", []):
+          sym = item.get("symbol") or item.get("ticker")
+          if sym:
+              equity_symbols.add(sym.upper())
+      equity_list = sorted(equity_symbols)[:50]
+
+      crypto_symbols = set()
+      for item in steps["fetch-coingecko"][0].get("results", []):
+          sym = item.get("symbol") or item.get("id")
+          if sym:
+              crypto_symbols.add(sym.upper())
+      crypto_list = sorted(crypto_symbols)[:30]
+
+      if len(equity_list) < 5:
+          cached = r.get("universe:equities")
+          equity_list = json.loads(cached) if cached else fallback_equities
+      if len(crypto_list) < 3:
+          cached = r.get("universe:crypto")
+          crypto_list = json.loads(cached) if cached else fallback_crypto
+
+      r.setex("universe:equities", 900, json.dumps(equity_list))
+      r.setex("universe:crypto",   900, json.dumps(crypto_list))
+
+      result = {"n_equities": len(equity_list), "n_crypto": len(crypto_list)}
+
+  # Step 5 -- Log completion
+  - name: log-completion
+    type: llm
+    prompt: |
+      Output exactly this single log line and nothing else:
+      "Universe built: {n_equities} equities, {n_crypto} crypto"
+      substituting n_equities and n_crypto from the build-and-store-universes step result.
+
+error_handling:
+  # SSOT S8: never abort -- always produce a universe.
+  # SSOT S0.1 rule 5: resilience first -- all external calls wrapped with timeouts + retries.
+  on_mcp_error:
+    strategy: fallback_to_cache
+    fallback_equities_key: "universe:equities"
+    fallback_crypto_key: "universe:crypto"
+    hardcoded_fallback:
+      equities: ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+      crypto: ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 3
