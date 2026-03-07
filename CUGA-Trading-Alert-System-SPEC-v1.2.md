@@ -6,17 +6,26 @@
 
 ## Implementation Status
 
-| Phase   | Description                              | Status     | Tag    |
-|---------|------------------------------------------|------------|--------|
-| Phase 1 | Models, Redis collectors                 | ✅ Done    | v0.1.0 |
-| Phase 2 | TA collector                             | ✅ Done    | v0.2.0 |
-| Phase 3 | Sentiment, orderbook, macro collectors   | ✅ Done    | v0.3.0 |
-| Phase 4 | Merger, Postgres DB layer                | ✅ Done    | v0.4.0 |
-| Phase 5 | Decision engine workflows                | ✅ Done    | v0.5.0 |
-| Phase 6 | Notifier, Discord embeds, Postgres log   | ✅ Done    | v0.6.0 |
-| Phase 7 | Orchestration, healthcheck, Docker       | ✅ Done    | v0.7.0 |
-| Phase 8 | Outcome tracker, winrate reporting       | ✅ Done    | v0.8.0 |
-| Phase 9 | Dashboard — not yet in spec (TBD)        | ⬜ Pending | —      |
+| Phase   | Description                            | Status    | Tag    |
+| ------- | -------------------------------------- | --------- | ------ |
+| Phase 1 | Models, Redis collectors               | ✅ Done    | v0.1.0 |
+| Phase 2 | TA collector                           | ✅ Done    | v0.2.0 |
+| Phase 3 | Sentiment, orderbook, macro collectors | ✅ Done    | v0.3.0 |
+| Phase 4 | Merger, Postgres DB layer              | ✅ Done    | v0.4.0 |
+| Phase 5 | Decision engine workflows              | ✅ Done    | v0.5.0 |
+| Phase 6 | Notifier, Discord embeds, Postgres log | ✅ Done    | v0.6.0 |
+| Phase 7 | Orchestration, healthcheck, Docker     | ✅ Done    | v0.7.0 |
+| Phase 8 | Outcome tracker, winrate reporting     | ✅ Done    | v0.8.0 |
+| Phase 9 | Dashboard — not yet in spec (TBD)      | ⬜ Pending | —      |
+
+### Architecture Notes
+
+**Collectors are CUGA workflow files, not Python modules.**
+They live in `workflows/collector-*.yaml` and are executed by the
+CUGA runtime. There are no `collector_*.py` files at the repo root.
+To reference collector behavior, read the YAML files directly.
+Correct import for integration testing: use `merger.py` and `db.py`
+as the Python-importable boundary — not the collectors themselves.
 
 ---
 
@@ -109,18 +118,18 @@ Use the existing architecture diagram as the canonical visual reference. It MUST
 
 All MCP services run in Docker, expose `/health`, and are wired into CUGA via its MCP client tooling.[web:81]
 
-| Port | Service Name | Key Tools (examples) | Role & Integration Notes |
-| --- | --- | --- | --- |
-| 8001 | TradingView MCP | `bollinger_scan`, `rsi_scan` | Primary TA: use for BB squeezes, overbought/oversold, and multi‑timeframe trends. Batch symbols/timeframes to respect rate limits. |
-| 8002 | Polygon MCP | `unusual_activity`, `aggs` | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset. |
-| 8003 | Discord MCP | `send_rich_embed` | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs. |
-| 8004 | Finnhub MCP | `sentiment`, `news_symbol` | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble. |
-| 8005 | ROT MCP | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts. |
-| 8006 | crypto‑orderbook MCP | `imbalance`, `depth` | Order book structure: bid/ask imbalance near current price. Use this only for symbols marked as crypto. |
-| 8007 | CoinGecko MCP | `top_gainers`, `dominance` | Crypto universe and broad market state. Use to build the crypto symbol list and detect sector rotations. |
-| 8008 | trading‑mcp server | `screen`, `insiders` | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal. |
-| 8009 | FRED bundle MCP | `vix_level`, `yield_curve` | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts. |
-| 8010 | SpamShieldpro MCP | `classify_text` | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam. |
+| Port | Service Name         | Key Tools (examples)               | Role & Integration Notes                                                                                                                          |
+| ---- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 8001 | TradingView MCP      | `bollinger_scan`, `rsi_scan`       | Primary TA: use for BB squeezes, overbought/oversold, and multi‑timeframe trends. Batch symbols/timeframes to respect rate limits.                |
+| 8002 | Polygon MCP          | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                          |
+| 8003 | Discord MCP          | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                              |
+| 8004 | Finnhub MCP          | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                       |
+| 8005 | ROT MCP              | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.          |
+| 8006 | crypto‑orderbook MCP | `imbalance`, `depth`               | Order book structure: bid/ask imbalance near current price. Use this only for symbols marked as crypto.                                           |
+| 8007 | CoinGecko MCP        | `top_gainers`, `dominance`         | Crypto universe and broad market state. Use to build the crypto symbol list and detect sector rotations.                                          |
+| 8008 | trading‑mcp server   | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal. |
+| 8009 | FRED bundle MCP      | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                           |
+| 8010 | SpamShieldpro MCP    | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                         |
 
 **Integration Best Practices (all MCPs)**
 
