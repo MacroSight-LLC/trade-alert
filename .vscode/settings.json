@@ -3,6 +3,10 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/src"
     ],
+    "python.analysis.exclude": [
+        "${workspaceFolder}/.venv/**",
+        "${workspaceFolder}/src/cuga/**"
+    ],
     "editor.rulers": [
         88,
         100,
