@@ -12,5 +12,4 @@ RUN pip install --no-cache-dir ".[all]"
 COPY . .
 
 CMD ["python", "-m", "cuga", "run", "--workflows-dir", "workflows/", \
-     "--schedule"]
-
+    "--schedule"]
