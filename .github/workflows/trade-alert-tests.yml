@@ -1,0 +1,52 @@
+name: trade-alert tests
+
+on:
+  push:
+    paths:
+      - "models.py"
+      - "merger.py"
+      - "db.py"
+      - "notifier_and_logger.py"
+      - "healthcheck.py"
+      - "outcome_tracker.py"
+      - "normalizers/**"
+      - "tests/unit/**"
+      - "tests/conftest.py"
+      - ".github/workflows/trade-alert-tests.yml"
+  pull_request:
+    paths:
+      - "models.py"
+      - "merger.py"
+      - "db.py"
+      - "notifier_and_logger.py"
+      - "healthcheck.py"
+      - "outcome_tracker.py"
+      - "normalizers/**"
+      - "tests/unit/**"
+      - "tests/conftest.py"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pydantic httpx psycopg2-binary redis pytest pytest-cov mypy ruff
+
+      - name: Lint with ruff
+        run: ruff check models.py merger.py db.py notifier_and_logger.py healthcheck.py outcome_tracker.py normalizers/
+
+      - name: Type-check with mypy
+        run: mypy models.py merger.py db.py notifier_and_logger.py healthcheck.py outcome_tracker.py normalizers/
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/unit/ -v --tb=short --cov=. --cov-report=term-missing \
+            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,healthcheck.py,outcome_tracker.py,normalizers/*"

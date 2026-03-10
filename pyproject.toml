@@ -63,13 +63,11 @@ Repository = "https://github.com/cuga-project/cuga-agent"
 package = true
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-exclude = [
-    "frontend_workspaces*"
-]
+exclude = ["frontend_workspaces*"]
 
 [tool.setuptools.package-data]
 cuga = [
@@ -79,13 +77,9 @@ cuga = [
     "backend/**/*.jinja2",
     "backend/**/*.js",
 ]
-frontend_workspaces = [
-    "frontend/dist/**",
-    "extension/releases/**"
-]
+frontend_workspaces = ["frontend/dist/**", "extension/releases/**"]
 scripts = ["*.py"]
 system_tests = ["**/*.py", "**/*.yaml", "**/*.sh"]
-
 
 
 [project.scripts]
@@ -118,18 +112,31 @@ dev = [
     "rapidfuzz",
     "pytest>=8.3.5",
     "pytest-asyncio>=1.1.0",
+    "pytest-cov>=4.0",
     "cugaviz",
     "pre-commit>=4.3.0",
     "questionary>=2.1.1",
     "rich>=14.2.0",
     "pip-licenses>=5.5.1",
+    "mypy>=1.0",
 ]
-google-genai = [
-    "langchain-google-genai>=2.0.11",
-]
-sandbox = [
-    "llm-sandbox>=0.1.3",
-]
+google-genai = ["langchain-google-genai>=2.0.11"]
+sandbox = ["llm-sandbox>=0.1.3"]
 
 [tool.pytest.ini_options]
 anyio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+files = [
+    "models.py",
+    "merger.py",
+    "db.py",
+    "notifier_and_logger.py",
+    "healthcheck.py",
+    "outcome_tracker.py",
+    "normalizers/",
+]

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from db import get_recent_alerts, update_outcome
 from models import PlaybookAlert  # noqa: F401 — required project import
 
@@ -35,10 +36,7 @@ def get_current_price(symbol: str) -> float | None:
     Returns:
         Latest close/last price, or ``None`` on any error.
     """
-    url = (
-        f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/"
-        f"tickers/{symbol}"
-    )
+    url = f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
     try:
         resp = httpx.get(url, params={"apiKey": POLYGON_API_KEY}, timeout=10.0)
         resp.raise_for_status()
@@ -133,6 +131,10 @@ def run_tracker_cycle() -> int:
         try:
             # Skip already-resolved alerts
             if row.get("outcome") is not None:
+                continue
+
+            # WATCH alerts have no directional play — skip tracking
+            if row.get("direction") == "WATCH":
                 continue
 
             mapped = _map_db_row(row)

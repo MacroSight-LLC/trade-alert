@@ -68,12 +68,16 @@ steps:
     type: code
     code: |
       import json
+      import os
       import redis
 
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
 
-      fallback_equities = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
-      fallback_crypto   = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+      fallback_equities_str = os.environ.get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
+      fallback_crypto_str   = os.environ.get("FALLBACK_CRYPTO", "BTC,ETH,SOL,BNB,AVAX")
+      fallback_equities = [s.strip() for s in fallback_equities_str.split(",")]
+      fallback_crypto   = [s.strip() for s in fallback_crypto_str.split(",")]
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       equity_symbols = set()
       for item in steps["fetch-equity-screen"].get("results", []):
@@ -100,8 +104,8 @@ steps:
           cached = r.get("universe:crypto")
           crypto_list = json.loads(cached) if cached else fallback_crypto
 
-      r.setex("universe:equities", 900, json.dumps(equity_list))
-      r.setex("universe:crypto",   900, json.dumps(crypto_list))
+      r.setex("universe:equities", snapshot_ttl, json.dumps(equity_list))
+      r.setex("universe:crypto",   snapshot_ttl, json.dumps(crypto_list))
 
       result = {"n_equities": len(equity_list), "n_crypto": len(crypto_list)}
 
@@ -121,7 +125,19 @@ error_handling:
     fallback_equities_key: "universe:equities"
     fallback_crypto_key: "universe:crypto"
     hardcoded_fallback:
-      equities: ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ", "AMD", "META", "AMZN", "GOOGL"]
+      equities:
+        [
+          "AAPL",
+          "MSFT",
+          "NVDA",
+          "TSLA",
+          "SPY",
+          "QQQ",
+          "AMD",
+          "META",
+          "AMZN",
+          "GOOGL",
+        ]
       crypto: ["BTC", "ETH", "SOL", "BNB", "AVAX"]
   abort_on_failure: false
   retry:

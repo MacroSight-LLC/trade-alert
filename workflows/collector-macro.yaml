@@ -34,6 +34,8 @@ steps:
   - name: compute-risk-flag
     type: code
     code: |
+      import os
+
       vix_result       = steps["fetch-macro-data"][0]
       yc_result        = steps["fetch-macro-data"][1]
       ffr_result       = steps["fetch-macro-data"][2]
@@ -42,7 +44,9 @@ steps:
       yield_curve_slope    = yc_result.get("spread_bps") or yc_result.get("value", 0.0)
       fed_funds_rate       = ffr_result.get("rate") or ffr_result.get("value", 5.0)
 
-      risk_on = (vix_level < 20.0) and (yield_curve_slope > -25.0)
+      vix_threshold   = float(os.environ.get("VIX_RISK_THRESHOLD", "20.0"))
+      curve_threshold = float(os.environ.get("CURVE_RISK_THRESHOLD", "-25.0"))
+      risk_on = (vix_level < vix_threshold) and (yield_curve_slope > curve_threshold)
 
       result = {
           "vix":               vix_level,
@@ -50,3 +54,45 @@ steps:
           "fed_funds_rate":    fed_funds_rate,
           "risk_on":           risk_on,
       }
+
+  # Step 3 -- Normalize via macro_normalizer and store snapshots + regime in Redis
+  # SSOT §7: macro_normalizer → macro_risk_off signals on __GLOBAL_MACRO__ snapshot
+  # SSOT §8: write macro:regime key + push snapshots to both 15m and 1h queues
+  - name: normalize-and-store
+    type: code
+    code: |
+      import json
+      import os
+      import redis
+      from normalizers.macro_normalizer import normalize
+
+      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      macro_data = steps["compute-risk-flag"]
+
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+
+      # Write macro:regime for merger.get_macro_regime()
+      r.setex("macro:regime", snapshot_ttl, json.dumps(macro_data))
+
+      n_pushed = 0
+      for timeframe in ["15m", "1h"]:
+          snapshots = normalize(macro_data, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
+
+      result = {"n_snapshots": n_pushed, "risk_on": macro_data["risk_on"]}
+
+error_handling:
+  on_mcp_error:
+    fred-mcp:
+      strategy: fallback_to_cache
+      cache_key: "macro:regime"
+      log: true
+      message: "FRED MCP unavailable — using cached macro data"
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 5

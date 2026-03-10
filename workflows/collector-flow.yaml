@@ -42,19 +42,19 @@ steps:
       - tool: polygon-mcp
         method: unusual_activity
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:25] }}'
+          symbols: "{{ steps['read-universes']['equities'][:25] }}"
       # Polygon aggs for equities -- volume_multiple = current_volume / avg_20d_volume
       # SSOT S7 Flow: compute volume_multiple from Polygon aggs
       - tool: polygon-mcp
         method: aggs
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:25] }}'
+          symbols: "{{ steps['read-universes']['equities'][:25] }}"
           include_avg_20d_volume: true
       # Crypto orderbook imbalance (batch 15)
       - tool: crypto-orderbook-mcp
         method: imbalance
         params:
-          symbols: '{{ steps[''read-universes''][''crypto''][:15] }}'
+          symbols: "{{ steps['read-universes']['crypto'][:15] }}"
 
   # Step 3 -- Code agent: merge polygon + orderbook results, normalize, push to Redis
   # SSOT S7 Flow: volume_multiple scoring -- 1.5-3 => 1.0, 3-5 => 2.5, >=5 => 3.0
@@ -64,10 +64,12 @@ steps:
     type: code
     code: |
       import json
+      import os
       import redis
       from normalizers.flow_normalizer import normalize
 
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       unusual_results   = steps["fetch-flow-signals"][0]
       aggs_results      = steps["fetch-flow-signals"][1]
@@ -94,12 +96,14 @@ steps:
                   raw[sym] = {}
               raw[sym]["imbalance"] = item.get("imbalance")
 
-      snapshots = normalize(raw, timeframe="15m")
-      n_pushed  = 0
-      for snap in snapshots:
-          r.lpush("snapshots:15m", snap.model_dump_json())
-          r.expire("snapshots:15m", 900)
-          n_pushed += 1
+      n_pushed = 0
+      for timeframe in ["15m", "1h"]:
+          snapshots = normalize(raw, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
 
       result = {"n_snapshots": n_pushed}
 

@@ -28,7 +28,7 @@
       "name": "Run: healthcheck",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/workflows/healthcheck.py",
+      "program": "${workspaceFolder}/healthcheck.py",
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",

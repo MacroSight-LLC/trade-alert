@@ -14,25 +14,31 @@ from collections import defaultdict
 
 import redis
 
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from models import Signal, Snapshot
 
 logger = logging.getLogger(__name__)
 
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+MERGER_TOP_N: int = int(os.getenv("MERGER_TOP_N", "20"))
 
 
-def merge(timeframe: str, limit: int = 20) -> list[Snapshot]:
+def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
     """Merge snapshots from Redis and return top candidates.
 
     Args:
         timeframe: Candle timeframe key (e.g. "15m", "1h").
         limit: Maximum number of symbols to return.
+            Defaults to the ``MERGER_TOP_N`` env var (20).
 
     Returns:
         Top ``limit`` Snapshots sorted by aggregate signal strength,
         with deduplicated signals per symbol. Returns ``[]`` on
         Redis errors.
     """
+    if limit is None:
+        limit = MERGER_TOP_N
+
     try:
         r = redis.from_url(REDIS_URL, decode_responses=True)
         raw_entries: list[str] = r.lrange(f"snapshots:{timeframe}", 0, -1)
@@ -73,9 +79,7 @@ def merge(timeframe: str, limit: int = 20) -> list[Snapshot]:
         deduped = list(best.values())
 
         # Aggregate strength = sum of abs(score) * confidence
-        aggregate_strength = sum(
-            abs(s.score) * s.confidence for s in deduped
-        )
+        aggregate_strength = sum(abs(s.score) * s.confidence for s in deduped)
 
         merged_snap = Snapshot(
             symbol=symbol,
@@ -122,13 +126,15 @@ if __name__ == "__main__":
                 symbol="AAPL",
                 timeframe="15m",
                 timestamp="2026-03-06T00:00:00Z",
-                signals=[Signal(
-                    source=source,
-                    type="technical_trend",
-                    score=1.5,
-                    confidence=0.8,
-                    reason=f"Mock signal from {source}",
-                )],
+                signals=[
+                    Signal(
+                        source=source,
+                        type="technical_trend",
+                        score=1.5,
+                        confidence=0.8,
+                        reason=f"Mock signal from {source}",
+                    )
+                ],
             )
             r.lpush("snapshots:15m", s.model_dump_json())
             r.expire("snapshots:15m", 900)

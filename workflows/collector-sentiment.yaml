@@ -45,7 +45,7 @@ steps:
       - tool: finnhub-mcp
         method: sentiment
         params:
-          symbols: '{{ steps[''read-universes''][''all_symbols''][:20] }}'
+          symbols: "{{ steps['read-universes']['all_symbols'][:20] }}"
           aggregate: true
       # ROT trending tickers -- structured output only
       - tool: rot-mcp
@@ -86,28 +86,29 @@ steps:
 
   - name: classify-spam
     type: conditional
-    condition: '{{ steps[''spamshield-filter''][''has_raw_text''] }}'
+    condition: "{{ steps['spamshield-filter']['has_raw_text'] }}"
     if_true:
       type: code
       code: |
-        # Call SpamShield for each raw text item
-        spam_ids = set()
+        # Call SpamShield for each raw text item — track by symbol name
+        spam_symbols = set()
         for item in steps["spamshield-filter"]["text_items"]:
             text = item.get("text") or item.get("body") or item.get("headline", "")
+            sym = item.get("symbol") or item.get("ticker", "")
             # SpamShield call -- fail open: if classify_text fails, treat as not spam
             try:
                 classification = mcp_call("spamshield-mcp", "classify_text", {"text": text})
-                if classification.get("label") == "spam":
-                    spam_ids.add(id(item))
+                if classification.get("label") == "spam" and sym:
+                    spam_symbols.add(sym.upper())
             except Exception:
                 # SSOT S8: spam filter failure = treat as not spam (fail open)
                 pass
-        spam_filtered_count = len(spam_ids)
-        result = {"spam_ids": list(spam_ids), "spam_filtered_count": spam_filtered_count}
+        spam_filtered_count = len(spam_symbols)
+        result = {"spam_symbols": list(spam_symbols), "spam_filtered_count": spam_filtered_count}
     if_false:
       type: code
       code: |
-        result = {"spam_ids": [], "spam_filtered_count": 0}
+        result = {"spam_symbols": [], "spam_filtered_count": 0}
 
   # Step 4 -- Code agent: merge Finnhub + ROT, normalize, push to Redis
   # SSOT S7 Sentiment: Finnhub score -1..+1 => score = clamp(sentiment * 2.0, -2.0, +2.0)
@@ -117,36 +118,41 @@ steps:
     type: code
     code: |
       import json
+      import os
       import redis
       from normalizers.sentiment_normalizer import normalize
 
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       finnhub_results = steps["spamshield-filter"]["finnhub_results"]
       rot_tickers     = steps["spamshield-filter"]["rot_tickers"]
       rot_flow        = steps["spamshield-filter"]["rot_flow"]
-      spam_ids        = set(steps["classify-spam"].get("spam_ids", []))
+      spam_symbols    = set(steps["classify-spam"].get("spam_symbols", []))
 
       raw = {}
       for item in finnhub_results:
-          if id(item) in spam_ids:
-              continue
           sym = item.get("symbol") or item.get("ticker")
+          if sym and sym.upper() in spam_symbols:
+              continue
           if sym:
               raw.setdefault(sym, {})["finnhub_score"] = item.get("score")
+              raw[sym]["spam_filtered"] = False
       for item in rot_tickers + rot_flow:
-          if id(item) in spam_ids:
-              continue
           sym = item.get("symbol") or item.get("ticker")
+          if sym and sym.upper() in spam_symbols:
+              continue
           if sym:
               raw.setdefault(sym, {})["rot_signal"] = item
 
-      snapshots = normalize(raw, timeframe="15m")
       n_pushed  = 0
-      for snap in snapshots:
-          r.lpush("snapshots:15m", snap.model_dump_json())
-          r.expire("snapshots:15m", 900)
-          n_pushed += 1
+      for timeframe in ["15m", "1h"]:
+          snapshots = normalize(raw, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
 
       result = {
           "n_snapshots": n_pushed,

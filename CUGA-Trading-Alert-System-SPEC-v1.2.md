@@ -6,17 +6,18 @@
 
 ## Implementation Status
 
-| Phase   | Description                            | Status    | Tag    |
-| ------- | -------------------------------------- | --------- | ------ |
-| Phase 1 | Models, Redis collectors               | ✅ Done    | v0.1.0 |
-| Phase 2 | TA collector                           | ✅ Done    | v0.2.0 |
-| Phase 3 | Sentiment, orderbook, macro collectors | ✅ Done    | v0.3.0 |
-| Phase 4 | Merger, Postgres DB layer              | ✅ Done    | v0.4.0 |
-| Phase 5 | Decision engine workflows              | ✅ Done    | v0.5.0 |
-| Phase 6 | Notifier, Discord embeds, Postgres log | ✅ Done    | v0.6.0 |
-| Phase 7 | Orchestration, healthcheck, Docker     | ✅ Done    | v0.7.0 |
-| Phase 8 | Outcome tracker, winrate reporting     | ✅ Done    | v0.8.0 |
-| Phase 9 | Dashboard — not yet in spec (TBD)      | ⬜ Pending | —      |
+| Phase   | Description                             | Status    | Tag    |
+| ------- | --------------------------------------- | --------- | ------ |
+| Phase 1 | Models, Redis collectors                | ✅ Done    | v0.1.0 |
+| Phase 2 | TA collector                            | ✅ Done    | v0.2.0 |
+| Phase 3 | Sentiment, orderbook, macro collectors  | ✅ Done    | v0.3.0 |
+| Phase 4 | Merger, Postgres DB layer               | ✅ Done    | v0.4.0 |
+| Phase 5 | Decision engine workflows               | ✅ Done    | v0.5.0 |
+| Phase 6 | Notifier, Discord embeds, Postgres log  | ✅ Done    | v0.6.0 |
+| Phase 7 | Orchestration, healthcheck, Docker      | ✅ Done    | v0.7.0 |
+| Phase 8 | Outcome tracker, winrate reporting      | ✅ Done    | v0.8.0 |
+| Polish  | Docker fixes, CI, tests, env extraction | ✅ Done    | v0.8.1 |
+| Phase 9 | Dashboard — not yet in spec (TBD)       | ⬜ Pending | —      |
 
 ### Architecture Notes
 

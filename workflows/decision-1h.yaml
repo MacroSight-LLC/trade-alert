@@ -225,29 +225,16 @@ steps:
       code: |
         result = {"alerts_json": "[]", "count": 0}
 
-  # Step 6 — Hand off to notifier (Phase 6 stub)
-  # SSOT §11: notifier_and_logger.py will parse alerts_json and send Discord embeds
+  # Step 6 — Hand off to notifier workflow (SSOT §11)
+  # Invokes notifier.yaml which validates, sends Discord embeds, and logs to Postgres
   - name: hand-off-to-notifier
     type: conditional
     condition: '{{ steps["validate-and-filter"]["count"] > 0 }}'
     if_true:
-      type: code
-      code: |
-        import json
-        import logging
-        from notifier_and_logger import notify
-
-        logger = logging.getLogger(__name__)
-
-        alerts_json = steps["validate-and-filter"]["alerts_json"]
-        snapshots = json.loads(steps["merge-snapshots"]["snapshots_json"])
-
-        n_sent = notify(
-            alerts_json=alerts_json,
-            raw_snapshots=snapshots,
-        )
-        logger.info("Decision-1h: handed %d alerts to Discord via notifier", n_sent)
-        result = {"notified": True, "count": n_sent}
+      type: workflow
+      workflow: notifier.yaml
+      inputs:
+        alerts_json: '{{ steps["validate-and-filter"]["alerts_json"] }}'
     if_false:
       type: code
       code: |

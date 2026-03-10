@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from db import insert_alert
 from models import PlaybookAlert
 

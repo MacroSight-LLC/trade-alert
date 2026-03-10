@@ -29,7 +29,9 @@ def check_docker() -> bool:
     """Return True if the docker CLI is available."""
     try:
         subprocess.run(
-            ["docker", "--version"], capture_output=True, check=True,
+            ["docker", "--version"],
+            capture_output=True,
+            check=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -43,7 +45,7 @@ def test_imports() -> None:
 
     log.info("  PlaybookAlert, Signal, Snapshot ✅")
 
-    from merger import merge, get_macro_regime  # noqa: F401
+    from merger import get_macro_regime, merge  # noqa: F401
 
     log.info("  merger ✅")
 
@@ -65,7 +67,7 @@ def test_imports() -> None:
 
     log.info("  notifier_and_logger ✅")
 
-    from healthcheck import check_postgres, check_redis, run_healthcheck  # noqa: F401
+    from healthcheck import check_mcps, check_postgres, check_redis, run_healthcheck  # noqa: F401
 
     log.info("  healthcheck ✅")
 

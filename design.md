@@ -1,5 +1,8 @@
 # CugaSupervisor Design Document
 
+> **Note:** This document describes the upstream CUGA framework's supervisor pattern.
+> For the trade-alert system design, see [`CUGA-Trading-Alert-System-SPEC-v1.2.md`](./CUGA-Trading-Alert-System-SPEC-v1.2.md).
+
 ## Overview
 
 This document describes the CugaSupervisor feature implementation - a subgraph system for orchestrating multiple CugaAgent instances. The supervisor pattern allows coordinating specialized agents, each with their own tools, apps, and configurations, similar to how `cuga_lite_graph.py` implements a subgraph.

@@ -42,45 +42,45 @@ steps:
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "15m"
       - tool: tradingview-mcp
         method: rsi_scan
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "15m"
       # Equity scans -- 1h
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "1h"
       - tool: tradingview-mcp
         method: rsi_scan
         params:
-          symbols: '{{ steps[''read-universes''][''equities''][:20] }}'
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "1h"
       # Crypto scans -- 15m
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
-          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "15m"
       - tool: tradingview-mcp
         method: rsi_scan
         params:
-          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "15m"
       # Crypto scans -- 1h
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
-          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "1h"
       - tool: tradingview-mcp
         method: rsi_scan
         params:
-          symbols: '{{ steps[''read-universes''][''crypto''][:20] }}'
+          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "1h"
 
   # Step 3 -- trading-mcp screen for fundamental context on equities only
@@ -90,7 +90,7 @@ steps:
     tool: trading-mcp
     method: screen
     params:
-      symbols: '{{ steps[''read-universes''][''equities''] }}'
+      symbols: "{{ steps['read-universes']['equities'] }}"
       fields: ["pe_ratio", "sector", "market_cap"]
       limit: 50
 
@@ -101,10 +101,12 @@ steps:
     type: code
     code: |
       import json
+      import os
       import redis
       from normalizers.ta_normalizer import normalize
 
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       raw_results = steps["fetch-tradingview-signals"]
       n_pushed = 0
@@ -114,7 +116,7 @@ steps:
           redis_key = f"snapshots:{timeframe}"
           for snap in snapshots:
               r.lpush(redis_key, snap.model_dump_json())
-              r.expire(redis_key, 900)
+              r.expire(redis_key, snapshot_ttl)
               n_pushed += 1
 
       result = {"n_snapshots": n_pushed}

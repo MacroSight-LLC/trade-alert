@@ -1,5 +1,5 @@
 # Production image for the trade-alert CUGA runtime (SSOT §5).
-# No CMD — execution is driven by the cron service.
+# No CMD — execution is driven by the cron service or --schedule flag.
 
 FROM python:3.11-slim
 
@@ -10,23 +10,40 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Python dependencies
-RUN pip install --no-cache-dir \
+# Install CUGA from local source
+COPY pyproject.toml /app/pyproject.toml
+COPY src/ /app/src/
+RUN pip install --no-cache-dir -e ".[all]" 2>/dev/null || \
+    pip install --no-cache-dir \
     "pydantic[email]>=2.0" \
     redis \
     psycopg2-binary \
     python-dotenv \
     "httpx[http2]" \
-    pyyaml
+    pyyaml \
+    "hvac>=2.0.0"
 
-# Application code
+# Application code — all trade-alert Python modules
 COPY workflows/ /app/workflows/
 COPY normalizers/ /app/normalizers/
 COPY models.py /app/models.py
+COPY merger.py /app/merger.py
+COPY db.py /app/db.py
+COPY notifier_and_logger.py /app/notifier_and_logger.py
+COPY healthcheck.py /app/healthcheck.py
+COPY outcome_tracker.py /app/outcome_tracker.py
+COPY vault_env_loader.py /app/vault_env_loader.py
+COPY scripts/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+COPY schema.sql /app/schema.sql
 
 # Runtime environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# Entrypoint loads Vault secrets into env before running the main command.
+# Falls back silently when VAULT_ADDR is not set (local dev).
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1

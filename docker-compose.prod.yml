@@ -4,6 +4,26 @@
 services:
   # --- Infrastructure ---
 
+  vault:
+    image: hashicorp/vault:1.15.0
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_LOCAL_CONFIG: '{"storage":{"file":{"path":"/vault/data"}},"listener":{"tcp":{"address":"0.0.0.0:8200","tls_disable":true}},"ui":true}'
+    command: vault server -config=/vault/config
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault-data:/vault/data
+    healthcheck:
+      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200 || true"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
@@ -29,6 +49,7 @@ services:
       - "5432:5432"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
@@ -44,7 +65,9 @@ services:
     image: ghcr.io/macrosight-llc/tradingview-mcp:latest
     ports:
       - "8001:8001"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
       interval: 30s
@@ -58,7 +81,9 @@ services:
     image: ghcr.io/macrosight-llc/polygon-mcp:latest
     ports:
       - "8002:8002"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
       interval: 30s
@@ -72,7 +97,9 @@ services:
     image: ghcr.io/macrosight-llc/discord-mcp:latest
     ports:
       - "8003:8003"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
       interval: 30s
@@ -86,7 +113,9 @@ services:
     image: ghcr.io/macrosight-llc/finnhub-mcp:latest
     ports:
       - "8004:8004"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 30s
@@ -100,7 +129,9 @@ services:
     image: ghcr.io/macrosight-llc/rot-mcp:latest
     ports:
       - "8005:8005"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
       interval: 30s
@@ -114,7 +145,9 @@ services:
     image: ghcr.io/macrosight-llc/crypto-orderbook-mcp:latest
     ports:
       - "8006:8006"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8006/health || exit 1"]
       interval: 30s
@@ -128,7 +161,9 @@ services:
     image: ghcr.io/macrosight-llc/coingecko-mcp:latest
     ports:
       - "8007:8007"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8007/health || exit 1"]
       interval: 30s
@@ -142,7 +177,9 @@ services:
     image: ghcr.io/macrosight-llc/trading-mcp:latest
     ports:
       - "8008:8008"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
       interval: 30s
@@ -156,7 +193,9 @@ services:
     image: ghcr.io/macrosight-llc/fred-mcp:latest
     ports:
       - "8009:8009"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8009/health || exit 1"]
       interval: 30s
@@ -170,7 +209,9 @@ services:
     image: ghcr.io/macrosight-llc/spamshield-mcp:latest
     ports:
       - "8010:8010"
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8010/health || exit 1"]
       interval: 30s
@@ -215,23 +256,46 @@ services:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
       - ./models.py:/app/models.py
+      - ./merger.py:/app/merger.py
+      - ./db.py:/app/db.py
+      - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./healthcheck.py:/app/healthcheck.py
+      - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./logs:/app/logs
-    env_file: .env
+    env_file:
+      - .env
+      - .env.vault
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
     networks:
       - trade-net
     restart: unless-stopped
 
   cron:
-    image: alpine:3.19
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuga
     depends_on:
       - cuga
     volumes:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
       - ./models.py:/app/models.py
+      - ./merger.py:/app/merger.py
+      - ./db.py:/app/db.py
+      - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./healthcheck.py:/app/healthcheck.py
+      - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./logs:/app/logs
       - ./crontab:/etc/crontabs/root
     command: crond -f -l 2
+    env_file:
+      - .env
+      - .env.vault
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
     networks:
       - trade-net
     restart: unless-stopped
@@ -239,6 +303,7 @@ services:
 volumes:
   redis-data:
   postgres-data:
+  vault-data:
 
 networks:
   trade-net:

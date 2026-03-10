@@ -1,10 +1,29 @@
-# trade-alert Docker Compose — development/local topology (SSOT §5, §13)
-# Full service stack: Redis, Postgres, MCP servers, app runner.
+# trade-alert Docker Compose — development/local topology (SSOT §3, §5)
+# Full service stack: Redis, Postgres, 10 MCP servers, app runner.
 # Usage: docker compose up
-
-version: "3.9"
+# NOTE: Uses same images as prod. Set POSTGRES_PASSWORD in .env before starting.
 
 services:
+  # --- Infrastructure ---
+
+  vault:
+    image: hashicorp/vault:1.15.0
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
@@ -15,12 +34,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - trade-net
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: tradealert
-      POSTGRES_USER: tradealert
+      POSTGRES_DB: trade_alert
+      POSTGRES_USER: trade_alert
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -29,45 +50,176 @@ services:
       - "5432:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tradealert"]
+      test: ["CMD-SHELL", "pg_isready -U trade_alert"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - trade-net
 
-  fred-mcp:
-    build: ./mcp_servers/fred
-    environment:
-      FRED_API_KEY: ${FRED_API_KEY}
+  # --- MCP Services (ports 8001-8010, SSOT §3) ---
+
+  tradingview-mcp:
+    image: ghcr.io/macrosight-llc/tradingview-mcp:latest
     ports:
-      - "8009:8009"
+      - "8001:8001"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
     restart: unless-stopped
 
-  finnhub-mcp:
-    build: ./mcp_servers/finnhub
-    environment:
-      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+  polygon-mcp:
+    image: ghcr.io/macrosight-llc/polygon-mcp:latest
     ports:
-      - "8010:8010"
-    restart: unless-stopped
-
-  reddit-mcp:
-    build: ./mcp_servers/reddit
-    environment:
-      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}
-      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
-    ports:
-      - "8011:8011"
+      - "8002:8002"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
     restart: unless-stopped
 
   discord-mcp:
-    build: ./mcp_servers/discord
-    environment:
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
-      DISCORD_ALERT_CHANNEL_ID: ${DISCORD_ALERT_CHANNEL_ID}
-      DISCORD_OPS_CHANNEL_ID: ${DISCORD_OPS_CHANNEL_ID}
+    image: ghcr.io/macrosight-llc/discord-mcp:latest
     ports:
-      - "8012:8012"
+      - "8003:8003"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8003/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
     restart: unless-stopped
+
+  finnhub-mcp:
+    image: ghcr.io/macrosight-llc/finnhub-mcp:latest
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8004/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  rot-mcp:
+    image: ghcr.io/macrosight-llc/rot-mcp:latest
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8005/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  crypto-orderbook-mcp:
+    image: ghcr.io/macrosight-llc/crypto-orderbook-mcp:latest
+    ports:
+      - "8006:8006"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8006/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  coingecko-mcp:
+    image: ghcr.io/macrosight-llc/coingecko-mcp:latest
+    ports:
+      - "8007:8007"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8007/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  trading-mcp:
+    image: ghcr.io/macrosight-llc/trading-mcp:latest
+    ports:
+      - "8008:8008"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  fred-mcp:
+    image: ghcr.io/macrosight-llc/fred-mcp:latest
+    ports:
+      - "8009:8009"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8009/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  spamshield-mcp:
+    image: ghcr.io/macrosight-llc/spamshield-mcp:latest
+    ports:
+      - "8010:8010"
+    env_file:
+      - .env
+      - .env.vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8010/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  # --- Application ---
 
   app:
     build: .
@@ -76,19 +228,22 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    env_file:
+      - .env
+      - .env.vault
     environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://tradealert:${POSTGRES_PASSWORD}@postgres:5432/tradealert
-      DISCORD_WEBHOOK: ${DISCORD_WEBHOOK}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
-      DISCORD_ALERT_CHANNEL_ID: ${DISCORD_ALERT_CHANNEL_ID}
-      DISCORD_OPS_CHANNEL_ID: ${DISCORD_OPS_CHANNEL_ID}
-      FRED_API_KEY: ${FRED_API_KEY}
-      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
     volumes:
       - .:/app
+    networks:
+      - trade-net
     restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  trade-net:

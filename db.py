@@ -13,6 +13,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from models import PlaybookAlert
 
 logger = logging.getLogger(__name__)
@@ -57,21 +58,24 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, (
-                alert.symbol,
-                alert.direction,
-                alert.edge_probability,
-                alert.confidence,
-                alert.timeframe,
-                alert.thesis,
-                json.dumps(alert.entry),
-                alert.timeframe_rationale,
-                alert.sentiment_context,
-                json.dumps(alert.unusual_activity),
-                alert.macro_regime,
-                alert.sources_agree,
-                json.dumps(raw_snapshots),
-            ))
+            cur.execute(
+                sql,
+                (
+                    alert.symbol,
+                    alert.direction,
+                    alert.edge_probability,
+                    alert.confidence,
+                    alert.timeframe,
+                    alert.thesis,
+                    json.dumps(alert.entry),
+                    alert.timeframe_rationale,
+                    alert.sentiment_context,
+                    json.dumps(alert.unusual_activity),
+                    alert.macro_regime,
+                    alert.sources_agree,
+                    json.dumps(raw_snapshots),
+                ),
+            )
             row = cur.fetchone()
             conn.commit()
             return row[0]
