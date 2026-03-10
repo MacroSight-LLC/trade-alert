@@ -222,7 +222,9 @@ services:
   # --- Application ---
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuga
     depends_on:
       redis:
         condition: service_healthy
