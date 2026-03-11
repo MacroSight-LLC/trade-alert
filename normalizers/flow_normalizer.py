@@ -12,11 +12,7 @@ from typing import Any, Literal, cast
 
 sys.path.insert(0, ".")
 from models import Signal, Snapshot
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp *value* to [lo, hi]."""
-    return max(lo, min(hi, value))
+from normalizers import clamp as _clamp
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:

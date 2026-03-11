@@ -17,17 +17,14 @@ from models import Signal, Snapshot
 _log = logging.getLogger(__name__)
 
 # ROT signal → (score, type, confidence) mapping (SSOT §7)
+from normalizers import clamp as _clamp
+
 _ROT_MAP: dict[str, tuple[float, str, float]] = {
     "strong_bullish": (2.5, "sentiment_bull", 0.85),
     "bullish": (1.5, "sentiment_bull", 0.70),
     "bearish": (-1.5, "sentiment_bear", 0.70),
     "strong_bearish": (-2.5, "sentiment_bear", 0.85),
 }
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp *value* to [lo, hi]."""
-    return max(lo, min(hi, value))
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
