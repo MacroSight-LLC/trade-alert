@@ -69,13 +69,15 @@ steps:
 
   # Step 3 — Build ensemble prompt for Claude Sonnet
   # SSOT §10.2: decision prompt with PlaybookAlert schema, gate requirements
+  # Prompts loaded from Langfuse Prompt Management (with YAML fallback).
+  # Edit prompts at http://localhost:3000 → Prompts → decision-system / decision-user
   - name: build-prompt
     type: conditional
     condition: '{{ not steps["merge-snapshots"]["skip"] }}'
     if_true:
       type: code
       code: |
-        import json
+        from prompt_manager import get_decision_prompts, get_prompt_version
 
         macro = steps["merge-snapshots"]["macro"]
         snapshots_json = steps["merge-snapshots"]["snapshots_json"]
@@ -88,68 +90,20 @@ steps:
         risk_on = macro.get("risk_on", True)
         macro_summary = f"{'Risk-on' if risk_on else 'Risk-off'}, VIX={vix}, Yield curve={yc}bps"
 
-        system_prompt = """You are a quantitative trading signal evaluator.
-        You receive normalized market signals from multiple independent sources
-        (technical analysis, volume/flow, sentiment, order book, macro regime).
-
-        Your job: evaluate signal confluence and produce trade playbook alerts
-        ONLY when multiple independent signal types agree.
-
-        Rules:
-        - Only output alerts where evidence is strong and multi-source
-        - Prefer WATCH over LONG/SHORT when conviction is low
-        - Be conservative: a missed opportunity is better than a bad trade
-        - edge_probability reflects how many independent signal groups agree
-          AND how strong/confident those signals are
-        - sources_agree = count of distinct signal types pointing same direction
-          (technical_trend, volume_spike, sentiment_bull/bear,
-           order_imbalance_long/short, macro_risk_off)
-        - Output STRICT JSON only — no prose, no markdown, no explanation"""
-
-        user_prompt = f"""Timeframe: 15m
-        Macro Regime: {macro_summary}
-        VIX: {vix} | Yield Curve: {yc}bps
-
-        Evaluate these {n} symbols and their signals:
-
-        {snapshots_json}
-
-        For each symbol where you find strong multi-source confluence, output
-        a PlaybookAlert. Skip symbols with weak or single-source signals.
-
-        Gate requirements (must ALL pass):
-        - edge_probability >= 0.70
-        - sources_agree >= 3
-        - average signal confidence >= 0.75
-
-        Output format — a JSON array (may be empty []):
-        [
-          {{
-            "symbol": "AAPL",
-            "direction": "LONG",
-            "edge_probability": 0.78,
-            "confidence": 0.80,
-            "timeframe": "15m",
-            "thesis": "One or two sentence causal explanation of WHY this trade.",
-            "entry": {{"level": 185.00, "stop": 182.00, "target": 192.00}},
-            "timeframe_rationale": "Why 15m is the right timeframe for this.",
-            "sentiment_context": "Retail and institutional sentiment summary.",
-            "unusual_activity": ["IV spike 2x avg", "options sweep $190c"],
-            "macro_regime": "Risk-on, VIX 14, curve normal.",
-            "sources_agree": 4
-          }}
-        ]
-
-        Return [] if no symbols meet the gate requirements.
-        Return ONLY the JSON array. No other text."""
+        system_prompt, user_prompt = get_decision_prompts("15m", {
+            "macro_summary": macro_summary,
+            "vix": vix,
+            "yc": yc,
+            "n": n,
+            "snapshots_json": snapshots_json,
+        })
 
         full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
-
-        result = {"prompt": full_prompt}
+        result = {"prompt": full_prompt, "prompt_version": get_prompt_version()}
     if_false:
       type: code
       code: |
-        result = {"prompt": ""}
+        result = {"prompt": "", "prompt_version": "skipped"}
 
   # Step 4 — Call Claude Sonnet with ensemble prompt
   # SSOT §10.1: use Claude 3.5 Sonnet as llm_model

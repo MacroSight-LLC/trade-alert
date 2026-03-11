@@ -11,36 +11,18 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from datetime import datetime, timezone
 
-import httpx
-
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from langfuse_client import get_langfuse_client
 from models import PlaybookAlert, TraceAnalysis
+from prompt_manager import get_prompt_version
 
 logger = logging.getLogger(__name__)
 
 # ── Configuration via environment ────────────────────────────────────────────
-LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
-LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-LANGFUSE_SECRET_KEY: str = os.getenv("LANGFUSE_SECRET_KEY", "")
 TRACE_COST_BUDGET: float = float(os.getenv("TRACE_COST_BUDGET", "0.50"))
 TRACE_LATENCY_MAX: float = float(os.getenv("TRACE_LATENCY_MAX", "120"))
-PROMPT_VERSION: str = os.getenv("PROMPT_VERSION", "v1.0")
-
-_MAX_RETRIES: int = 3
-_BACKOFF_BASE: float = 2.0
-
-
-def _auth() -> tuple[str, str]:
-    """Return basic-auth credentials for the Langfuse REST API."""
-    return (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY)
-
-
-def _is_configured() -> bool:
-    """Check whether Langfuse credentials are present."""
-    return bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)
 
 
 # ── Trace Fetching ───────────────────────────────────────────────────────────
@@ -49,40 +31,37 @@ def _is_configured() -> bool:
 def fetch_latest_trace(session_id: str) -> dict | None:
     """Fetch the most recent Langfuse trace for *session_id*.
 
+    Uses the Langfuse SDK ``fetch_traces`` method.  The SDK handles
+    retries and auth internally.
+
     Args:
         session_id: Langfuse session identifier (e.g. ``orchestrator-15m``).
 
     Returns:
         The trace dict from the Langfuse API, or ``None`` if unavailable.
     """
-    if not _is_configured():
+    lf = get_langfuse_client()
+    if lf is None:
         logger.warning("Langfuse credentials not set — skipping trace fetch")
         return None
 
-    url = f"{LANGFUSE_HOST.rstrip('/')}/api/public/traces"
-    params = {"sessionId": session_id, "limit": 1, "orderBy": "timestamp.desc"}
-
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                resp = client.get(url, params=params, auth=_auth())
-                resp.raise_for_status()
-                data = resp.json()
-                traces = data.get("data", [])
-                if traces:
-                    return traces[0]
-                logger.info("No traces found for session %s", session_id)
-                return None
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "Langfuse trace fetch attempt %d/%d failed: %s",
-                attempt,
-                _MAX_RETRIES,
-                exc,
-            )
-            if attempt < _MAX_RETRIES:
-                time.sleep(_BACKOFF_BASE**attempt)
-    return None
+    try:
+        response = lf.fetch_traces(
+            session_id=session_id,
+            limit=1,
+            order_by="timestamp",
+            order="DESC",
+        )
+        traces = response.data if response.data else []
+        if traces:
+            trace = traces[0]
+            # SDK returns objects — convert to dict for uniform handling
+            return trace.__dict__ if hasattr(trace, "__dict__") else trace
+        logger.info("No traces found for session %s", session_id)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Langfuse trace fetch failed: %s", exc)
+        return None
 
 
 # ── Individual Checks ────────────────────────────────────────────────────────
@@ -161,22 +140,19 @@ def score_trace(trace_id: str, score: float, comment: str) -> None:
         score: Numeric score (0.0 = unhealthy, 1.0 = perfect).
         comment: Human-readable summary of the analysis.
     """
-    if not _is_configured():
+    lf = get_langfuse_client()
+    if lf is None:
         return
 
-    url = f"{LANGFUSE_HOST.rstrip('/')}/api/public/scores"
-    payload = {
-        "traceId": trace_id,
-        "name": "pipeline_health",
-        "value": score,
-        "comment": comment,
-    }
     try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.post(url, json=payload, auth=_auth())
-            resp.raise_for_status()
-            logger.info("Scored trace %s: %.2f", trace_id, score)
-    except httpx.HTTPError as exc:
+        lf.score(
+            trace_id=trace_id,
+            name="pipeline_health",
+            value=score,
+            comment=comment,
+        )
+        logger.info("Scored trace %s: %.2f", trace_id, score)
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to score trace %s: %s", trace_id, exc)
 
 
@@ -198,6 +174,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     """
     session_id = f"orchestrator-{timeframe}"
     now = datetime.now(tz=timezone.utc).isoformat()
+    prompt_version = get_prompt_version()
 
     trace = fetch_latest_trace(session_id)
     if trace is None:
@@ -206,7 +183,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
             trace_id="",
             is_healthy=True,
             issues=["no_trace_available"],
-            prompt_version=PROMPT_VERSION,
+            prompt_version=prompt_version,
             timestamp=now,
         )
 
@@ -251,7 +228,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
         latency_s=latency,
         llm_calls=llm_calls,
         total_tokens=total_tokens,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
         timestamp=now,
     )
     logger.info(

@@ -186,16 +186,18 @@ class TestTraceAnalysisModel:
 class TestAnalyzePipelineTrace:
     """Tests for the main analysis entry point."""
 
+    @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.fetch_latest_trace", return_value=None)
-    def test_no_trace_available(self, mock_fetch: MagicMock) -> None:
+    def test_no_trace_available(self, mock_fetch: MagicMock, _mock_pv: MagicMock) -> None:
         result = analyze_pipeline_trace("15m")
         assert result.trace_id == ""
         assert result.is_healthy is True
         assert "no_trace_available" in result.issues
 
+    @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_healthy_trace(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
+    def test_healthy_trace(self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-123",
             "output": _valid_alert_dict(),
@@ -211,6 +213,7 @@ class TestAnalyzePipelineTrace:
         # Score should be 1.0 for healthy
         assert mock_score.call_args[0][1] == 1.0
 
+    @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.send_ops_message", create=True)
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
@@ -219,6 +222,7 @@ class TestAnalyzePipelineTrace:
         mock_fetch: MagicMock,
         mock_score: MagicMock,
         mock_ops: MagicMock,
+        _mock_pv: MagicMock,
     ) -> None:
         mock_fetch.return_value = {
             "id": "trace-456",
@@ -233,9 +237,12 @@ class TestAnalyzePipelineTrace:
         # Score should be < 1.0 since there's an issue
         assert mock_score.call_args[0][1] < 1.0
 
+    @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_unhealthy_latency(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
+    def test_unhealthy_latency(
+        self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock
+    ) -> None:
         mock_fetch.return_value = {
             "id": "trace-789",
             "output": _valid_alert_dict(),
@@ -247,9 +254,10 @@ class TestAnalyzePipelineTrace:
         assert result.is_healthy is False
         assert any("exceeds max" in i for i in result.issues)
 
+    @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_invalid_output(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
+    def test_invalid_output(self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-bad",
             "output": '{"symbol": "AAPL"}',

@@ -17,7 +17,7 @@ dependencies = [
     "markdownify",
     "uvicorn",
     "fastapi[standard]",
-    "langfuse",
+    "langfuse>=2.0,<3.0",
     "dynaconf",
     "playwright==1.49.0",
     "browsergym-core==0.13.0",
