@@ -13,11 +13,11 @@ from typing import Any, Literal, cast
 
 sys.path.insert(0, ".")
 from models import Signal, Snapshot
+from normalizers import clamp as _clamp
 
 _log = logging.getLogger(__name__)
 
 # ROT signal → (score, type, confidence) mapping (SSOT §7)
-from normalizers import clamp as _clamp
 
 _ROT_MAP: dict[str, tuple[float, str, float]] = {
     "strong_bullish": (2.5, "sentiment_bull", 0.85),
