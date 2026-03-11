@@ -101,7 +101,7 @@ async def insiders(params: dict[str, Any]) -> dict:
                 results.append({
                     "symbol": tx.get("symbol", symbol),
                     "type": tx_type,
-                    "shares": abs(tx.get("share", 0)),
+                    "shares": abs(tx.get("share") or 0),
                     "name": tx.get("name", ""),
                 })
     except httpx.HTTPError as exc:

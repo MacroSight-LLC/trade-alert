@@ -111,11 +111,13 @@ steps:
 
   # Step 5 -- Log completion
   - name: log-completion
-    type: llm
-    prompt: |
-      Output exactly this single log line and nothing else:
-      "Universe built: {n_equities} equities, {n_crypto} crypto"
-      substituting n_equities and n_crypto from the build-and-store-universes step result.
+    type: code
+    code: |
+      import logging
+      ne = steps["build-and-store-universes"]["n_equities"]
+      nc = steps["build-and-store-universes"]["n_crypto"]
+      logging.getLogger(__name__).info("Universe built: %d equities, %d crypto", ne, nc)
+      result = f"Universe built: {ne} equities, {nc} crypto"
 
 error_handling:
   # SSOT S8: never abort -- always produce a universe.

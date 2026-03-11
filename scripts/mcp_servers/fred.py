@@ -3,6 +3,7 @@
 Tools: vix_level, yield_curve, fed_funds
 Requires: FRED_API_KEY env var.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,8 +22,8 @@ TIMEOUT = 10.0
 
 # FRED series IDs
 VIXCLS = "VIXCLS"  # VIX close
-DGS10 = "DGS10"    # 10-year Treasury
-DGS2 = "DGS2"      # 2-year Treasury
+DGS10 = "DGS10"  # 10-year Treasury
+DGS2 = "DGS2"  # 2-year Treasury
 FEDFUNDS = "FEDFUNDS"  # Fed funds rate
 
 
@@ -90,4 +91,5 @@ TOOLS: dict[str, Any] = {
     "vix_level": vix_level,
     "yield_curve": yield_curve,
     "fed_funds": fed_funds,
+    "fed_funds_rate": fed_funds,
 }

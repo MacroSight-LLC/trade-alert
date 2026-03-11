@@ -109,11 +109,12 @@ steps:
 
   # Step 4 -- Log completion
   - name: log-completion
-    type: llm
-    prompt: |
-      Output exactly this single log line and nothing else:
-      "Flow collector: {n} snapshots pushed to Redis"
-      substituting n from steps[normalize-and-store-snapshots][n_snapshots].
+    type: code
+    code: |
+      import logging
+      n = steps["normalize-and-store-snapshots"]["n_snapshots"]
+      logging.getLogger(__name__).info("Flow collector: %d snapshots pushed to Redis", n)
+      result = f"Flow collector: {n} snapshots pushed to Redis"
 
 error_handling:
   # SSOT S8: if crypto-orderbook-mcp unavailable -- skip crypto flow, continue equities.

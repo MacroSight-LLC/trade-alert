@@ -5,7 +5,9 @@ No API key required — uses tradingview-ta open-source library.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,9 @@ async def bollinger_scan(params: dict[str, Any]) -> dict:
     timeframe: str = params.get("timeframe", "15m")
 
     results: list[dict] = []
-    for sym in symbols[:20]:
+    for i, sym in enumerate(symbols[:20]):
+        if i > 0:
+            await asyncio.sleep(0.5)  # Rate limit: ~2 req/s to TradingView
         analysis = _get_analysis(sym, interval=timeframe)
         if analysis is None:
             continue
@@ -104,7 +108,9 @@ async def rsi_scan(params: dict[str, Any]) -> dict:
     timeframe: str = params.get("timeframe", "15m")
 
     results: list[dict] = []
-    for sym in symbols[:20]:
+    for i, sym in enumerate(symbols[:20]):
+        if i > 0:
+            await asyncio.sleep(0.5)  # Rate limit: ~2 req/s to TradingView
         analysis = _get_analysis(sym, interval=timeframe)
         if analysis is None:
             continue

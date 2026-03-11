@@ -3,6 +3,7 @@
 Tools: top_gainers, dominance
 No API key required for free tier.
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,14 +52,16 @@ async def top_gainers(params: dict[str, Any]) -> list[dict]:
 
     results: list[dict] = []
     for coin in coins[:limit]:
-        results.append({
-            "symbol": (coin.get("symbol") or "").upper(),
-            "change_24h": coin.get("price_change_percentage_24h", 0.0) or 0.0,
-            "market_cap": coin.get("market_cap", 0) or 0,
-            "name": coin.get("name", ""),
-            "price": coin.get("current_price", 0.0),
-        })
-    return results
+        results.append(
+            {
+                "symbol": (coin.get("symbol") or "").upper(),
+                "change_24h": coin.get("price_change_percentage_24h", 0.0) or 0.0,
+                "market_cap": coin.get("market_cap", 0) or 0,
+                "name": coin.get("name", ""),
+                "price": coin.get("current_price", 0.0),
+            }
+        )
+    return {"results": results}
 
 
 async def dominance(params: dict[str, Any]) -> dict:

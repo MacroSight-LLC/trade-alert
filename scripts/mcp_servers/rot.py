@@ -4,6 +4,7 @@ Tools: trending_tickers, options_flow
 Optional: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET env vars for Reddit API.
 Falls back to scraping public Reddit JSON endpoints if not set.
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,14 +25,68 @@ TIMEOUT = 10.0
 
 # Common ticker pattern (1-5 uppercase letters, avoiding common words)
 _TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
-_COMMON_WORDS = frozenset({
-    "I", "A", "THE", "AND", "OR", "FOR", "TO", "IS", "IT", "IN",
-    "ON", "AT", "BY", "IF", "OF", "DD", "CEO", "IPO", "IMO", "YOLO",
-    "FOMO", "FYI", "TIL", "ELI", "WSB", "OTM", "ITM", "ATM", "DTE",
-    "IV", "PE", "EPS", "FDA", "SEC", "ETF", "GDP", "CPI", "LOL",
-    "AM", "PM", "US", "UK", "EU", "API", "IMF", "ARE", "HAS", "HAD",
-    "WAS", "BE", "ME", "MY", "SO", "UP", "DO", "GO", "NO", "NOT",
-})
+_COMMON_WORDS = frozenset(
+    {
+        "I",
+        "A",
+        "THE",
+        "AND",
+        "OR",
+        "FOR",
+        "TO",
+        "IS",
+        "IT",
+        "IN",
+        "ON",
+        "AT",
+        "BY",
+        "IF",
+        "OF",
+        "DD",
+        "CEO",
+        "IPO",
+        "IMO",
+        "YOLO",
+        "FOMO",
+        "FYI",
+        "TIL",
+        "ELI",
+        "WSB",
+        "OTM",
+        "ITM",
+        "ATM",
+        "DTE",
+        "IV",
+        "PE",
+        "EPS",
+        "FDA",
+        "SEC",
+        "ETF",
+        "GDP",
+        "CPI",
+        "LOL",
+        "AM",
+        "PM",
+        "US",
+        "UK",
+        "EU",
+        "API",
+        "IMF",
+        "ARE",
+        "HAS",
+        "HAD",
+        "WAS",
+        "BE",
+        "ME",
+        "MY",
+        "SO",
+        "UP",
+        "DO",
+        "GO",
+        "NO",
+        "NOT",
+    }
+)
 
 
 async def _reddit_get(path: str) -> list[dict]:
@@ -49,13 +104,15 @@ async def _reddit_get(path: str) -> list[dict]:
     posts: list[dict] = []
     for child in data.get("data", {}).get("children", []):
         post = child.get("data", {})
-        posts.append({
-            "title": post.get("title", ""),
-            "selftext": post.get("selftext", ""),
-            "score": post.get("score", 0),
-            "num_comments": post.get("num_comments", 0),
-            "upvote_ratio": post.get("upvote_ratio", 0.5),
-        })
+        posts.append(
+            {
+                "title": post.get("title", ""),
+                "selftext": post.get("selftext", ""),
+                "score": post.get("score", 0),
+                "num_comments": post.get("num_comments", 0),
+                "upvote_ratio": post.get("upvote_ratio", 0.5),
+            }
+        )
     return posts
 
 
@@ -126,18 +183,20 @@ async def trending_tickers(params: dict[str, Any]) -> list[dict]:
             logger.warning("Reddit fetch failed for %s: %s", sub, exc)
 
     if not all_posts:
-        return []
+        return {"results": []}
 
     ticker_counts = _extract_tickers(all_posts)
     results: list[dict] = []
     for ticker, mentions in ticker_counts.most_common(limit):
         sentiment = _classify_sentiment(all_posts, ticker)
-        results.append({
-            "symbol": ticker,
-            "mentions": mentions,
-            "sentiment": sentiment,
-        })
-    return results
+        results.append(
+            {
+                "symbol": ticker,
+                "mentions": mentions,
+                "sentiment": sentiment,
+            }
+        )
+    return {"results": results}
 
 
 async def options_flow(params: dict[str, Any]) -> list[dict]:
@@ -156,7 +215,7 @@ async def options_flow(params: dict[str, Any]) -> list[dict]:
         posts = await _reddit_get("/r/wallstreetbets/hot")
     except httpx.HTTPError as exc:
         logger.warning("Reddit fetch failed: %s", exc)
-        return results
+        return {"results": results}
 
     # Look for options-related posts
     options_pattern = re.compile(
@@ -173,16 +232,20 @@ async def options_flow(params: dict[str, Any]) -> list[dict]:
             if sym in _COMMON_WORDS or sym in seen or len(sym) < 2:
                 continue
             seen.add(sym)
-            flow_type = "call_sweep" if "c" in strike_raw.lower() or "call" in strike_raw.lower() else "put_sweep"
-            results.append({
-                "symbol": sym,
-                "flow_type": flow_type,
-                "premium": post.get("score", 0) * 1000,
-            })
+            flow_type = (
+                "call_sweep" if "c" in strike_raw.lower() or "call" in strike_raw.lower() else "put_sweep"
+            )
+            results.append(
+                {
+                    "symbol": sym,
+                    "flow_type": flow_type,
+                    "premium": post.get("score", 0) * 1000,
+                }
+            )
             if len(results) >= limit:
-                return results
+                return {"results": results}
 
-    return results
+    return {"results": results}
 
 
 TOOLS: dict[str, Any] = {

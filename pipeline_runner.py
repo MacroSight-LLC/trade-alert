@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
-import json
 import logging
 import os
 import re
@@ -54,7 +53,15 @@ MCP_ENDPOINTS: dict[str, str] = {
 # Also accept workflow-level mcp_servers overrides
 _workflow_mcp_endpoints: dict[str, str] = {}
 
-MCP_TIMEOUT = 15.0
+MCP_TIMEOUT = 30.0
+
+
+def _new_http_client() -> httpx.AsyncClient:
+    """Create an async HTTP client with optimized connection pooling."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=MCP_TIMEOUT, write=5.0, pool=5.0),
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    )
 
 
 # ── Template evaluation ──────────────────────────────────────────────
@@ -105,7 +112,9 @@ def _render_params(params: Any, steps: dict[str, Any], extra_vars: dict[str, Any
 
 # ── MCP call helper ──────────────────────────────────────────────────
 
-async def _mcp_call_async(tool: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
+
+async def _mcp_call_async(tool: str, method: str, params: dict[str, Any],
+                          client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Call an MCP server tool endpoint."""
     base = _workflow_mcp_endpoints.get(tool) or MCP_ENDPOINTS.get(tool)
     if not base:
@@ -113,24 +122,26 @@ async def _mcp_call_async(tool: str, method: str, params: dict[str, Any]) -> dic
         return {"error": f"Unknown MCP: {tool}"}
 
     url = f"{base}/tool/{method}"
-    async with httpx.AsyncClient(timeout=MCP_TIMEOUT) as client:
+    if client:
         resp = await client.post(url, json=params)
-        resp.raise_for_status()
-        return resp.json()
+    else:
+        async with _new_http_client() as c:
+            resp = await c.post(url, json=params)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Synchronous wrapper for MCP calls (available inside code blocks)."""
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(
-            _mcp_call_async(tool, method, params or {})
-        )
+        return loop.run_until_complete(_mcp_call_async(tool, method, params or {}))
     finally:
         loop.close()
 
 
 # ── LLM call helper ─────────────────────────────────────────────────
+
 
 def _llm_call(prompt: str, model: str) -> str:
     """Call the LLM via litellm.completion."""
@@ -166,6 +177,7 @@ def _llm_call(prompt: str, model: str) -> str:
 
 
 # ── Step executors ───────────────────────────────────────────────────
+
 
 def _exec_code_step(
     code: str,
@@ -205,18 +217,19 @@ def _exec_parallel_tool_calls(
     steps: dict[str, Any],
     extra_vars: dict[str, Any] | None = None,
 ) -> list[Any]:
-    """Execute multiple MCP calls concurrently."""
+    """Execute multiple MCP calls concurrently with connection pooling."""
     calls = step["calls"]
     results: list[Any] = [None] * len(calls)
 
     async def _run() -> list[Any]:
-        tasks = []
-        for call in calls:
-            tool = call["tool"]
-            method = call["method"]
-            params = _render_params(call.get("params", {}), steps, extra_vars)
-            tasks.append(_mcp_call_async(tool, method, params))
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        async with _new_http_client() as client:
+            tasks = []
+            for call in calls:
+                tool = call["tool"]
+                method = call["method"]
+                params = _render_params(call.get("params", {}), steps, extra_vars)
+                tasks.append(_mcp_call_async(tool, method, params, client=client))
+            return await asyncio.gather(*tasks, return_exceptions=True)
 
     loop = asyncio.new_event_loop()
     try:
@@ -244,6 +257,7 @@ def _exec_llm_step(
 
 
 # ── Workflow runner ──────────────────────────────────────────────────
+
 
 def run_workflow(
     workflow_path: Path,
@@ -300,15 +314,24 @@ def run_workflow(
 
         for attempt in range(1, max_attempts + 1):
             try:
+                t0 = time.time()
                 result = _execute_step(
-                    step_def, step_results, model, workflow_path.parent, extra_vars,
+                    step_def,
+                    step_results,
+                    model,
+                    workflow_path.parent,
+                    extra_vars,
                 )
                 step_results[step_name] = result
+                logger.info("  │  ✓ %s completed (%.1fs)", step_name, time.time() - t0)
                 break
             except Exception:
                 logger.error(
                     "  │  FAIL step=%s attempt=%d/%d\n%s",
-                    step_name, attempt, max_attempts, traceback.format_exc(),
+                    step_name,
+                    attempt,
+                    max_attempts,
+                    traceback.format_exc(),
                 )
                 if attempt < max_attempts:
                     time.sleep(backoff)
@@ -326,7 +349,11 @@ def run_workflow(
                 logger.info("  ├─ step (on-failure): %s", step_name)
                 try:
                     result = _execute_step(
-                        step_def, step_results, model, workflow_path.parent, extra_vars,
+                        step_def,
+                        step_results,
+                        model,
+                        workflow_path.parent,
+                        extra_vars,
                     )
                     step_results[step_name] = result
                 except Exception:
@@ -424,6 +451,7 @@ def _exec_conditional(
 
 # ── CLI entrypoint ───────────────────────────────────────────────────
 
+
 def main() -> None:
     """CLI entrypoint for the pipeline runner."""
     parser = argparse.ArgumentParser(description="Trade-alert YAML workflow runner")
@@ -435,11 +463,15 @@ def main() -> None:
         logger.error("Workflow file not found: %s", wf_path)
         sys.exit(1)
 
+    t0 = time.time()
     try:
         run_workflow(wf_path)
     except Exception:
         logger.error("Workflow failed:\n%s", traceback.format_exc())
         sys.exit(1)
+    finally:
+        elapsed = time.time() - t0
+        logger.info("Total pipeline time: %.1fs", elapsed)
 
 
 if __name__ == "__main__":

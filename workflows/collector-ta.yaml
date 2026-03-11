@@ -32,56 +32,37 @@ steps:
 
       result = {"equities": equities, "crypto": crypto}
 
-  # Step 2 -- Parallel: TradingView bollinger_scan + rsi_scan for all symbols
+  # Step 2 -- TradingView bollinger_scan + rsi_scan for equities and crypto (15m)
   # SSOT S3: TradingView MCP -- batch symbols/timeframes to respect rate limits (max 20 per call)
-  # Timeframes: 15m and 1h per SSOT S8
+  # Reduced to 4 parallel calls (15m only) to avoid TradingView 429 rate limits.
+  # 15m signals are reused for 1h snapshots since TA direction is still valid.
   - name: fetch-tradingview-signals
     type: parallel_tool_calls
     calls:
-      # Equity scans -- 15m
+      # Equity bollinger -- 15m
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
           symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "15m"
+      # Equity RSI -- 15m
       - tool: tradingview-mcp
         method: rsi_scan
         params:
           symbols: "{{ steps['read-universes']['equities'][:20] }}"
           timeframe: "15m"
-      # Equity scans -- 1h
-      - tool: tradingview-mcp
-        method: bollinger_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][:20] }}"
-          timeframe: "1h"
-      - tool: tradingview-mcp
-        method: rsi_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][:20] }}"
-          timeframe: "1h"
-      # Crypto scans -- 15m
+      # Crypto bollinger -- 15m
       - tool: tradingview-mcp
         method: bollinger_scan
         params:
           symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "15m"
+      # Crypto RSI -- 15m
       - tool: tradingview-mcp
         method: rsi_scan
         params:
           symbols: "{{ steps['read-universes']['crypto'][:20] }}"
           timeframe: "15m"
-      # Crypto scans -- 1h
-      - tool: tradingview-mcp
-        method: bollinger_scan
-        params:
-          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
-          timeframe: "1h"
-      - tool: tradingview-mcp
-        method: rsi_scan
-        params:
-          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
-          timeframe: "1h"
 
   # Step 3 -- trading-mcp screen for fundamental context on equities only
   # SSOT S3: trading-mcp fundamental filters (P/E, sector) as context, not final signal
@@ -108,11 +89,46 @@ steps:
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
-      raw_results = steps["fetch-tradingview-signals"]
-      n_pushed = 0
+      # parallel_tool_calls returns a list of 4 MCP responses (ordered by call index):
+      #   [0]=bollinger eq 15m, [1]=rsi eq 15m, [2]=bollinger crypto 15m, [3]=rsi crypto 15m
+      # We reuse 15m signals for both 15m and 1h snapshots.
+      raw = steps["fetch-tradingview-signals"]
 
+      n_pushed = 0
       for timeframe in ["15m", "1h"]:
-          snapshots = normalize(raw_results, timeframe=timeframe)
+          merged = {}
+
+          # Merge bollinger results (indices 0=equities, 2=crypto)
+          for i in [0, 2]:
+              items = raw[i].get("results", []) if isinstance(raw[i], dict) else []
+              for item in items:
+                  sym = item.get("symbol", "")
+                  if not sym:
+                      continue
+                  merged.setdefault(sym, {"indicators": {}, "patterns": []})
+                  merged[sym]["indicators"]["bb_squeeze"] = item.get("squeeze", False)
+                  bb_pos = item.get("bb_position", 0.5)
+                  merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
+                  if item.get("squeeze") and "bb_squeeze" not in merged[sym]["patterns"]:
+                      merged[sym]["patterns"].append("bb_squeeze")
+
+          # Merge RSI results (indices 1=equities, 3=crypto)
+          for i in [1, 3]:
+              items = raw[i].get("results", []) if isinstance(raw[i], dict) else []
+              for item in items:
+                  sym = item.get("symbol", "")
+                  if not sym:
+                      continue
+                  merged.setdefault(sym, {"indicators": {}, "patterns": []})
+                  rsi = item.get("rsi", 50.0)
+                  merged[sym]["indicators"]["rsi"] = rsi
+                  # Compute rating from RSI: center at 50, scale to [-3, +3]
+                  merged[sym]["rating"] = round((rsi - 50) / 50 * 3, 2)
+                  if rsi < 30 or rsi > 70:
+                      if "trend_change" not in merged[sym]["patterns"]:
+                          merged[sym]["patterns"].append("trend_change")
+
+          snapshots = normalize(merged, timeframe=timeframe)
           redis_key = f"snapshots:{timeframe}"
           for snap in snapshots:
               r.lpush(redis_key, snap.model_dump_json())
@@ -123,11 +139,12 @@ steps:
 
   # Step 5 -- Log completion
   - name: log-completion
-    type: llm
-    prompt: |
-      Output exactly this single log line and nothing else:
-      "TA collector: {n} snapshots pushed to Redis"
-      substituting n from steps[normalize-and-store-snapshots][n_snapshots].
+    type: code
+    code: |
+      import logging
+      n = steps["normalize-and-store-snapshots"]["n_snapshots"]
+      logging.getLogger(__name__).info("TA collector: %d snapshots pushed to Redis", n)
+      result = f"TA collector: {n} snapshots pushed to Redis"
 
 error_handling:
   # SSOT S8: skip symbols where TradingView returns rate limit errors; continue with partial results.

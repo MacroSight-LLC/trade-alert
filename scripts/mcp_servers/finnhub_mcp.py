@@ -3,6 +3,7 @@
 Tools: sentiment, news_symbol
 Requires: FINNHUB_API_KEY env var.
 """
+
 from __future__ import annotations
 
 import logging
@@ -57,15 +58,17 @@ async def sentiment(params: dict[str, Any]) -> list[dict]:
             score = round(bullish - bearish, 4)
             articles = buzz.get("articlesInLastWeek", 0)
 
-            results.append({
-                "symbol": sym,
-                "score": score,
-                "articles": articles,
-            })
+            results.append(
+                {
+                    "symbol": sym,
+                    "score": score,
+                    "articles": articles,
+                }
+            )
         except httpx.HTTPError as exc:
             logger.warning("Finnhub sentiment error for %s: %s", sym, exc)
 
-    return results
+    return {"results": results}
 
 
 async def news_symbol(params: dict[str, Any]) -> dict:

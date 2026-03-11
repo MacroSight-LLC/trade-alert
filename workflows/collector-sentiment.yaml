@@ -162,12 +162,13 @@ steps:
 
   # Step 5 -- Log completion
   - name: log-completion
-    type: llm
-    prompt: |
-      Output exactly this single log line and nothing else:
-      "Sentiment collector: {n} snapshots, {n_filtered} spam filtered"
-      substituting n from steps[normalize-and-store-snapshots][n_snapshots]
-      and n_filtered from steps[normalize-and-store-snapshots][n_filtered].
+    type: code
+    code: |
+      import logging
+      n = steps["normalize-and-store-snapshots"]["n_snapshots"]
+      f = steps["normalize-and-store-snapshots"]["n_filtered"]
+      logging.getLogger(__name__).info("Sentiment collector: %d snapshots, %d spam filtered", n, f)
+      result = f"Sentiment collector: {n} snapshots, {f} spam filtered"
 
 error_handling:
   # SSOT S8: if ROT unavailable -- continue with Finnhub only, note lower confidence.
