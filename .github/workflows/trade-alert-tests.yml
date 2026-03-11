@@ -53,9 +53,28 @@ jobs:
       - name: Lint with ruff
         run: ruff check models.py merger.py db.py notifier_and_logger.py healthcheck.py outcome_tracker.py langfuse_client.py prompt_manager.py pipeline_tracing.py trace_analyzer.py vault_env_loader.py normalizers/
 
+      - name: Format check with ruff
+        run: |
+          ruff format --check \
+            models.py merger.py db.py notifier_and_logger.py \
+            healthcheck.py outcome_tracker.py langfuse_client.py \
+            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
+            vault_env_loader.py normalizers/
+
       - name: Run unit tests with coverage
         run: |
           pytest tests/unit/ -v --tb=short --cov=. --cov-report=term-missing \
             --ignore=tests/unit/test_plan_controller_prompt.py \
             --ignore=tests/unit/test_llm_override.py \
             --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,normalizers/*"
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CUGA image
+        run: docker build -f docker/Dockerfile.cuga -t trade-alert:ci .
+      - name: Build MCP image
+        run: docker build -f docker/Dockerfile.mcp -t trade-alert-mcp:ci .
+      - name: Validate compose config
+        run: docker compose config --quiet
