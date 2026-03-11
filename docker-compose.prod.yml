@@ -373,16 +373,14 @@ services:
         condition: service_healthy
       langfuse:
         condition: service_healthy
-    command:
-      [
-        "python",
-        "-m",
-        "cuga",
-        "run",
-        "--workflows-dir",
-        "workflows/",
-        "--schedule",
-      ]
+    # cron service handles scheduling via supercronic + crontab.
+    # This container stays warm for: docker compose exec cuga python ...
+    command: ["sleep", "infinity"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     volumes:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
