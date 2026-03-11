@@ -120,6 +120,11 @@ services:
     command: ["8001"]
     ports:
       - "8001:8001"
+    environment: &mcp-env
+      MODE: ${MCP_MODE:-mock}
+    env_file: &mcp-envfile
+      - path: .env
+        required: false
     healthcheck: &mcp-health-8001
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
       interval: 15s
@@ -138,6 +143,8 @@ services:
     command: ["8002"]
     ports:
       - "8002:8002"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
       interval: 15s
@@ -156,6 +163,8 @@ services:
     command: ["8003"]
     ports:
       - "8003:8003"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
       interval: 15s
@@ -174,6 +183,8 @@ services:
     command: ["8004"]
     ports:
       - "8004:8004"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
       interval: 15s
@@ -192,6 +203,8 @@ services:
     command: ["8005"]
     ports:
       - "8005:8005"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
       interval: 15s
@@ -210,6 +223,8 @@ services:
     command: ["8006"]
     ports:
       - "8006:8006"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
       interval: 15s
@@ -228,6 +243,8 @@ services:
     command: ["8007"]
     ports:
       - "8007:8007"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
       interval: 15s
@@ -246,6 +263,8 @@ services:
     command: ["8008"]
     ports:
       - "8008:8008"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
       interval: 15s
@@ -264,6 +283,8 @@ services:
     command: ["8009"]
     ports:
       - "8009:8009"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8009/health')\""]
       interval: 15s
@@ -282,6 +303,8 @@ services:
     command: ["8010"]
     ports:
       - "8010:8010"
+    environment: *mcp-env
+    env_file: *mcp-envfile
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health')\""]
       interval: 15s

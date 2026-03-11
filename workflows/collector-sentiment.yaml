@@ -98,7 +98,8 @@ steps:
             # SpamShield call -- fail open: if classify_text fails, treat as not spam
             try:
                 classification = mcp_call("spamshield-mcp", "classify_text", {"text": text})
-                if classification.get("label") == "spam" and sym:
+                is_spam = classification.get("is_spam", False) or classification.get("label") == "spam"
+                if is_spam and sym:
                     spam_symbols.add(sym.upper())
             except Exception:
                 # SSOT S8: spam filter failure = treat as not spam (fail open)
@@ -143,7 +144,7 @@ steps:
           if sym and sym.upper() in spam_symbols:
               continue
           if sym:
-              raw.setdefault(sym, {})["rot_signal"] = item
+              raw.setdefault(sym, {})["rot_signal"] = item.get("sentiment", "neutral")
 
       n_pushed  = 0
       for timeframe in ["15m", "1h"]:

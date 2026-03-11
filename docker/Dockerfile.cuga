@@ -49,3 +49,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Entrypoint loads Vault secrets into env before running the main command.
 # Falls back silently when VAULT_ADDR is not set (local dev).
 ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default: run CUGA runtime with built-in schedule triggers.
+# Override in compose with command: ["sleep", "infinity"] for dev shells.
+CMD ["python", "-m", "cuga", "run", "--workflows-dir", "workflows/", "--schedule"]

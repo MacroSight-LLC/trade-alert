@@ -94,7 +94,7 @@ steps:
           if sym:
               if sym not in raw:
                   raw[sym] = {}
-              raw[sym]["imbalance"] = item.get("imbalance")
+              raw[sym]["imbalance"] = item.get("bid_imbalance", item.get("imbalance"))
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
