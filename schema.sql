@@ -1,7 +1,12 @@
 -- trade-alert schema v1.0
 -- Run once: psql -U trade_alert -d trade_alert -f schema.sql
 
-CREATE EXTENSION IF NOT EXISTS pgvector;
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS pgvector;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pgvector unavailable — skipping.';
+END $$;
 
 CREATE TABLE IF NOT EXISTS alerts (
     id              SERIAL PRIMARY KEY,

@@ -26,14 +26,15 @@ exclude = [
     "node_modules",
     "site-packages",
     "venv",
+    "src/",              # CUGA library — do not lint
 ]
 
 # Same as Black.
 line-length = 110
 indent-width = 4
 
-# Assume Python 3.9
-target-version = "py312"
+# Match Docker/CI Python 3.11
+target-version = "py311"
 
 [lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
