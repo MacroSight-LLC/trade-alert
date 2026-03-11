@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir -e ".[all]" 2>/dev/null || \
     python-dotenv \
     "httpx[http2]" \
     pyyaml \
-    "hvac>=2.0.0"
+    "hvac>=2.0.0" \
+    "langfuse>=2.0,<3.0"
 
 # Application code — all trade-alert Python modules
 COPY workflows/ /app/workflows/
@@ -33,6 +34,9 @@ COPY notifier_and_logger.py /app/notifier_and_logger.py
 COPY healthcheck.py /app/healthcheck.py
 COPY outcome_tracker.py /app/outcome_tracker.py
 COPY trace_analyzer.py /app/trace_analyzer.py
+COPY langfuse_client.py /app/langfuse_client.py
+COPY prompt_manager.py /app/prompt_manager.py
+COPY pipeline_tracing.py /app/pipeline_tracing.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
@@ -45,6 +49,3 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Entrypoint loads Vault secrets into env before running the main command.
 # Falls back silently when VAULT_ADDR is not set (local dev).
 ENTRYPOINT ["/app/entrypoint.sh"]
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1

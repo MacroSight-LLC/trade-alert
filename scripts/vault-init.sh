@@ -69,7 +69,7 @@ echo ""
 echo "📥 Reading secrets from $ENV_FILE..."
 
 # Parse .env: skip comments, blank lines, and lines without '='
-declare -A SECRETS
+KV_ARGS=""
 COUNT=0
 while IFS= read -r line || [ -n "$line" ]; do
     # Skip comments and empty lines
@@ -91,16 +91,18 @@ while IFS= read -r line || [ -n "$line" ]; do
     # Skip empty values and non-secret tunables
     [ -z "$VALUE" ] && continue
 
-    # Only store actual secrets (API keys, passwords, URLs, tokens)
+    # Only store actual secrets (API keys, passwords, tokens)
+    # Infrastructure URLs (DATABASE_URL, REDIS_URL) are NOT secrets —
+    # they differ between host and Docker and are set via compose env.
     case "$KEY" in
         POSTGRES_PASSWORD|DISCORD_BOT_TOKEN|DISCORD_WEBHOOK|\
         DISCORD_ALERT_CHANNEL_ID|DISCORD_OPS_CHANNEL_ID|\
         FRED_API_KEY|FINNHUB_API_KEY|ANTHROPIC_API_KEY|\
         POLYGON_API_KEY|REDDIT_CLIENT_ID|REDDIT_CLIENT_SECRET|\
-        DATABASE_URL|REDIS_URL|POSTGRES_USER|\
+        POSTGRES_USER|\
         GROQ_API_KEY|OPENAI_API_KEY|E2B_API_KEY|CUGA_SECRET_KEY|\
         LANGFUSE_PUBLIC_KEY|LANGFUSE_SECRET_KEY|NEXTAUTH_SECRET|ENCRYPTION_KEY)
-            SECRETS["$KEY"]="$VALUE"
+            KV_ARGS="$KV_ARGS ${KEY}=${VALUE}"
             COUNT=$((COUNT + 1))
             echo "   ✓ $KEY"
             ;;
@@ -120,12 +122,6 @@ fi
 # ── Write to Vault ──────────────────────────────────────────
 echo ""
 echo "🔐 Writing $COUNT secret(s) to Vault at $VAULT_PATH..."
-
-# Build the vault kv put command with all key=value pairs
-KV_ARGS=""
-for KEY in "${!SECRETS[@]}"; do
-    KV_ARGS="$KV_ARGS ${KEY}=${SECRETS[$KEY]}"
-done
 
 vault kv put "$VAULT_PATH" $KV_ARGS
 

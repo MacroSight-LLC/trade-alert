@@ -1,7 +1,8 @@
 # trade-alert Docker Compose — development/local topology (SSOT §3, §5)
-# Full service stack: Redis, Postgres, 10 MCP servers, app runner.
-# Usage: docker compose up
-# NOTE: Uses same images as prod. Set POSTGRES_PASSWORD in .env before starting.
+# Infrastructure + app. MCP services require --profile mcp.
+# Usage:
+#   docker compose up -d                    # infra + app only
+#   docker compose --profile mcp up -d      # full stack with MCPs
 
 services:
   # --- Infrastructure ---
@@ -16,7 +17,8 @@ services:
     ports:
       - "8200:8200"
     healthcheck:
-      test: ["CMD", "vault", "status"]
+      test:
+        ["CMD-SHELL", "wget -qO- http://0.0.0.0:8200/v1/sys/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,13 +90,14 @@ services:
       SALT: ${SALT:-defaultsalt}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       TELEMETRY_ENABLED: "false"
+      HOSTNAME: "0.0.0.0"
     ports:
       - "3000:3000"
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -f http://localhost:3000/api/public/health || exit 1",
+          "wget -qO- http://0.0.0.0:3000/api/public/health || exit 1",
         ]
       interval: 15s
       timeout: 5s
@@ -105,17 +108,21 @@ services:
     restart: unless-stopped
 
   # --- MCP Services (ports 8001-8010, SSOT §3) ---
+  # All share one image built from docker/Dockerfile.mcp (mock server).
+  # Activate with: docker compose --profile mcp up -d
 
   tradingview-mcp:
-    image: ghcr.io/macrosight-llc/tradingview-mcp:latest
+    build: &mcp-build
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    image: trade-alert-mcp:latest
+    profiles: [mcp]
+    command: ["8001"]
     ports:
       - "8001:8001"
-    env_file:
-      - .env
-      - .env.vault
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
-      interval: 30s
+    healthcheck: &mcp-health-8001
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -123,15 +130,17 @@ services:
     restart: unless-stopped
 
   polygon-mcp:
-    image: ghcr.io/macrosight-llc/polygon-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8002"]
     ports:
       - "8002:8002"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -139,15 +148,17 @@ services:
     restart: unless-stopped
 
   discord-mcp:
-    image: ghcr.io/macrosight-llc/discord-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8003"]
     ports:
       - "8003:8003"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8003/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -155,15 +166,17 @@ services:
     restart: unless-stopped
 
   finnhub-mcp:
-    image: ghcr.io/macrosight-llc/finnhub-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8004"]
     ports:
       - "8004:8004"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8004/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -171,15 +184,17 @@ services:
     restart: unless-stopped
 
   rot-mcp:
-    image: ghcr.io/macrosight-llc/rot-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8005"]
     ports:
       - "8005:8005"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8005/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -187,15 +202,17 @@ services:
     restart: unless-stopped
 
   crypto-orderbook-mcp:
-    image: ghcr.io/macrosight-llc/crypto-orderbook-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8006"]
     ports:
       - "8006:8006"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8006/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -203,15 +220,17 @@ services:
     restart: unless-stopped
 
   coingecko-mcp:
-    image: ghcr.io/macrosight-llc/coingecko-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8007"]
     ports:
       - "8007:8007"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8007/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -219,15 +238,17 @@ services:
     restart: unless-stopped
 
   trading-mcp:
-    image: ghcr.io/macrosight-llc/trading-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8008"]
     ports:
       - "8008:8008"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -235,15 +256,17 @@ services:
     restart: unless-stopped
 
   fred-mcp:
-    image: ghcr.io/macrosight-llc/fred-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8009"]
     ports:
       - "8009:8009"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8009/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8009/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -251,15 +274,17 @@ services:
     restart: unless-stopped
 
   spamshield-mcp:
-    image: ghcr.io/macrosight-llc/spamshield-mcp:latest
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8010"]
     ports:
       - "8010:8010"
-    env_file:
-      - .env
-      - .env.vault
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8010/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health')\""]
+      interval: 15s
       timeout: 5s
       retries: 3
     networks:
@@ -280,8 +305,9 @@ services:
       langfuse:
         condition: service_healthy
     env_file:
-      - .env
-      - .env.vault
+      - path: .env
+      - path: .env.vault
+        required: false
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
@@ -292,8 +318,7 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
-    volumes:
-      - .:/app
+    command: ["sleep", "infinity"]
     networks:
       - trade-net
     restart: unless-stopped
