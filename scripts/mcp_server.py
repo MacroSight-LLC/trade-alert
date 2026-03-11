@@ -16,15 +16,16 @@ Handler modules are in scripts/mcp_servers/<name>.py and must export:
 Falls back to mock responses if the handler module raises or if
 the required API key is not set (graceful degradation).
 """
+
 from __future__ import annotations
 
 import importlib
 import logging
-import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
 
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -61,13 +62,15 @@ def create_app(port: int) -> FastAPI:
 
     @app.get("/health")
     async def health() -> JSONResponse:
-        return JSONResponse({
-            "status": "healthy",
-            "service": service_name,
-            "port": port,
-            "mock": False,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "service": service_name,
+                "port": port,
+                "mock": False,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     @app.post("/tool/{tool_name}")
     @app.get("/tool/{tool_name}")

@@ -122,11 +122,17 @@ services:
       - "8001:8001"
     environment: &mcp-env
       MODE: ${MCP_MODE:-mock}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
     env_file: &mcp-envfile
       - path: .env
         required: false
     healthcheck: &mcp-health-8001
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8001/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -146,7 +152,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8002/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -166,7 +176,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8003/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -186,7 +200,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8004/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -206,7 +224,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8005/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -226,7 +248,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8006/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -246,7 +272,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8007/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -266,7 +296,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8008/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -286,7 +320,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8009/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8009/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -306,7 +344,11 @@ services:
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health')\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8010/health'')"',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
