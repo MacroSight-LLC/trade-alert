@@ -5,7 +5,7 @@
 
 name: collector-macro
 description: Collect macro regime context from FRED -- VIX, yield curve, risk flags
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: fred-mcp

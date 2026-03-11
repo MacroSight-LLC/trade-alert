@@ -5,7 +5,7 @@
 
 name: collector-sentiment
 description: Collect and quality-filter social sentiment and news signals
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: finnhub-mcp

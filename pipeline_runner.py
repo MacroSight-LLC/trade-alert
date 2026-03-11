@@ -121,9 +121,13 @@ async def _mcp_call_async(tool: str, method: str, params: dict[str, Any]) -> dic
 
 def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Synchronous wrapper for MCP calls (available inside code blocks)."""
-    return asyncio.get_event_loop().run_until_complete(
-        _mcp_call_async(tool, method, params or {})
-    )
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            _mcp_call_async(tool, method, params or {})
+        )
+    finally:
+        loop.close()
 
 
 # ── LLM call helper ─────────────────────────────────────────────────
@@ -146,8 +150,14 @@ def _llm_call(prompt: str, model: str) -> str:
         messages.append({"role": "system", "content": system_msg})
     messages.append({"role": "user", "content": user_msg})
 
+    # Add provider prefix if not already present
+    if "/" not in model:
+        litellm_model = f"anthropic/{model}"
+    else:
+        litellm_model = model
+
     response = litellm.completion(
-        model=f"anthropic/{model}" if "/" not in model else model,
+        model=litellm_model,
         messages=messages,
         max_tokens=4096,
         temperature=0.2,
@@ -208,7 +218,11 @@ def _exec_parallel_tool_calls(
             tasks.append(_mcp_call_async(tool, method, params))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
-    raw = asyncio.get_event_loop().run_until_complete(_run())
+    loop = asyncio.new_event_loop()
+    try:
+        raw = loop.run_until_complete(_run())
+    finally:
+        loop.close()
     for i, r in enumerate(raw):
         if isinstance(r, Exception):
             logger.warning("Parallel tool call %d failed: %s", i, r)

@@ -8,7 +8,7 @@ name: notifier
 description: >
   Receive validated PlaybookAlert JSON from decision engine,
   format and send Discord embeds, log to Postgres.
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 steps:
   # Step 1 — Receive and validate alerts input
   - name: receive-alerts

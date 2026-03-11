@@ -5,7 +5,7 @@
 
 name: collector-market
 description: Build equity and crypto symbol universes for this 5-minute tick
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: coingecko-mcp

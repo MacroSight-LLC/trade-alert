@@ -5,7 +5,7 @@
 
 name: collector-flow
 description: Collect volume spikes and order book imbalance signals
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: polygon-mcp

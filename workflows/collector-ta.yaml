@@ -5,7 +5,7 @@
 
 name: collector-ta
 description: Collect TA signals from TradingView and trading-mcp for all universe symbols
-llm_model: grok-beta
+llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: tradingview-mcp
