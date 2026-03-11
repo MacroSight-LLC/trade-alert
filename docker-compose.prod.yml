@@ -59,6 +59,53 @@ services:
       - trade-net
     restart: unless-stopped
 
+  langfuse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+    volumes:
+      - langfuse-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  langfuse:
+    image: langfuse/langfuse:2
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: ${SALT:-defaultsalt}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost:3000/api/public/health || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - trade-net
+    restart: unless-stopped
+
   # --- MCP Services (ports 8001-8010, SSOT §3) ---
 
   tradingview-mcp:
@@ -252,6 +299,8 @@ services:
         condition: service_healthy
       spamshield-mcp:
         condition: service_healthy
+      langfuse:
+        condition: service_healthy
     volumes:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
@@ -261,6 +310,7 @@ services:
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./logs:/app/logs
     env_file:
       - .env
@@ -268,6 +318,11 @@ services:
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
+      DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse:3000
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
     networks:
       - trade-net
     restart: unless-stopped
@@ -287,6 +342,7 @@ services:
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./logs:/app/logs
       - ./crontab:/etc/crontabs/root
     command: crond -f -l 2
@@ -296,6 +352,11 @@ services:
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
+      DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse:3000
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
     networks:
       - trade-net
     restart: unless-stopped
@@ -304,6 +365,7 @@ volumes:
   redis-data:
   postgres-data:
   vault-data:
+  langfuse-data:
 
 networks:
   trade-net:

@@ -57,6 +57,53 @@ services:
     networks:
       - trade-net
 
+  langfuse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+    volumes:
+      - langfuse_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  langfuse:
+    image: langfuse/langfuse:2
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: ${SALT:-defaultsalt}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost:3000/api/public/health || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - trade-net
+    restart: unless-stopped
+
   # --- MCP Services (ports 8001-8010, SSOT §3) ---
 
   tradingview-mcp:
@@ -230,6 +277,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      langfuse:
+        condition: service_healthy
     env_file:
       - .env
       - .env.vault
@@ -238,6 +287,11 @@ services:
       VAULT_TOKEN: dev-root-token
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse:3000
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
     volumes:
       - .:/app
     networks:
@@ -246,6 +300,7 @@ services:
 
 volumes:
   postgres_data:
+  langfuse_data:
 
 networks:
   trade-net:

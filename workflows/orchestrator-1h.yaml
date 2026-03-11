@@ -80,6 +80,20 @@ steps:
       except Exception as exc:
           logger.error("Healthcheck step failed: %s", exc)
 
+  # Step 5 — Post-run trace analysis: validate output, check cost/latency
+  # Scores the trace in Langfuse and alerts ops on any issues
+  - name: analyze-pipeline-trace
+    type: code
+    code: |
+      import logging
+      logger = logging.getLogger(__name__)
+      try:
+          from trace_analyzer import analyze_pipeline_trace
+          result = analyze_pipeline_trace("1h")
+          logger.info("Trace analysis: healthy=%s issues=%s", result.is_healthy, result.issues)
+      except Exception as exc:
+          logger.error("Trace analysis failed (non-blocking): %s", exc)
+
   # On total pipeline failure, notify ops channel
   - name: on-failure-notify
     type: code

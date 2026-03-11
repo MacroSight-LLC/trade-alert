@@ -32,6 +32,7 @@ COPY db.py /app/db.py
 COPY notifier_and_logger.py /app/notifier_and_logger.py
 COPY healthcheck.py /app/healthcheck.py
 COPY outcome_tracker.py /app/outcome_tracker.py
+COPY trace_analyzer.py /app/trace_analyzer.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

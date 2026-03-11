@@ -106,6 +106,32 @@ class PlaybookAlert(BaseModel):
     sources_agree: int
 
 
+class TraceAnalysis(BaseModel):
+    """Result of post-execution trace analysis for self-healing.
+
+    Attributes:
+        trace_id: Langfuse trace identifier.
+        is_healthy: Whether the pipeline run passed all checks.
+        issues: List of issues detected (empty when healthy).
+        cost_usd: Total LLM cost for this trace in USD.
+        latency_s: Total pipeline duration in seconds.
+        llm_calls: Number of LLM invocations in the trace.
+        total_tokens: Total tokens consumed across all LLM calls.
+        prompt_version: Version tag of the prompts used.
+        timestamp: ISO 8601 UTC timestamp of the analysis.
+    """
+
+    trace_id: str
+    is_healthy: bool
+    issues: List[str] = Field(default_factory=list)
+    cost_usd: float = 0.0
+    latency_s: float = 0.0
+    llm_calls: int = 0
+    total_tokens: int = 0
+    prompt_version: str = "v1.0"
+    timestamp: str = ""
+
+
 if __name__ == "__main__":
     # Smoke test — create one of each model with valid data and print
     s = Signal(
