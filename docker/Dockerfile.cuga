@@ -37,6 +37,7 @@ COPY trace_analyzer.py /app/trace_analyzer.py
 COPY langfuse_client.py /app/langfuse_client.py
 COPY prompt_manager.py /app/prompt_manager.py
 COPY pipeline_tracing.py /app/pipeline_tracing.py
+COPY pipeline_runner.py /app/pipeline_runner.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
@@ -50,6 +51,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Falls back silently when VAULT_ADDR is not set (local dev).
 ENTRYPOINT ["/app/entrypoint.sh"]
 
-# Default: run CUGA runtime with built-in schedule triggers.
-# Override in compose with command: ["sleep", "infinity"] for dev shells.
-CMD ["python", "-m", "cuga", "run", "--workflows-dir", "workflows/", "--schedule"]
+# Default: keep container alive for exec-based pipeline runs.
+# Cron service handles scheduling via supercronic + crontab.
+CMD ["sleep", "infinity"]

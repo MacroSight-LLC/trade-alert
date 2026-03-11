@@ -1,16 +1,15 @@
 # trade-alert cron schedule (SSOT §5)
-# NOTE: The main `cuga` service uses --schedule to read schedule: fields
-# from each YAML. This crontab is ONLY for the standalone cron container
-# or non-Docker deployments. Do not run both simultaneously.
+# Executed by supercronic inside the cron container.
+# Uses pipeline_runner.py to interpret YAML workflow DSL.
 
 # Every 15 minutes — orchestrators sequence collectors → merger → decision → notifier
-*/15 * * * * cd /app && python -m cuga run --workflows-dir workflows/ --workflow orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
+*/15 * * * * cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
 
 # Every hour — 1h pipeline orchestrator
-0 * * * * cd /app && python -m cuga run --workflows-dir workflows/ --workflow orchestrator-1h.yaml >> /app/logs/cron.log 2>&1
+0 * * * * cd /app && python pipeline_runner.py workflows/orchestrator-1h.yaml >> /app/logs/cron.log 2>&1
 
 # Every 15 minutes — outcome tracker
-*/15 * * * * cd /app && python -m cuga run --workflows-dir workflows/ --workflow outcome-tracker.yaml >> /app/logs/cron.log 2>&1
+*/15 * * * * cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1
 
 # Every hour — healthcheck
 0 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1

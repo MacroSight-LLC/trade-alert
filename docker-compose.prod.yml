@@ -394,6 +394,7 @@ services:
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
       - ./pipeline_tracing.py:/app/pipeline_tracing.py
+      - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
     env_file:
@@ -433,11 +434,12 @@ services:
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
       - ./pipeline_tracing.py:/app/pipeline_tracing.py
+      - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
       - ./crontab:/etc/crontabs/root
-    # Standalone cron fallback — only needed if cuga --schedule is NOT used.
-    # Uses supercronic (static binary, works on debian-slim).
+    # Cron scheduler — runs pipeline_runner.py on schedule via supercronic.
+    # See crontab file for schedule definitions.
     command:
       [
         "bash",

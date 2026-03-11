@@ -8,7 +8,7 @@ description: >
   Cron orchestrator — 15m pipeline. Runs every 15 minutes.
   Sequences: collectors → merger → decision → notifier.
 schedule: "*/15 * * * *"
-llm_model: claude-3-5-sonnet-20241022
+llm_model: claude-sonnet-4-20250514
 
 error_handling:
   abort_on_failure: false

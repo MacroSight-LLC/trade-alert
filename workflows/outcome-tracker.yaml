@@ -10,7 +10,7 @@ description: >
   Fetches current price from Polygon, evaluates WIN/LOSS/EXPIRED,
   writes result back to Postgres via db.update_outcome().
 schedule: "*/15 * * * *"
-llm_model: claude-3-5-sonnet-20241022
+llm_model: claude-sonnet-4-20250514
 
 steps:
   # Step 1 — Run the tracker cycle to resolve open alerts

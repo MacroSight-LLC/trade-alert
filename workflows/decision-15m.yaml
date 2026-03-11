@@ -10,7 +10,7 @@ name: decision-15m
 description: >
   Ensemble decision agent — merges 15m snapshots, reasons across all
   signal types using Claude Sonnet, produces PlaybookAlert JSON.
-llm_model: claude-3-5-sonnet-20241022
+llm_model: claude-sonnet-4-20250514
 mcp_servers:
   - name: fred-mcp
     endpoint: http://fred-mcp:8009

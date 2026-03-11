@@ -13,7 +13,7 @@ description: >
   Ensemble decision agent — merges 1h snapshots, reasons across all
   signal types using Claude Sonnet, produces PlaybookAlert JSON.
   Stricter gates and macro veto logic for longer holding periods.
-llm_model: claude-3-5-sonnet-20241022
+llm_model: claude-sonnet-4-20250514
 mcp_servers:
   - name: fred-mcp
     endpoint: http://fred-mcp:8009
