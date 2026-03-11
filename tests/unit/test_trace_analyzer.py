@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from models import TraceAnalysis
 from trace_analyzer import (
     analyze_pipeline_trace,
@@ -13,7 +11,6 @@ from trace_analyzer import (
     check_latency,
     check_output_validity,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────
 
@@ -198,9 +195,7 @@ class TestAnalyzePipelineTrace:
 
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_healthy_trace(
-        self, mock_fetch: MagicMock, mock_score: MagicMock
-    ) -> None:
+    def test_healthy_trace(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-123",
             "output": _valid_alert_dict(),
@@ -240,9 +235,7 @@ class TestAnalyzePipelineTrace:
 
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_unhealthy_latency(
-        self, mock_fetch: MagicMock, mock_score: MagicMock
-    ) -> None:
+    def test_unhealthy_latency(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-789",
             "output": _valid_alert_dict(),
@@ -256,9 +249,7 @@ class TestAnalyzePipelineTrace:
 
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_invalid_output(
-        self, mock_fetch: MagicMock, mock_score: MagicMock
-    ) -> None:
+    def test_invalid_output(self, mock_fetch: MagicMock, mock_score: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-bad",
             "output": '{"symbol": "AAPL"}',
