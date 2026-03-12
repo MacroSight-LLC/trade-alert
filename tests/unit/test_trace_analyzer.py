@@ -334,14 +334,22 @@ class TestFetchLatestTrace:
     def test_fetches_full_trace_by_id(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         lf.fetch_traces.return_value = SimpleNamespace(data=[SimpleNamespace(id="t-1")])
-        full = MagicMock()
-        full.dict.return_value = {"id": "t-1", "total_cost": 0.03}
+        full = SimpleNamespace(
+            id="t-1",
+            total_cost=0.03,
+            latency=1.5,
+            output=None,
+            observations=[],
+        )
         lf.fetch_trace.return_value = SimpleNamespace(data=full)
         mock_get.return_value = lf
 
         result = fetch_latest_trace("orchestrator-15m")
         lf.fetch_trace.assert_called_once_with("t-1")
-        assert result == {"id": "t-1", "total_cost": 0.03}
+        assert result["id"] == "t-1"
+        assert result["total_cost"] == 0.03
+        assert result["latency"] == 1.5
+        assert result["observations"] == []
 
     @patch("trace_analyzer.get_langfuse_client")
     def test_returns_none_on_exception(self, mock_get: MagicMock) -> None:

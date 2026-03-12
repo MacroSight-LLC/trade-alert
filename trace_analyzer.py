@@ -66,8 +66,24 @@ def fetch_latest_trace(session_id: str) -> dict | None:
             logger.warning("fetch_trace(%s) returned no data", trace_id)
             return None
 
-        # Convert SDK object → dict for uniform downstream handling
-        return trace_obj.dict() if hasattr(trace_obj, "dict") else trace_obj.__dict__
+        # Convert SDK object → dict with snake_case keys for uniform handling.
+        # Pydantic v1 .dict() emits camelCase (e.g. totalCost), so we read
+        # attributes directly to get the snake_case Python values.
+        obs_list = []
+        for obs in (trace_obj.observations or []):
+            obs_dict = obs.dict() if hasattr(obs, "dict") else obs.__dict__
+            # Normalise observation cost/token fields
+            obs_dict["calculated_total_cost"] = getattr(obs, "calculated_total_cost", None)
+            obs_dict["usage"] = getattr(obs, "usage", None)
+            obs_list.append(obs_dict)
+
+        return {
+            "id": trace_obj.id,
+            "total_cost": trace_obj.total_cost,
+            "latency": trace_obj.latency,
+            "output": trace_obj.output,
+            "observations": obs_list,
+        }
     except Exception as exc:  # noqa: BLE001
         logger.warning("Langfuse trace fetch failed: %s", exc)
         return None

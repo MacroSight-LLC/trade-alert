@@ -144,7 +144,23 @@ steps:
           except Exception as exc:
               logger.error("Healthcheck step failed: %s", exc)
 
-    # Step 5 — Post-run trace analysis: validate output, check cost/latency
+    # Step 5a — Flush Langfuse queue so LLM generation costs are available
+    - name: flush-langfuse
+      type: code
+      code: |
+          import logging, time
+          logger = logging.getLogger(__name__)
+          try:
+              from langfuse_client import get_langfuse_client
+              lf = get_langfuse_client()
+              if lf:
+                  lf.flush()
+                  time.sleep(1)  # allow server-side processing
+                  logger.debug("Langfuse flushed before trace analysis")
+          except Exception as exc:
+              logger.debug("Langfuse flush failed (non-blocking): %s", exc)
+
+    # Step 5b — Post-run trace analysis: validate output, check cost/latency
     # Scores the trace in Langfuse and alerts ops on any issues
     - name: analyze-pipeline-trace
       type: code

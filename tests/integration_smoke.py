@@ -199,7 +199,7 @@ def test_outcome_tracker_logic() -> None:
 
 def test_db_round_trip() -> None:
     """Insert, read-back, and update an alert (requires Postgres)."""
-    if SKIP_INFRA:
+    if SKIP_INFRA or not os.getenv("DATABASE_URL"):
         log.info("--- Test: DB round-trip [SKIPPED — no infra] ---")
         return
     log.info("--- Test: DB round-trip ---")
