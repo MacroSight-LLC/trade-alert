@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -21,14 +22,26 @@ API_KEY: str = os.getenv("POLYGON_API_KEY", "")
 BASE_URL = "https://api.polygon.io"
 TIMEOUT = 10.0
 
-# Free-tier: 5 requests/min → 12s between requests keeps us safe
-_REQUEST_DELAY = 12.0
+# Free-tier: 5 requests/min → 12s between individual API calls
+_REQUEST_DELAY = 12.5
 _MAX_429_RETRIES = 2
 _429_BACKOFF = 15.0
+
+# Global per-request rate limiter (protects across all tools)
+_rate_lock = asyncio.Lock()
+_last_request_time: float = 0.0
 
 
 async def _get(path: str, params: dict[str, Any] | None = None) -> dict:
     """Make authenticated GET request to Polygon API with 429 retry."""
+    global _last_request_time
+    async with _rate_lock:
+        now = time.monotonic()
+        wait = _REQUEST_DELAY - (now - _last_request_time)
+        if wait > 0:
+            logger.debug("Polygon rate-limit: sleeping %.1fs before %s", wait, path)
+            await asyncio.sleep(wait)
+        _last_request_time = time.monotonic()
     p = {"apiKey": API_KEY, **(params or {})}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         for attempt in range(_MAX_429_RETRIES + 1):
@@ -36,6 +49,7 @@ async def _get(path: str, params: dict[str, Any] | None = None) -> dict:
             if resp.status_code == 429 and attempt < _MAX_429_RETRIES:
                 logger.info("Polygon 429 on %s, backing off %.0fs", path, _429_BACKOFF * (attempt + 1))
                 await asyncio.sleep(_429_BACKOFF * (attempt + 1))
+                _last_request_time = time.monotonic()
                 continue
             resp.raise_for_status()
             return resp.json()
@@ -103,10 +117,10 @@ async def aggs(params: dict[str, Any]) -> dict:
     if isinstance(symbols, str):
         symbols = [s.strip() for s in symbols.split(",")]
 
+    from datetime import date, timedelta
+
     results: list[dict] = []
-    for i, sym in enumerate(symbols[:25]):
-        if i > 0:
-            await asyncio.sleep(_REQUEST_DELAY)
+    for sym in symbols[:10]:
         try:
             # Previous-day close (free-tier endpoint)
             prev = await _get(f"/v2/aggs/ticker/{sym}/prev")
@@ -119,8 +133,6 @@ async def aggs(params: dict[str, Any]) -> dict:
             close = bar.get("c", 0.0)
 
             # 20-day daily bars for average volume (free-tier endpoint)
-            from datetime import date, timedelta
-
             end = date.today().isoformat()
             start = (date.today() - timedelta(days=30)).isoformat()
             hist = await _get(

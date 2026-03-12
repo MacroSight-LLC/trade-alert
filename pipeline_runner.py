@@ -53,7 +53,7 @@ MCP_ENDPOINTS: dict[str, str] = {
 # Also accept workflow-level mcp_servers overrides
 _workflow_mcp_endpoints: dict[str, str] = {}
 
-MCP_TIMEOUT = 30.0
+MCP_TIMEOUT = float(os.environ.get("MCP_TIMEOUT", "150"))
 
 
 def _new_http_client() -> httpx.AsyncClient:

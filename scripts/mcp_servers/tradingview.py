@@ -18,7 +18,7 @@ SERVICE_NAME = "TradingView MCP"
 
 # Max retries for 429 rate-limit errors
 _MAX_RETRIES = 2
-_RETRY_DELAY = 3.0
+_RETRY_DELAY = 20.0  # TradingView rate limit resets after ~60s
 
 # --- Exchange / screener auto-detection ---
 
@@ -189,7 +189,7 @@ async def bollinger_scan(params: dict[str, Any]) -> dict:
         screener, exchange = _resolve_screener_exchange(sym)
         cache_key = (sym, screener, exchange, timeframe)
         if i > 0 and cache_key not in _CACHE:
-            await asyncio.sleep(4.0)  # Rate limit: TradingView aggressively 429s
+            await asyncio.sleep(6.0)  # Rate limit: TradingView aggressively 429s
         analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
         if analysis is None:
             continue
@@ -239,7 +239,7 @@ async def rsi_scan(params: dict[str, Any]) -> dict:
         screener, exchange = _resolve_screener_exchange(sym)
         cache_key = (sym, screener, exchange, timeframe)
         if i > 0 and cache_key not in _CACHE:
-            await asyncio.sleep(4.0)  # Rate limit: TradingView aggressively 429s
+            await asyncio.sleep(6.0)  # Rate limit: TradingView aggressively 429s
         analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
         if analysis is None:
             continue

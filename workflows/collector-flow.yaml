@@ -39,17 +39,13 @@ steps:
   - name: fetch-flow-signals
     type: parallel_tool_calls
     calls:
-      # Polygon unusual options activity for equities (batch 25)
-      - tool: polygon-mcp
-        method: unusual_activity
-        params:
-          symbols: "{{ steps['read-universes']['equities'][:25] }}"
       # Polygon aggs for equities -- volume_multiple = current_volume / avg_20d_volume
       # SSOT S7 Flow: compute volume_multiple from Polygon aggs
+      # Limit to 5 equities: free-tier allows 5 req/min, each symbol needs 2 calls
       - tool: polygon-mcp
         method: aggs
         params:
-          symbols: "{{ steps['read-universes']['equities'][:25] }}"
+          symbols: "{{ steps['read-universes']['equities'][:5] }}"
           include_avg_20d_volume: true
       # Crypto orderbook imbalance (batch 15)
       - tool: crypto-orderbook-mcp
@@ -72,9 +68,9 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
-      unusual_results   = steps["fetch-flow-signals"][0]
-      aggs_results      = steps["fetch-flow-signals"][1]
-      orderbook_results = steps["fetch-flow-signals"][2]
+      unusual_results   = {"results": []}  # unusual_activity requires paid Polygon plan
+      aggs_results      = steps["fetch-flow-signals"][0]
+      orderbook_results = steps["fetch-flow-signals"][1]
 
       raw = {}
       for item in aggs_results.get("results", []):
