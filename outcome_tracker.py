@@ -56,7 +56,7 @@ def get_current_price(symbol: str) -> float | None:
             return float(resp.json()["ticker"]["day"]["c"])
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             if attempt < PRICE_FETCH_MAX_RETRIES - 1:
-                delay = 2 ** attempt
+                delay = 2**attempt
                 logger.warning(
                     "Price fetch attempt %d/%d for %s failed: %s — retrying in %ds",
                     attempt + 1,
@@ -67,7 +67,9 @@ def get_current_price(symbol: str) -> float | None:
                 )
                 time.sleep(delay)
             else:
-                logger.error("Failed to fetch price for %s after %d attempts: %s", symbol, PRICE_FETCH_MAX_RETRIES, exc)
+                logger.error(
+                    "Failed to fetch price for %s after %d attempts: %s", symbol, PRICE_FETCH_MAX_RETRIES, exc
+                )
     return None
 
 

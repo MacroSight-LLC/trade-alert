@@ -9,7 +9,6 @@ from normalizers.market_normalizer import normalize as market_normalize
 from normalizers.sentiment_normalizer import normalize as sentiment_normalize
 from normalizers.ta_normalizer import normalize as ta_normalize
 
-
 # ── safe_float utility ──────────────────────────────────────────
 
 
@@ -39,6 +38,7 @@ class TestSafeFloat:
 
     def test_int_value(self) -> None:
         assert safe_float(3) == 3.0
+
 
 # ── TA Normalizer ───────────────────────────────────────────────
 

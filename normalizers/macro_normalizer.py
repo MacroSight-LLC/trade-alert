@@ -21,6 +21,7 @@ def _safe_float(value: float | None) -> float | None:
     if value is None:
         return None
     import math
+
     if not isinstance(value, (int, float)) or math.isnan(value) or math.isinf(value):
         return None
     return float(value)

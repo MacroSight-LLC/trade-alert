@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp as _clamp, safe_float
+from normalizers import clamp as _clamp
+from normalizers import safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
