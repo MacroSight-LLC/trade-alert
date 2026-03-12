@@ -127,22 +127,28 @@ class TestSendDiscordEmbed:
     """Tests for Discord embed delivery (webhook + bot fallback)."""
 
     @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger.httpx.post")
-    def test_webhook_success(self, mock_post: MagicMock, _wh: MagicMock) -> None:
-        mock_post.return_value = MagicMock(status_code=204)
-        mock_post.return_value.raise_for_status = MagicMock()
+    @patch("notifier_and_logger._get_discord_client")
+    def test_webhook_success(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.post.return_value = MagicMock(status_code=204)
+        mock_client.post.return_value.raise_for_status = MagicMock()
+        mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is True
-        mock_post.assert_called_once()
+        mock_client.post.assert_called_once()
 
     @patch("notifier_and_logger._discord_webhook", return_value=None)
     @patch("notifier_and_logger._discord_bot_token", return_value="tok123")
     @patch("notifier_and_logger._discord_alert_channel_id", return_value="chan456")
-    @patch("notifier_and_logger.httpx.post")
-    def test_bot_fallback(self, mock_post: MagicMock, _ch: MagicMock, _bt: MagicMock, _wh: MagicMock) -> None:
-        mock_post.return_value = MagicMock(status_code=200)
-        mock_post.return_value.raise_for_status = MagicMock()
+    @patch("notifier_and_logger._get_discord_client")
+    def test_bot_fallback(
+        self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock, _wh: MagicMock
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.post.return_value = MagicMock(status_code=200)
+        mock_client.post.return_value.raise_for_status = MagicMock()
+        mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is True
-        call_kwargs = mock_post.call_args
+        call_kwargs = mock_client.post.call_args
         assert "Bot tok123" in call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {})).get(
             "Authorization", ""
         )
@@ -153,8 +159,9 @@ class TestSendDiscordEmbed:
         assert send_discord_embed({"embeds": []}) is False
 
     @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger.httpx.post")
-    def test_http_status_error(self, mock_post: MagicMock, _wh: MagicMock) -> None:
+    @patch("notifier_and_logger._get_discord_client")
+    def test_http_status_error(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        mock_client = MagicMock()
         resp = MagicMock()
         resp.status_code = 429
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -162,13 +169,16 @@ class TestSendDiscordEmbed:
             request=MagicMock(),
             response=resp,
         )
-        mock_post.return_value = resp
+        mock_client.post.return_value = resp
+        mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is False
 
     @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger.httpx.post")
-    def test_request_error(self, mock_post: MagicMock, _wh: MagicMock) -> None:
-        mock_post.side_effect = httpx.RequestError("timeout")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_request_error(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = httpx.RequestError("timeout")
+        mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is False
 
 
@@ -185,12 +195,14 @@ class TestSendOpsMessage:
 
     @patch("notifier_and_logger._discord_bot_token", return_value="tok")
     @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
-    @patch("notifier_and_logger.httpx.post")
-    def test_sends_plain_text(self, mock_post: MagicMock, _ch: MagicMock, _bt: MagicMock) -> None:
-        mock_post.return_value = MagicMock(status_code=200)
-        mock_post.return_value.raise_for_status = MagicMock()
+    @patch("notifier_and_logger._get_discord_client")
+    def test_sends_plain_text(self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.post.return_value = MagicMock(status_code=200)
+        mock_client.post.return_value.raise_for_status = MagicMock()
+        mock_client_fn.return_value = mock_client
         send_ops_message("health OK")
-        call_kwargs = mock_post.call_args
+        call_kwargs = mock_client.post.call_args
         assert call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))["content"] == "health OK"
 
 

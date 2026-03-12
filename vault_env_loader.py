@@ -98,7 +98,7 @@ def load_vault_secrets() -> int:
             # Vault field names are UPPER_CASE env var names by convention.
             env_key = key.upper()
             if value is not None:
-                os.environ.setdefault(env_key, str(value))
+                os.environ[env_key] = str(value)
                 count += 1
                 logger.debug("Vault → os.environ[%s]", env_key)
 

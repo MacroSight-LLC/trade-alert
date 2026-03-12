@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from models import TraceAnalysis
 from trace_analyzer import (
+    _sum_tokens,
     analyze_pipeline_trace,
     check_cost,
     check_latency,
     check_output_validity,
+    fetch_latest_trace,
 )
 
 # ── Fixtures ─────────────────────────────────────────────────────
@@ -58,9 +61,12 @@ def _make_trace(
     return {
         "id": "trace-abc-123",
         "output": output,
-        "calculatedTotalCost": cost,
+        "total_cost": cost,
         "latency": latency,
-        "totalTokens": 5000,
+        "observations": [
+            {"usage": {"total": 2500}},
+            {"usage": {"total": 2500}},
+        ],
     }
 
 
@@ -119,7 +125,7 @@ class TestCheckCost:
         assert check_cost(trace, budget=0.50) == []
 
     def test_zero_cost(self) -> None:
-        trace = {"calculatedTotalCost": 0.0}
+        trace = {"total_cost": 0.0}
         assert check_cost(trace, budget=0.50) == []
 
     def test_missing_cost(self) -> None:
@@ -201,14 +207,19 @@ class TestAnalyzePipelineTrace:
         mock_fetch.return_value = {
             "id": "trace-123",
             "output": _valid_alert_dict(),
-            "calculatedTotalCost": 0.10,
+            "total_cost": 0.10,
             "latency": 30.0,
-            "totalTokens": 5000,
+            "observations": [
+                {"usage": {"total": 2500}},
+                {"usage": {"total": 2500}},
+            ],
         }
         result = analyze_pipeline_trace("15m")
         assert result.is_healthy is True
         assert result.issues == []
         assert result.trace_id == "trace-123"
+        assert result.total_tokens == 5000
+        assert result.llm_calls == 2
         mock_score.assert_called_once()
         # Score should be 1.0 for healthy
         assert mock_score.call_args[0][1] == 1.0
@@ -227,9 +238,9 @@ class TestAnalyzePipelineTrace:
         mock_fetch.return_value = {
             "id": "trace-456",
             "output": _valid_alert_dict(),
-            "calculatedTotalCost": 1.50,
+            "total_cost": 1.50,
             "latency": 30.0,
-            "totalTokens": 5000,
+            "observations": [],
         }
         result = analyze_pipeline_trace("1h")
         assert result.is_healthy is False
@@ -246,9 +257,9 @@ class TestAnalyzePipelineTrace:
         mock_fetch.return_value = {
             "id": "trace-789",
             "output": _valid_alert_dict(),
-            "calculatedTotalCost": 0.10,
+            "total_cost": 0.10,
             "latency": 200.0,
-            "totalTokens": 5000,
+            "observations": [],
         }
         result = analyze_pipeline_trace("15m")
         assert result.is_healthy is False
@@ -261,10 +272,80 @@ class TestAnalyzePipelineTrace:
         mock_fetch.return_value = {
             "id": "trace-bad",
             "output": '{"symbol": "AAPL"}',
-            "calculatedTotalCost": 0.10,
+            "total_cost": 0.10,
             "latency": 30.0,
-            "totalTokens": 5000,
+            "observations": [],
         }
         result = analyze_pipeline_trace("15m")
         assert result.is_healthy is False
         assert any("PlaybookAlert validation failed" in i for i in result.issues)
+
+
+# ── _sum_tokens ───────────────────────────────────────────────────────
+
+
+class TestSumTokens:
+    """Tests for _sum_tokens helper."""
+
+    def test_empty_observations(self) -> None:
+        assert _sum_tokens([]) == 0
+
+    def test_sums_dict_observations(self) -> None:
+        obs = [
+            {"usage": {"total": 100}},
+            {"usage": {"total": 200}},
+        ]
+        assert _sum_tokens(obs) == 300
+
+    def test_skips_none_usage(self) -> None:
+        obs = [{"usage": None}, {"usage": {"total": 50}}]
+        assert _sum_tokens(obs) == 50
+
+    def test_skips_missing_usage(self) -> None:
+        obs = [{"name": "span"}, {"usage": {"total": 75}}]
+        assert _sum_tokens(obs) == 75
+
+    def test_handles_object_style(self) -> None:
+        obs = [
+            SimpleNamespace(usage=SimpleNamespace(total=120)),
+            SimpleNamespace(usage=SimpleNamespace(total=80)),
+        ]
+        assert _sum_tokens(obs) == 200
+
+
+# ── fetch_latest_trace ─────────────────────────────────────────────────
+
+
+class TestFetchLatestTrace:
+    """Tests for fetch_latest_trace."""
+
+    @patch("trace_analyzer.get_langfuse_client", return_value=None)
+    def test_returns_none_when_no_client(self, _m: MagicMock) -> None:
+        assert fetch_latest_trace("orchestrator-15m") is None
+
+    @patch("trace_analyzer.get_langfuse_client")
+    def test_returns_none_when_no_traces(self, mock_get: MagicMock) -> None:
+        lf = MagicMock()
+        lf.fetch_traces.return_value = SimpleNamespace(data=[])
+        mock_get.return_value = lf
+        assert fetch_latest_trace("orchestrator-15m") is None
+
+    @patch("trace_analyzer.get_langfuse_client")
+    def test_fetches_full_trace_by_id(self, mock_get: MagicMock) -> None:
+        lf = MagicMock()
+        lf.fetch_traces.return_value = SimpleNamespace(data=[SimpleNamespace(id="t-1")])
+        full = MagicMock()
+        full.dict.return_value = {"id": "t-1", "total_cost": 0.03}
+        lf.fetch_trace.return_value = SimpleNamespace(data=full)
+        mock_get.return_value = lf
+
+        result = fetch_latest_trace("orchestrator-15m")
+        lf.fetch_trace.assert_called_once_with("t-1")
+        assert result == {"id": "t-1", "total_cost": 0.03}
+
+    @patch("trace_analyzer.get_langfuse_client")
+    def test_returns_none_on_exception(self, mock_get: MagicMock) -> None:
+        lf = MagicMock()
+        lf.fetch_traces.side_effect = RuntimeError("network")
+        mock_get.return_value = lf
+        assert fetch_latest_trace("orchestrator-15m") is None

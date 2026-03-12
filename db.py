@@ -11,6 +11,7 @@ import logging
 import os
 
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
@@ -20,17 +21,41 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
+_pool: psycopg2.pool.SimpleConnectionPool | None = None
+
+
+def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
+    """Return a lazily-initialised connection pool (min=1, max=5)."""
+    global _pool  # noqa: PLW0603
+    if _pool is None or _pool.closed:
+        url = DATABASE_URL
+        if not url:
+            raise RuntimeError("DATABASE_URL not set — configure via Vault or .env")
+        _pool = psycopg2.pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=5,
+            dsn=url,
+            connect_timeout=30,
+        )
+    return _pool
+
 
 def get_conn() -> psycopg2.extensions.connection:
-    """Return a psycopg2 connection to the alerts database.
+    """Return a psycopg2 connection from the pool.
 
     Raises:
         RuntimeError: If DATABASE_URL is not configured.
         psycopg2.OperationalError: If the database is unreachable.
     """
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL not set — configure via Vault or .env")
-    return psycopg2.connect(DATABASE_URL, connect_timeout=30)
+    return _get_pool().getconn()
+
+
+def _put_conn(conn: psycopg2.extensions.connection) -> None:
+    """Return a connection to the pool."""
+    try:
+        _get_pool().putconn(conn)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
@@ -55,7 +80,8 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
         )
         RETURNING id
     """
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 sql,
@@ -78,6 +104,8 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
             row = cur.fetchone()
             conn.commit()
             return row[0]
+    finally:
+        _put_conn(conn)
 
 
 def update_outcome(alert_id: int, outcome: str, pnl: float) -> None:
@@ -93,10 +121,13 @@ def update_outcome(alert_id: int, outcome: str, pnl: float) -> None:
         SET outcome = %s, outcome_pnl = %s, updated_at = NOW()
         WHERE id = %s
     """
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         with conn.cursor() as cur:
             cur.execute(sql, (outcome, pnl, alert_id))
             conn.commit()
+    finally:
+        _put_conn(conn)
 
 
 def get_recent_alerts(limit: int = 50) -> list[dict]:
@@ -109,10 +140,13 @@ def get_recent_alerts(limit: int = 50) -> list[dict]:
         List of alert dicts (column-name keyed).
     """
     sql = "SELECT * FROM alerts ORDER BY created_at DESC LIMIT %s"
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, (limit,))
             return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
 
 
 def get_winrate_by_bucket() -> list[dict]:
@@ -134,17 +168,21 @@ def get_winrate_by_bucket() -> list[dict]:
         GROUP BY bucket
         ORDER BY bucket DESC
     """
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql)
             return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
 
 
 if __name__ == "__main__":
     # Test connection only — do not insert real data
     try:
-        with get_conn() as conn:
-            print("DB connection successful ✅")
+        conn = get_conn()
+        _put_conn(conn)
+        print("DB connection successful ✅")
     except Exception as e:
         print(f"DB not available (expected in dev): {e}")
         print("db.py structure valid ✅")

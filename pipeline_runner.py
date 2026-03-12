@@ -16,9 +16,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import concurrent.futures
 import logging
+import operator
 import os
 import re
 import sys
@@ -68,7 +70,34 @@ def _new_http_client() -> httpx.AsyncClient:
 
 _TEMPLATE_RE = re.compile(r"\{\{(.+?)\}\}", re.DOTALL)
 
-_SAFE_BUILTINS: dict[str, Any] = {
+_SAFE_NAMES: dict[str, Any] = {
+    "True": True,
+    "False": False,
+    "None": None,
+}
+
+_SAFE_FUNCS: frozenset[str] = frozenset(
+    {
+        "len",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "min",
+        "max",
+        "abs",
+        "round",
+        "isinstance",
+        "sorted",
+        "enumerate",
+    }
+)
+
+_SAFE_FUNC_MAP: dict[str, Any] = {
     "len": len,
     "str": str,
     "int": int,
@@ -78,9 +107,6 @@ _SAFE_BUILTINS: dict[str, Any] = {
     "dict": dict,
     "tuple": tuple,
     "set": set,
-    "True": True,
-    "False": False,
-    "None": None,
     "min": min,
     "max": max,
     "abs": abs,
@@ -90,9 +116,125 @@ _SAFE_BUILTINS: dict[str, Any] = {
     "enumerate": enumerate,
 }
 
+_CMP_OPS: dict[type, Any] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Is: operator.is_,
+    ast.IsNot: operator.is_not,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+
+_BIN_OPS: dict[type, Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+}
+
+_UNARY_OPS: dict[type, Any] = {
+    ast.Not: operator.not_,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval(expr: str, ns: dict[str, Any]) -> Any:
+    """Evaluate a template expression via AST walking — no exec/eval.
+
+    Only allows: constants, name lookups in *ns*, subscript access,
+    attribute access (blocked for dunder attrs), slicing, comparisons,
+    boolean ops, unary ops, basic arithmetic, and whitelisted function
+    calls.
+
+    Raises:
+        ValueError: On any disallowed AST node or dunder attribute access.
+    """
+    tree = ast.parse(expr.strip(), mode="eval")
+
+    def _eval(node: ast.AST) -> Any:  # noqa: PLR0911
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            if node.id in _SAFE_NAMES:
+                return _SAFE_NAMES[node.id]
+            if node.id in ns:
+                return ns[node.id]
+            if node.id in _SAFE_FUNC_MAP:
+                return _SAFE_FUNC_MAP[node.id]
+            raise ValueError(f"Name {node.id!r} is not allowed")
+        if isinstance(node, ast.Subscript):
+            obj = _eval(node.value)
+            slc = _eval(node.slice)
+            return obj[slc]
+        if isinstance(node, ast.Slice):
+            return slice(
+                _eval(node.lower) if node.lower else None,
+                _eval(node.upper) if node.upper else None,
+                _eval(node.step) if node.step else None,
+            )
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__"):
+                raise ValueError(f"Dunder attribute access is forbidden: {node.attr}")
+            return getattr(_eval(node.value), node.attr)
+        if isinstance(node, ast.UnaryOp):
+            op_fn = _UNARY_OPS.get(type(node.op))
+            if op_fn is None:
+                raise ValueError(f"Unary op {type(node.op).__name__} not allowed")
+            return op_fn(_eval(node.operand))
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                return all(_eval(v) for v in node.values)
+            return any(_eval(v) for v in node.values)
+        if isinstance(node, ast.BinOp):
+            op_fn = _BIN_OPS.get(type(node.op))
+            if op_fn is None:
+                raise ValueError(f"BinOp {type(node.op).__name__} not allowed")
+            return op_fn(_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                op_fn = _CMP_OPS.get(type(op))
+                if op_fn is None:
+                    raise ValueError(f"Compare op {type(op).__name__} not allowed")
+                right = _eval(comparator)
+                if not op_fn(left, right):
+                    return False
+                left = right
+            return True
+        if isinstance(node, ast.Call):
+            func = _eval(node.func)
+            if callable(func) and getattr(func, "__name__", "") in _SAFE_FUNCS:
+                args = [_eval(a) for a in node.args]
+                kwargs = {kw.arg: _eval(kw.value) for kw in node.keywords}
+                return func(*args, **kwargs)
+            raise ValueError(f"Function call not allowed: {ast.dump(node.func)}")
+        if isinstance(node, ast.IfExp):
+            return _eval(node.body) if _eval(node.test) else _eval(node.orelse)
+        if isinstance(node, ast.List):
+            return [_eval(e) for e in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(_eval(e) for e in node.elts)
+        if isinstance(node, ast.Dict):
+            return {_eval(k): _eval(v) for k, v in zip(node.keys, node.values)}
+        raise ValueError(f"AST node {type(node).__name__} is not allowed")
+
+    return _eval(tree)
+
 
 def _render_template(template: str, steps: dict[str, Any], extra_vars: dict[str, Any] | None = None) -> Any:
     """Evaluate ``{{ expr }}`` Jinja-style template expressions.
+
+    Uses a safe AST walker instead of ``eval()`` to prevent code
+    injection from untrusted MCP responses in the ``steps`` dict.
 
     If the entire string is a single expression, returns the raw Python
     value (not stringified).  Mixed text+expression strings are returned
@@ -111,12 +253,12 @@ def _render_template(template: str, steps: dict[str, Any], extra_vars: dict[str,
 
     # Single expression spanning the full string → return raw value
     if len(matches) == 1 and matches[0].start() == 0 and matches[0].end() == len(template.strip()):
-        return eval(matches[0].group(1).strip(), {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S307
+        return _safe_eval(matches[0].group(1), ns)
 
     # Multiple/mixed → string interpolation
     result = template
     for m in reversed(matches):
-        val = eval(m.group(1).strip(), {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S307
+        val = _safe_eval(m.group(1), ns)
         result = result[: m.start()] + str(val) + result[m.end() :]
     return result
 
@@ -166,6 +308,16 @@ def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> di
 # ── LLM call helper ─────────────────────────────────────────────────
 
 
+# Enable Langfuse callbacks once at module level (not per-call).
+try:
+    import litellm as _litellm
+
+    _litellm.success_callback = ["langfuse"]
+    _litellm.failure_callback = ["langfuse"]
+except ImportError:  # litellm not installed — LLM steps will fail later
+    pass
+
+
 def _llm_call(
     prompt: str,
     model: str,
@@ -175,10 +327,6 @@ def _llm_call(
 ) -> str:
     """Call the LLM via litellm.completion with Langfuse tracing."""
     import litellm
-
-    # Enable Langfuse callbacks for automatic generation capture
-    litellm.success_callback = ["langfuse"]
-    litellm.failure_callback = ["langfuse"]
 
     # Parse SYSTEM: ... USER: ... format if present
     system_msg = ""

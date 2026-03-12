@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
 
+_discord_client: httpx.Client | None = None
+
+
+def _get_discord_client() -> httpx.Client:
+    """Return a module-level HTTP client for Discord API calls."""
+    global _discord_client  # noqa: PLW0603
+    if _discord_client is None or _discord_client.is_closed:
+        _discord_client = httpx.Client(
+            timeout=httpx.Timeout(connect=5.0, read=DISCORD_HTTP_TIMEOUT, write=5.0, pool=5.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _discord_client
+
 
 def _discord_webhook() -> str | None:
     return os.getenv("DISCORD_WEBHOOK")
@@ -132,7 +145,7 @@ def send_discord_embed(embed_payload: dict) -> bool:
     try:
         webhook = _discord_webhook()
         if webhook:
-            resp = httpx.post(webhook, json=embed_payload, timeout=DISCORD_HTTP_TIMEOUT)
+            resp = _get_discord_client().post(webhook, json=embed_payload)
             resp.raise_for_status()
             return True
 
@@ -141,11 +154,10 @@ def send_discord_embed(embed_payload: dict) -> bool:
         if bot_token and alert_channel:
             url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
             headers = {"Authorization": f"Bot {bot_token}"}
-            resp = httpx.post(
+            resp = _get_discord_client().post(
                 url,
                 json=embed_payload,
                 headers=headers,
-                timeout=DISCORD_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
             return True
@@ -172,11 +184,10 @@ def send_ops_message(message: str) -> None:
     try:
         url = f"https://discord.com/api/v10/channels/{_discord_ops_channel_id()}/messages"
         headers = {"Authorization": f"Bot {_discord_bot_token()}"}
-        resp = httpx.post(
+        resp = _get_discord_client().post(
             url,
             json={"content": message},
             headers=headers,
-            timeout=DISCORD_HTTP_TIMEOUT,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:

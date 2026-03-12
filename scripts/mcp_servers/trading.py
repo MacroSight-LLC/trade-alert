@@ -58,10 +58,28 @@ async def screen(params: dict[str, Any]) -> dict:
                         "close": day.get("c", 0.0),
                     }
                 )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 403:
+            logger.debug("Polygon screen 403 (plan limit) — falling back")
+        else:
+            logger.warning("Polygon screen HTTP %d: %s", exc.response.status_code, exc)
     except httpx.HTTPError as exc:
         logger.warning("Polygon screen error: %s", exc)
 
-    # If Polygon fails or returns nothing, try top-of-mind defaults
+    # Polygon failed or returned nothing — try Finnhub most-active as fallback
+    if not results and FINNHUB_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                resp = await client.get(
+                    "https://finnhub.io/api/v1/stock/market-status",
+                    params={"exchange": "US", "token": FINNHUB_API_KEY},
+                )
+                # Finnhub doesn't have a direct screen endpoint, so
+                # fall through to defaults if this doesn't help.
+        except httpx.HTTPError as exc:
+            logger.debug("Finnhub market-status fallback failed: %s", exc)
+
+    # If all sources fail, use top-of-mind defaults
     if not results:
         defaults = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD", "SPY", "QQQ"]
         results = [{"symbol": s, "market_cap": 0, "pe_ratio": 0.0} for s in defaults[:limit]]

@@ -6,10 +6,15 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from outcome_tracker import _map_db_row, evaluate_outcome, get_current_price, run_tracker_cycle
+from outcome_tracker import (
+    _map_db_row,
+    evaluate_outcome,
+    get_current_price,
+    is_crypto,
+    run_tracker_cycle,
+)
 
 
 @pytest.fixture()
@@ -156,62 +161,83 @@ class TestMapDbRow:
         assert mapped["symbol"] == "SPY"
 
 
+# ── is_crypto ───────────────────────────────────────────────────
+
+
+class TestIsCrypto:
+    """Tests for crypto symbol detection."""
+
+    def test_known_crypto(self) -> None:
+        assert is_crypto("BTC") is True
+        assert is_crypto("ETH") is True
+        assert is_crypto("SOL") is True
+
+    def test_crypto_with_usd_suffix(self) -> None:
+        assert is_crypto("BTCUSD") is True
+        assert is_crypto("ETHUSD") is True
+
+    def test_equity_not_crypto(self) -> None:
+        assert is_crypto("AAPL") is False
+        assert is_crypto("NVDA") is False
+        assert is_crypto("SPY") is False
+
+    def test_case_insensitive(self) -> None:
+        assert is_crypto("btc") is True
+        assert is_crypto("Eth") is True
+
+
 # ── get_current_price ───────────────────────────────────────────
 
 
 class TestGetCurrentPrice:
-    """Tests for Polygon.io price fetching."""
+    """Tests for multi-source price fetching."""
 
-    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
-    @patch("outcome_tracker.httpx.get")
-    def test_success(self, mock_get: MagicMock) -> None:
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=MagicMock(return_value={"ticker": {"day": {"c": 185.50}}}),
-        )
-        mock_get.return_value.raise_for_status = MagicMock()
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
+    @patch("outcome_tracker._polygon_prev_close", return_value=185.50)
+    def test_equity_polygon_success(self, mock_polygon: MagicMock) -> None:
         assert get_current_price("AAPL") == pytest.approx(185.50)
+        mock_polygon.assert_called_once_with("AAPL")
 
-    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
     @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
-    @patch("outcome_tracker.httpx.get")
-    def test_http_error_returns_none(self, mock_get: MagicMock) -> None:
-        mock_get.side_effect = httpx.HTTPError("500")
-        assert get_current_price("AAPL") is None
+    @patch("outcome_tracker._finnhub_quote", return_value=186.0)
+    @patch("outcome_tracker._polygon_prev_close", return_value=None)
+    def test_equity_fallback_to_finnhub(self, _poly: MagicMock, mock_fh: MagicMock) -> None:
+        assert get_current_price("AAPL") == pytest.approx(186.0)
+        mock_fh.assert_called_once_with("AAPL")
 
-    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
     @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
-    @patch("outcome_tracker.httpx.get")
-    def test_bad_json_returns_none(self, mock_get: MagicMock) -> None:
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=MagicMock(return_value={"bad": "shape"}),
-        )
-        mock_get.return_value.raise_for_status = MagicMock()
+    @patch("outcome_tracker._finnhub_quote", return_value=None)
+    @patch("outcome_tracker._polygon_prev_close", return_value=None)
+    def test_equity_all_sources_fail(self, _poly: MagicMock, _fh: MagicMock) -> None:
         assert get_current_price("AAPL") is None
 
-    @patch("outcome_tracker.POLYGON_API_KEY", None)
-    def test_no_api_key_returns_none(self) -> None:
-        assert get_current_price("AAPL") is None
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
+    @patch("outcome_tracker._coingecko_price", return_value=67500.0)
+    def test_crypto_coingecko_success(self, mock_cg: MagicMock) -> None:
+        assert get_current_price("BTC") == pytest.approx(67500.0)
+        mock_cg.assert_called_once_with("BTC")
 
-    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
+    @patch("outcome_tracker._binance_price", return_value=67000.0)
+    @patch("outcome_tracker._coingecko_price", return_value=None)
+    def test_crypto_fallback_to_binance(self, _cg: MagicMock, mock_bin: MagicMock) -> None:
+        assert get_current_price("ETH") == pytest.approx(67000.0)
+
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
+    @patch("outcome_tracker._binance_price", return_value=None)
+    @patch("outcome_tracker._coingecko_price", return_value=None)
+    def test_crypto_all_sources_fail(self, _cg: MagicMock, _bin: MagicMock) -> None:
+        assert get_current_price("BTC") is None
+
     @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 3)
     @patch("outcome_tracker.time.sleep")
-    @patch("outcome_tracker.httpx.get")
-    def test_retries_on_failure(self, mock_get: MagicMock, mock_sleep: MagicMock) -> None:
+    @patch("outcome_tracker._polygon_prev_close")
+    def test_retries_on_failure(self, mock_poly: MagicMock, mock_sleep: MagicMock) -> None:
         """Verify retry logic with exponential backoff."""
-        mock_get.side_effect = [
-            httpx.HTTPError("503"),
-            httpx.HTTPError("503"),
-            MagicMock(
-                status_code=200,
-                json=MagicMock(return_value={"ticker": {"day": {"c": 190.0}}}),
-                raise_for_status=MagicMock(),
-            ),
-        ]
+        mock_poly.side_effect = [None, None, 190.0]
         result = get_current_price("AAPL")
         assert result == pytest.approx(190.0)
-        assert mock_get.call_count == 3
+        assert mock_poly.call_count == 3
         assert mock_sleep.call_count == 2
 
 

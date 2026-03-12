@@ -159,6 +159,10 @@ def add_score(
 def tag_trace(trace_id: str | None, tags: list[str]) -> None:
     """Append tags to an existing trace.
 
+    Uses ``lf.trace(id=...)`` directly instead of fetching the trace
+    first, which avoids 404 errors when the trace hasn't been flushed
+    to the Langfuse backend yet.
+
     Args:
         trace_id: The trace to tag.
         tags: List of string tags to add.
@@ -169,12 +173,7 @@ def tag_trace(trace_id: str | None, tags: list[str]) -> None:
     if lf is None:
         return
     try:
-        resp = lf.fetch_trace(trace_id)
-        existing_tags = (
-            getattr(resp, "tags", None) or getattr(getattr(resp, "data", None), "tags", None) or []
-        )
-        merged = list(set(existing_tags + tags))
-        lf.trace(id=trace_id).update(tags=merged)
+        lf.trace(id=trace_id, tags=tags)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to tag trace %s: %s", trace_id, exc)
 
@@ -204,7 +203,7 @@ def end_pipeline_trace(
             output=output,
             metadata=metadata or {},
         )
-        lf.flush()
+        lf.shutdown()
         logger.info("Finalised pipeline trace %s", trace_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to finalise pipeline trace: %s", exc)

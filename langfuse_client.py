@@ -8,6 +8,7 @@ can degrade gracefully.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -57,6 +58,7 @@ def get_langfuse_client() -> Langfuse | None:
             secret_key=secret_key,
             host=host,
         )
+        atexit.register(_shutdown_client)
         logger.info("Langfuse client initialised (host=%s)", host)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to initialise Langfuse client: %s", exc)
@@ -65,8 +67,22 @@ def get_langfuse_client() -> Langfuse | None:
     return _client
 
 
+def _shutdown_client() -> None:
+    """Gracefully shut down the Langfuse client at process exit."""
+    if _client is not None:
+        try:
+            _client.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def reset_client() -> None:
     """Reset the cached client (useful for testing)."""
     global _client, _initialised  # noqa: PLW0603
+    if _client is not None:
+        try:
+            _client.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
     _client = None
     _initialised = False

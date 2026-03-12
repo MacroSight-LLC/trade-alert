@@ -151,7 +151,7 @@ class TestEndPipelineTrace:
             output={"status": "completed"},
             metadata={"extra": "data"},
         )
-        lf.flush.assert_called_once()
+        lf.shutdown.assert_called_once()
 
     @patch("pipeline_tracing.get_langfuse_client")
     def test_handles_sdk_error_gracefully(self, mock_client: MagicMock) -> None:

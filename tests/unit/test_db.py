@@ -45,6 +45,7 @@ class TestInsertAlert:
 class TestGetConn:
     """Tests for db.get_conn()."""
 
+    @patch("db._pool", None)
     @patch("db.DATABASE_URL", None)
     def test_raises_when_database_url_not_set(self) -> None:
         from db import get_conn
@@ -52,14 +53,22 @@ class TestGetConn:
         with pytest.raises(RuntimeError, match="DATABASE_URL not set"):
             get_conn()
 
-    @patch("db.psycopg2")
+    @patch("db._pool", None)
+    @patch("db.psycopg2.pool.SimpleConnectionPool")
     @patch("db.DATABASE_URL", "postgresql://user:pass@host/db")
-    def test_passes_connect_timeout(self, mock_psycopg2: MagicMock) -> None:
+    def test_creates_pool_with_params(self, mock_pool_cls: MagicMock) -> None:
+        mock_pool = MagicMock()
+        mock_pool.closed = False
+        mock_pool.getconn.return_value = MagicMock()
+        mock_pool_cls.return_value = mock_pool
+
         from db import get_conn
 
         get_conn()
-        mock_psycopg2.connect.assert_called_once_with(
-            "postgresql://user:pass@host/db",
+        mock_pool_cls.assert_called_once_with(
+            minconn=1,
+            maxconn=5,
+            dsn="postgresql://user:pass@host/db",
             connect_timeout=30,
         )
 

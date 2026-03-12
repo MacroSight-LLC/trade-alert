@@ -31,8 +31,9 @@ TRACE_LATENCY_MAX: float = float(os.getenv("TRACE_LATENCY_MAX", "120"))
 def fetch_latest_trace(session_id: str) -> dict | None:
     """Fetch the most recent Langfuse trace for *session_id*.
 
-    Uses the Langfuse SDK ``fetch_traces`` method.  The SDK handles
-    retries and auth internally.
+    Uses the Langfuse SDK ``fetch_traces`` to find the latest trace ID,
+    then ``fetch_trace`` to retrieve full details (including observations
+    with cost and token data).
 
     Args:
         session_id: Langfuse session identifier (e.g. ``orchestrator-15m``).
@@ -52,18 +53,47 @@ def fetch_latest_trace(session_id: str) -> dict | None:
             order_by="timestamp.DESC",
         )
         traces = response.data if response.data else []
-        if traces:
-            trace = traces[0]
-            # SDK returns objects — convert to dict for uniform handling
-            return trace.__dict__ if hasattr(trace, "__dict__") else trace
-        logger.info("No traces found for session %s", session_id)
-        return None
+        if not traces:
+            logger.info("No traces found for session %s", session_id)
+            return None
+
+        trace_id: str = traces[0].id
+
+        # Fetch full trace with observations (includes cost/token data)
+        full = lf.fetch_trace(trace_id)
+        trace_obj = full.data if full else None
+        if trace_obj is None:
+            logger.warning("fetch_trace(%s) returned no data", trace_id)
+            return None
+
+        # Convert SDK object → dict for uniform downstream handling
+        return trace_obj.dict() if hasattr(trace_obj, "dict") else trace_obj.__dict__
     except Exception as exc:  # noqa: BLE001
         logger.warning("Langfuse trace fetch failed: %s", exc)
         return None
 
 
 # ── Individual Checks ────────────────────────────────────────────────────────
+
+
+def _sum_tokens(observations: list[dict]) -> int:
+    """Sum total tokens across all observations in a trace.
+
+    Args:
+        observations: List of observation dicts from ``TraceWithFullDetails``.
+
+    Returns:
+        Total token count across all observations.
+    """
+    total = 0
+    for obs in observations:
+        usage = obs.get("usage") if isinstance(obs, dict) else getattr(obs, "usage", None)
+        if usage is None:
+            continue
+        tok = usage.get("total") if isinstance(usage, dict) else getattr(usage, "total", None)
+        if tok:
+            total += int(tok)
+    return total
 
 
 def check_output_validity(trace: dict) -> list[str]:
@@ -121,7 +151,7 @@ def check_cost(trace: dict, budget: float) -> list[str]:
         List of cost issues (empty means within budget).
     """
     issues: list[str] = []
-    cost = trace.get("calculatedTotalCost") or 0.0
+    cost = trace.get("total_cost") or 0.0
     if cost > budget:
         issues.append(f"Cost ${cost:.4f} exceeds budget ${budget:.2f}")
     return issues
@@ -211,10 +241,13 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     all_issues.extend(check_latency(trace, TRACE_LATENCY_MAX))
 
     is_healthy = len(all_issues) == 0
-    cost = trace.get("calculatedTotalCost") or 0.0
+    cost = trace.get("total_cost") or 0.0
     latency = trace.get("latency") or 0.0
-    llm_calls = trace.get("observations", 0) if isinstance(trace.get("observations"), int) else 0
-    total_tokens = trace.get("totalTokens") or trace.get("usage", {}).get("totalTokens", 0)
+
+    # observations is a list of ObservationsView dicts from fetch_trace()
+    observations = trace.get("observations") or []
+    llm_calls = len(observations)
+    total_tokens = _sum_tokens(observations)
 
     # Compute health score: 1.0 = perfect, deduct 0.25 per issue, floor 0.0
     health_score = max(0.0, 1.0 - 0.25 * len(all_issues))
