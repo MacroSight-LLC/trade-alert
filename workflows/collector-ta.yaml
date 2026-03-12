@@ -34,35 +34,39 @@ steps:
 
   # Step 2 -- TradingView bollinger_scan + rsi_scan for equities and crypto (15m)
   # SSOT S3: TradingView MCP -- batch symbols/timeframes to respect rate limits (max 20 per call)
-  # Reduced to 4 parallel calls (15m only) to avoid TradingView 429 rate limits.
-  # 15m signals are reused for 1h snapshots since TA direction is still valid.
-  - name: fetch-tradingview-signals
-    type: parallel_tool_calls
-    calls:
-      # Equity bollinger -- 15m
-      - tool: tradingview-mcp
-        method: bollinger_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][:20] }}"
-          timeframe: "15m"
-      # Equity RSI -- 15m
-      - tool: tradingview-mcp
-        method: rsi_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][:20] }}"
-          timeframe: "15m"
-      # Crypto bollinger -- 15m
-      - tool: tradingview-mcp
-        method: bollinger_scan
-        params:
-          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
-          timeframe: "15m"
-      # Crypto RSI -- 15m
-      - tool: tradingview-mcp
-        method: rsi_scan
-        params:
-          symbols: "{{ steps['read-universes']['crypto'][:20] }}"
-          timeframe: "15m"
+  # Sequential calls to avoid TradingView 429 rate limits. Each call processes
+  # symbols serially with 2s delay. 15m signals reused for 1h snapshots.
+  - name: fetch-tv-eq-bollinger
+    type: tool_call
+    tool: tradingview-mcp
+    method: bollinger_scan
+    params:
+      symbols: "{{ steps['read-universes']['equities'][:10] }}"
+      timeframe: "15m"
+
+  - name: fetch-tv-eq-rsi
+    type: tool_call
+    tool: tradingview-mcp
+    method: rsi_scan
+    params:
+      symbols: "{{ steps['read-universes']['equities'][:10] }}"
+      timeframe: "15m"
+
+  - name: fetch-tv-crypto-bollinger
+    type: tool_call
+    tool: tradingview-mcp
+    method: bollinger_scan
+    params:
+      symbols: "{{ steps['read-universes']['crypto'][:10] }}"
+      timeframe: "15m"
+
+  - name: fetch-tv-crypto-rsi
+    type: tool_call
+    tool: tradingview-mcp
+    method: rsi_scan
+    params:
+      symbols: "{{ steps['read-universes']['crypto'][:10] }}"
+      timeframe: "15m"
 
   # Step 3 -- trading-mcp screen for fundamental context on equities only
   # SSOT S3: trading-mcp fundamental filters (P/E, sector) as context, not final signal
@@ -89,18 +93,20 @@ steps:
       r = redis.Redis(host="redis", port=6379, decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
-      # parallel_tool_calls returns a list of 4 MCP responses (ordered by call index):
-      #   [0]=bollinger eq 15m, [1]=rsi eq 15m, [2]=bollinger crypto 15m, [3]=rsi crypto 15m
-      # We reuse 15m signals for both 15m and 1h snapshots.
-      raw = steps["fetch-tradingview-signals"]
+      # Sequential tool_call steps (no longer parallel_tool_calls):
+      #   fetch-tv-eq-bollinger, fetch-tv-eq-rsi, fetch-tv-crypto-bollinger, fetch-tv-crypto-rsi
+      raw_bb_eq = steps.get("fetch-tv-eq-bollinger", {})
+      raw_rsi_eq = steps.get("fetch-tv-eq-rsi", {})
+      raw_bb_crypto = steps.get("fetch-tv-crypto-bollinger", {})
+      raw_rsi_crypto = steps.get("fetch-tv-crypto-rsi", {})
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
           merged = {}
 
-          # Merge bollinger results (indices 0=equities, 2=crypto)
-          for i in [0, 2]:
-              items = raw[i].get("results", []) if isinstance(raw[i], dict) else []
+          # Merge bollinger results (equities + crypto)
+          for raw in [raw_bb_eq, raw_bb_crypto]:
+              items = raw.get("results", []) if isinstance(raw, dict) else []
               for item in items:
                   sym = item.get("symbol", "")
                   if not sym:
@@ -112,9 +118,9 @@ steps:
                   if item.get("squeeze") and "bb_squeeze" not in merged[sym]["patterns"]:
                       merged[sym]["patterns"].append("bb_squeeze")
 
-          # Merge RSI results (indices 1=equities, 3=crypto)
-          for i in [1, 3]:
-              items = raw[i].get("results", []) if isinstance(raw[i], dict) else []
+          # Merge RSI results (equities + crypto)
+          for raw in [raw_rsi_eq, raw_rsi_crypto]:
+              items = raw.get("results", []) if isinstance(raw, dict) else []
               for item in items:
                   sym = item.get("symbol", "")
                   if not sym:

@@ -113,8 +113,9 @@ def _render_params(params: Any, steps: dict[str, Any], extra_vars: dict[str, Any
 # ── MCP call helper ──────────────────────────────────────────────────
 
 
-async def _mcp_call_async(tool: str, method: str, params: dict[str, Any],
-                          client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+async def _mcp_call_async(
+    tool: str, method: str, params: dict[str, Any], client: httpx.AsyncClient | None = None
+) -> dict[str, Any]:
     """Call an MCP server tool endpoint."""
     base = _workflow_mcp_endpoints.get(tool) or MCP_ENDPOINTS.get(tool)
     if not base:

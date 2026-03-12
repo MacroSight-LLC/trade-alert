@@ -3,11 +3,11 @@
 Tools: bollinger_scan, rsi_scan
 No API key required — uses tradingview-ta open-source library.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,35 +15,49 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME = "TradingView MCP"
 
 
-def _get_analysis(symbol: str, screener: str = "america", exchange: str = "NASDAQ",
-                  interval: str = "15m") -> dict | None:
+# Max retries for 429 rate-limit errors
+_MAX_RETRIES = 2
+_RETRY_DELAY = 3.0
+
+
+def _get_analysis(
+    symbol: str, screener: str = "america", exchange: str = "NASDAQ", interval: str = "15m"
+) -> dict | None:
     """Fetch TradingView technical analysis for a symbol."""
-    try:
-        from tradingview_ta import Interval, TA_Handler
+    from tradingview_ta import Interval, TA_Handler
 
-        interval_map = {
-            "1m": Interval.INTERVAL_1_MINUTE,
-            "5m": Interval.INTERVAL_5_MINUTES,
-            "15m": Interval.INTERVAL_15_MINUTES,
-            "1h": Interval.INTERVAL_1_HOUR,
-            "4h": Interval.INTERVAL_4_HOURS,
-            "1D": Interval.INTERVAL_1_DAY,
-        }
+    interval_map = {
+        "1m": Interval.INTERVAL_1_MINUTE,
+        "5m": Interval.INTERVAL_5_MINUTES,
+        "15m": Interval.INTERVAL_15_MINUTES,
+        "1h": Interval.INTERVAL_1_HOUR,
+        "4h": Interval.INTERVAL_4_HOURS,
+        "1D": Interval.INTERVAL_1_DAY,
+    }
 
-        handler = TA_Handler(
-            symbol=symbol,
-            screener=screener,
-            exchange=exchange,
-            interval=interval_map.get(interval, Interval.INTERVAL_15_MINUTES),
-        )
-        analysis = handler.get_analysis()
-        return {
-            "summary": analysis.summary,
-            "indicators": analysis.indicators,
-        }
-    except Exception as exc:
-        logger.warning("TradingView TA failed for %s: %s", symbol, exc)
-        return None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            handler = TA_Handler(
+                symbol=symbol,
+                screener=screener,
+                exchange=exchange,
+                interval=interval_map.get(interval, Interval.INTERVAL_15_MINUTES),
+            )
+            analysis = handler.get_analysis()
+            return {
+                "summary": analysis.summary,
+                "indicators": analysis.indicators,
+            }
+        except Exception as exc:
+            msg = str(exc)
+            if "429" in msg and attempt < _MAX_RETRIES:
+                import time
+
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+                continue
+            logger.warning("TradingView TA failed for %s: %s", symbol, exc)
+            return None
+    return None
 
 
 async def bollinger_scan(params: dict[str, Any]) -> dict:
@@ -64,7 +78,7 @@ async def bollinger_scan(params: dict[str, Any]) -> dict:
     results: list[dict] = []
     for i, sym in enumerate(symbols[:20]):
         if i > 0:
-            await asyncio.sleep(0.5)  # Rate limit: ~2 req/s to TradingView
+            await asyncio.sleep(2.0)  # Rate limit: TradingView aggressively 429s
         analysis = _get_analysis(sym, interval=timeframe)
         if analysis is None:
             continue
@@ -82,12 +96,14 @@ async def bollinger_scan(params: dict[str, Any]) -> dict:
         bb_width = bb_range / close if close > 0 else 0
         squeeze = bb_width < 0.03  # Less than 3% of price = tight squeeze
 
-        results.append({
-            "symbol": sym,
-            "bb_position": round(bb_position, 4),
-            "squeeze": squeeze,
-            "timeframe": timeframe,
-        })
+        results.append(
+            {
+                "symbol": sym,
+                "bb_position": round(bb_position, 4),
+                "squeeze": squeeze,
+                "timeframe": timeframe,
+            }
+        )
 
     return {"results": results}
 
@@ -110,18 +126,20 @@ async def rsi_scan(params: dict[str, Any]) -> dict:
     results: list[dict] = []
     for i, sym in enumerate(symbols[:20]):
         if i > 0:
-            await asyncio.sleep(0.5)  # Rate limit: ~2 req/s to TradingView
+            await asyncio.sleep(2.0)  # Rate limit: TradingView aggressively 429s
         analysis = _get_analysis(sym, interval=timeframe)
         if analysis is None:
             continue
         indicators = analysis.get("indicators", {})
         rsi = indicators.get("RSI", 50.0)
         if rsi is not None:
-            results.append({
-                "symbol": sym,
-                "rsi": round(rsi, 2),
-                "timeframe": timeframe,
-            })
+            results.append(
+                {
+                    "symbol": sym,
+                    "rsi": round(rsi, 2),
+                    "timeframe": timeframe,
+                }
+            )
 
     return {"results": results}
 

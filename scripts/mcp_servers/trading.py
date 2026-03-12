@@ -3,6 +3,7 @@
 Tools: screen, insiders
 Uses Polygon.io API (same key as Polygon MCP).
 """
+
 from __future__ import annotations
 
 import logging
@@ -47,14 +48,16 @@ async def screen(params: dict[str, Any]) -> dict:
             for t in tickers[:limit]:
                 ticker_info = t.get("ticker", "")
                 day = t.get("day", {})
-                results.append({
-                    "symbol": ticker_info,
-                    "market_cap": 0,  # Snapshot doesn't include market cap
-                    "pe_ratio": 0.0,
-                    "volume": int(day.get("v", 0)),
-                    "change_pct": round(t.get("todaysChangePerc", 0.0), 2),
-                    "close": day.get("c", 0.0),
-                })
+                results.append(
+                    {
+                        "symbol": ticker_info,
+                        "market_cap": 0,  # Snapshot doesn't include market cap
+                        "pe_ratio": 0.0,
+                        "volume": int(day.get("v", 0)),
+                        "change_pct": round(t.get("todaysChangePerc", 0.0), 2),
+                        "close": day.get("c", 0.0),
+                    }
+                )
     except httpx.HTTPError as exc:
         logger.warning("Polygon screen error: %s", exc)
 
@@ -98,12 +101,14 @@ async def insiders(params: dict[str, Any]) -> dict:
 
             for tx in data[:limit]:
                 tx_type = "buy" if (tx.get("transactionCode") or "").upper() in ("P", "A") else "sell"
-                results.append({
-                    "symbol": tx.get("symbol", symbol),
-                    "type": tx_type,
-                    "shares": abs(tx.get("share") or 0),
-                    "name": tx.get("name", ""),
-                })
+                results.append(
+                    {
+                        "symbol": tx.get("symbol", symbol),
+                        "type": tx_type,
+                        "shares": abs(tx.get("share") or 0),
+                        "name": tx.get("name", ""),
+                    }
+                )
     except httpx.HTTPError as exc:
         logger.warning("Finnhub insiders error: %s", exc)
 
