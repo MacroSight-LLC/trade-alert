@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,117 @@ SERVICE_NAME = "TradingView MCP"
 _MAX_RETRIES = 2
 _RETRY_DELAY = 3.0
 
+# --- Exchange / screener auto-detection ---
+
+_CRYPTO_SYMBOLS: set[str] = {
+    "BTC",
+    "ETH",
+    "SOL",
+    "BNB",
+    "AVAX",
+    "ADA",
+    "XRP",
+    "DOGE",
+    "DOT",
+    "MATIC",
+    "LINK",
+    "SHIB",
+    "UNI",
+    "LTC",
+    "ATOM",
+    "APT",
+    "ARB",
+    "OP",
+    "SUI",
+    "NEAR",
+    "FIL",
+    "ICP",
+    "HBAR",
+    "VET",
+    "ALGO",
+    "FTM",
+    "SAND",
+    "MANA",
+    "AAVE",
+    "MKR",
+}
+
+# Equities that trade on exchanges other than NASDAQ
+_EXCHANGE_OVERRIDES: dict[str, str] = {
+    "SPY": "AMEX",
+    "QQQ": "AMEX",
+    "IWM": "AMEX",
+    "DIA": "AMEX",
+    "XLF": "AMEX",
+    "XLE": "AMEX",
+    "XLK": "AMEX",
+    "XLV": "AMEX",
+    "GLD": "AMEX",
+    "SLV": "AMEX",
+    "TLT": "AMEX",
+    "HYG": "AMEX",
+    "VXX": "AMEX",
+    "UVXY": "AMEX",
+    "JPM": "NYSE",
+    "BAC": "NYSE",
+    "WMT": "NYSE",
+    "JNJ": "NYSE",
+    "V": "NYSE",
+    "MA": "NYSE",
+    "UNH": "NYSE",
+    "HD": "NYSE",
+    "PG": "NYSE",
+    "KO": "NYSE",
+    "DIS": "NYSE",
+    "NKE": "NYSE",
+    "CVX": "NYSE",
+    "XOM": "NYSE",
+    "GS": "NYSE",
+    "BA": "NYSE",
+    "CAT": "NYSE",
+    "GM": "NYSE",
+    "F": "NYSE",
+}
+
+
+def _resolve_screener_exchange(symbol: str) -> tuple[str, str]:
+    """Return (screener, exchange) for a symbol.
+
+    Crypto symbols → ("crypto", "BINANCE")
+    Known ETFs/NYSE stocks → ("america", <override>)
+    Default → ("america", "NASDAQ")
+    """
+    sym = symbol.upper().replace("USDT", "").replace("USD", "")
+    if sym in _CRYPTO_SYMBOLS or symbol.upper().endswith("USDT"):
+        return ("crypto", "BINANCE")
+    override = _EXCHANGE_OVERRIDES.get(symbol.upper())
+    if override:
+        return ("america", override)
+    return ("america", "NASDAQ")
+
+
+# In-memory TTL cache — avoids re-fetching the same symbol/interval within _CACHE_TTL seconds.
+# Key: (symbol, screener, exchange, interval) → (timestamp, result_dict)
+_CACHE: dict[tuple[str, str, str, str], tuple[float, dict | None]] = {}
+_CACHE_TTL = 300.0  # 5 minutes
+
 
 def _get_analysis(
     symbol: str, screener: str = "america", exchange: str = "NASDAQ", interval: str = "15m"
 ) -> dict | None:
-    """Fetch TradingView technical analysis for a symbol."""
+    """Fetch TradingView technical analysis for a symbol (cached)."""
     from tradingview_ta import Interval, TA_Handler
+
+    # Binance needs USDT-suffixed pairs (e.g. BTCUSDT)
+    tv_symbol = symbol
+    if screener == "crypto" and not symbol.upper().endswith("USDT"):
+        tv_symbol = f"{symbol.upper()}USDT"
+
+    cache_key = (symbol, screener, exchange, interval)
+    now = time.monotonic()
+    cached = _CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1]
 
     interval_map = {
         "1m": Interval.INTERVAL_1_MINUTE,
@@ -38,24 +144,27 @@ def _get_analysis(
     for attempt in range(_MAX_RETRIES + 1):
         try:
             handler = TA_Handler(
-                symbol=symbol,
+                symbol=tv_symbol,
                 screener=screener,
                 exchange=exchange,
                 interval=interval_map.get(interval, Interval.INTERVAL_15_MINUTES),
             )
             analysis = handler.get_analysis()
-            return {
+            result = {
                 "summary": analysis.summary,
                 "indicators": analysis.indicators,
             }
+            _CACHE[cache_key] = (now, result)
+            return result
         except Exception as exc:
             msg = str(exc)
             if "429" in msg and attempt < _MAX_RETRIES:
-                import time
+                import time as _time
 
-                time.sleep(_RETRY_DELAY * (attempt + 1))
+                _time.sleep(_RETRY_DELAY * (attempt + 1))
                 continue
             logger.warning("TradingView TA failed for %s: %s", symbol, exc)
+            _CACHE[cache_key] = (now, None)
             return None
     return None
 
@@ -77,9 +186,11 @@ async def bollinger_scan(params: dict[str, Any]) -> dict:
 
     results: list[dict] = []
     for i, sym in enumerate(symbols[:20]):
-        if i > 0:
-            await asyncio.sleep(2.0)  # Rate limit: TradingView aggressively 429s
-        analysis = _get_analysis(sym, interval=timeframe)
+        screener, exchange = _resolve_screener_exchange(sym)
+        cache_key = (sym, screener, exchange, timeframe)
+        if i > 0 and cache_key not in _CACHE:
+            await asyncio.sleep(4.0)  # Rate limit: TradingView aggressively 429s
+        analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
         if analysis is None:
             continue
         indicators = analysis.get("indicators", {})
@@ -125,9 +236,11 @@ async def rsi_scan(params: dict[str, Any]) -> dict:
 
     results: list[dict] = []
     for i, sym in enumerate(symbols[:20]):
-        if i > 0:
-            await asyncio.sleep(2.0)  # Rate limit: TradingView aggressively 429s
-        analysis = _get_analysis(sym, interval=timeframe)
+        screener, exchange = _resolve_screener_exchange(sym)
+        cache_key = (sym, screener, exchange, timeframe)
+        if i > 0 and cache_key not in _CACHE:
+            await asyncio.sleep(4.0)  # Rate limit: TradingView aggressively 429s
+        analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
         if analysis is None:
             continue
         indicators = analysis.get("indicators", {})

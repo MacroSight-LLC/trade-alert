@@ -169,8 +169,11 @@ def tag_trace(trace_id: str | None, tags: list[str]) -> None:
     if lf is None:
         return
     try:
-        existing = lf.fetch_trace(trace_id)
-        merged = list(set((existing.tags or []) + tags))
+        resp = lf.fetch_trace(trace_id)
+        existing_tags = (
+            getattr(resp, "tags", None) or getattr(getattr(resp, "data", None), "tags", None) or []
+        )
+        merged = list(set(existing_tags + tags))
         lf.trace(id=trace_id).update(tags=merged)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to tag trace %s: %s", trace_id, exc)

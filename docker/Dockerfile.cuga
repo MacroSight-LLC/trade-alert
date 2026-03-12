@@ -8,6 +8,12 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Supercronic — baked in at build time (used by cron service)
+ARG SUPERCRONIC_VERSION=v0.2.29
+RUN ARCH="$(dpkg --print-architecture)" && \
+    curl -fsSL "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${ARCH}" \
+    -o /usr/local/bin/supercronic && chmod +x /usr/local/bin/supercronic
+
 WORKDIR /app
 
 # Install CUGA from local source

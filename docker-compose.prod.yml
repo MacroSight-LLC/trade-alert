@@ -407,6 +407,7 @@ services:
       - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
+      - ./tests:/app/tests
     env_file:
       - path: .env
       - path: .env.secrets
@@ -449,15 +450,11 @@ services:
       - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
+      - ./tests:/app/tests
       - ./crontab:/etc/crontabs/root
     # Cron scheduler — runs pipeline_runner.py on schedule via supercronic.
     # See crontab file for schedule definitions.
-    command:
-      [
-        "bash",
-        "-c",
-        "curl -fsSL https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-amd64 -o /usr/local/bin/supercronic && chmod +x /usr/local/bin/supercronic && exec supercronic /etc/crontabs/root",
-      ]
+    command: ["supercronic", "/etc/crontabs/root"]
     env_file:
       - path: .env
       - path: .env.secrets

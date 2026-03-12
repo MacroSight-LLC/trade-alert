@@ -115,6 +115,7 @@ steps:
                   merged.setdefault(sym, {"indicators": {}, "patterns": []})
                   merged[sym]["indicators"]["bb_squeeze"] = item.get("squeeze", False)
                   bb_pos = item.get("bb_position", 0.5)
+                  merged[sym]["indicators"]["bb_position"] = bb_pos
                   merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
                   if item.get("squeeze") and "bb_squeeze" not in merged[sym]["patterns"]:
                       merged[sym]["patterns"].append("bb_squeeze")
@@ -134,6 +135,17 @@ steps:
                   if rsi < 30 or rsi > 70:
                       if "trend_change" not in merged[sym]["patterns"]:
                           merged[sym]["patterns"].append("trend_change")
+
+          # Fallback: for symbols with BB data but no RSI, derive rating from bb_position
+          for sym, data in merged.items():
+              if "rating" not in data:
+                  bb_pos = data.get("indicators", {}).get("bb_position")
+                  if bb_pos is not None:
+                      # bb_position 0→lower band, 0.5→mid, 1→upper band
+                      # Map to [-1.5, +1.5] range (weaker signal than RSI)
+                      data["rating"] = round((bb_pos - 0.5) * 3, 2)
+                  elif data.get("indicators", {}).get("bb_squeeze"):
+                      data["rating"] = 0.0  # neutral — squeeze detected but no direction
 
           snapshots = normalize(merged, timeframe=timeframe)
           redis_key = f"snapshots:{timeframe}"

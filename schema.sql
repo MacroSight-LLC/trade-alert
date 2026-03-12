@@ -24,10 +24,24 @@ CREATE TABLE IF NOT EXISTS alerts (
     sources_agree       INTEGER,
     raw_snapshots       JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     outcome             VARCHAR(20) CHECK (outcome IN ('WIN','LOSS','SCRATCH')),
     outcome_pnl         DECIMAL(10,4)
 );
+
+-- Auto-set updated_at on row modification
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_alerts_updated_at ON alerts;
+CREATE TRIGGER trg_alerts_updated_at
+    BEFORE UPDATE ON alerts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Indexes for analytics queries
 CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol);

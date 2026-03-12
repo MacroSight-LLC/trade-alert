@@ -30,14 +30,27 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
     for symbol, data in raw_results.items():
         rating = data.get("rating")
+        indicators: dict[str, Any] = data.get("indicators", {})
+
+        # Fallback: derive rating from BB position when RSI-based rating is absent
         if rating is None:
-            continue
+            bb_width = indicators.get("bb_width")
+            bb_squeeze = indicators.get("bb_squeeze", False)
+            if bb_width is not None or bb_squeeze:
+                # bb_width here is |bb_position - 0.5| * 2, range [0, 1]
+                # Map: 0 (at lower band) → -1.5, 0.5 (mid) → 0, 1 (at upper) → +1.5
+                raw_bb = indicators.get("bb_width", 0.0)
+                # Reconstruct bb_position: width = |pos - 0.5| * 2
+                # We can't recover direction from width alone; use squeeze as neutral signal
+                rating = 0.0  # neutral fallback from BB-only
+            else:
+                continue
+
         rating = safe_float(rating)
-        if rating == 0.0 and data.get("rating") != 0:
+        if rating == 0.0 and data.get("rating") not in (0, 0.0, None):
             continue
 
         patterns: list[str] = data.get("patterns", [])
-        indicators: dict[str, Any] = data.get("indicators", {})
 
         # Build reason from patterns and indicators (SSOT §7)
         reasons: list[str] = []

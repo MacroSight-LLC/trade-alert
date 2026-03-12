@@ -3,8 +3,10 @@
 Tools: unusual_activity, aggs
 Requires: POLYGON_API_KEY env var.
 """
+
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -19,14 +21,25 @@ API_KEY: str = os.getenv("POLYGON_API_KEY", "")
 BASE_URL = "https://api.polygon.io"
 TIMEOUT = 10.0
 
+# Free-tier: 5 requests/min → 12s between requests keeps us safe
+_REQUEST_DELAY = 12.0
+_MAX_429_RETRIES = 2
+_429_BACKOFF = 15.0
+
 
 async def _get(path: str, params: dict[str, Any] | None = None) -> dict:
-    """Make authenticated GET request to Polygon API."""
+    """Make authenticated GET request to Polygon API with 429 retry."""
     p = {"apiKey": API_KEY, **(params or {})}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{BASE_URL}{path}", params=p)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(_MAX_429_RETRIES + 1):
+            resp = await client.get(f"{BASE_URL}{path}", params=p)
+            if resp.status_code == 429 and attempt < _MAX_429_RETRIES:
+                logger.info("Polygon 429 on %s, backing off %.0fs", path, _429_BACKOFF * (attempt + 1))
+                await asyncio.sleep(_429_BACKOFF * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+    return {}
 
 
 async def unusual_activity(params: dict[str, Any]) -> dict:
@@ -54,13 +67,15 @@ async def unusual_activity(params: dict[str, Any]) -> dict:
                 details = item.get("details", {})
                 day = item.get("day", {})
                 if day.get("volume", 0) > day.get("open_interest", 1) * 0.5:
-                    results.append({
-                        "symbol": sym,
-                        "type": "options_sweep",
-                        "premium": int(day.get("volume", 0) * day.get("close", 0) * 100),
-                        "strike": details.get("strike_price", 0),
-                        "expiry": details.get("expiration_date", ""),
-                    })
+                    results.append(
+                        {
+                            "symbol": sym,
+                            "type": "options_sweep",
+                            "premium": int(day.get("volume", 0) * day.get("close", 0) * 100),
+                            "strike": details.get("strike_price", 0),
+                            "expiry": details.get("expiration_date", ""),
+                        }
+                    )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
                 logger.debug("Polygon options not available for %s (plan limit)", sym)
@@ -75,9 +90,11 @@ async def unusual_activity(params: dict[str, Any]) -> dict:
 async def aggs(params: dict[str, Any]) -> dict:
     """Fetch aggregate bars and compute volume vs 20d average.
 
+    Uses the free-tier /v2/aggs/ticker/{sym}/prev endpoint (previous-day bar)
+    and /v2/aggs/ticker/{sym}/range for a 20-day lookback to compute avg volume.
+
     Params:
         symbols: list[str] — tickers.
-        include_avg_20d_volume: bool — always computed.
 
     Returns:
         {"results": [{"symbol", "volume", "avg_volume", "close"}, ...]}
@@ -87,26 +104,44 @@ async def aggs(params: dict[str, Any]) -> dict:
         symbols = [s.strip() for s in symbols.split(",")]
 
     results: list[dict] = []
-    for sym in symbols[:25]:
+    for i, sym in enumerate(symbols[:25]):
+        if i > 0:
+            await asyncio.sleep(_REQUEST_DELAY)
         try:
-            # Get snapshot for current day
-            snap = await _get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{sym}")
-            ticker = snap.get("ticker", {})
-            day_data = ticker.get("day", {})
-            prev = ticker.get("prevDay", {})
+            # Previous-day close (free-tier endpoint)
+            prev = await _get(f"/v2/aggs/ticker/{sym}/prev")
+            prev_results = prev.get("results", [])
+            if not prev_results:
+                logger.debug("Polygon prev returned no results for %s", sym)
+                continue
+            bar = prev_results[0]
+            volume = int(bar.get("v", 0))
+            close = bar.get("c", 0.0)
 
-            # Use prev day volume as proxy for average when no SMA endpoint
-            volume = int(day_data.get("v", 0))
-            # Polygon snapshot includes min data — estimate avg from prev
-            avg_volume = int(prev.get("v", 1)) or 1
+            # 20-day daily bars for average volume (free-tier endpoint)
+            from datetime import date, timedelta
 
-            results.append({
-                "symbol": sym,
-                "volume": volume,
-                "avg_volume": avg_volume,
-                "avg_20d_volume": avg_volume,
-                "close": day_data.get("c", 0.0),
-            })
+            end = date.today().isoformat()
+            start = (date.today() - timedelta(days=30)).isoformat()
+            hist = await _get(
+                f"/v2/aggs/ticker/{sym}/range/1/day/{start}/{end}",
+                {"adjusted": "true", "limit": 20},
+            )
+            hist_bars = hist.get("results", [])
+            if hist_bars:
+                avg_volume = int(sum(b.get("v", 0) for b in hist_bars) / len(hist_bars)) or 1
+            else:
+                avg_volume = volume or 1
+
+            results.append(
+                {
+                    "symbol": sym,
+                    "volume": volume,
+                    "avg_volume": avg_volume,
+                    "avg_20d_volume": avg_volume,
+                    "close": close,
+                }
+            )
         except httpx.HTTPError as exc:
             logger.warning("Polygon aggs error for %s: %s", sym, exc)
 
