@@ -1,7 +1,7 @@
-"""Pipeline-level Langfuse tracing for non-LLM steps.
+"""Pipeline-level Langfuse tracing for all pipeline steps.
 
 Creates a root trace per orchestrator run and wraps collector,
-merger, and notifier steps in named spans so the full pipeline
+merger, decision, and notifier steps in named spans so the full pipeline
 is visible in the Langfuse timeline — not just the LLM calls.
 
 Also fixes the session_id linkage: the root trace is tagged with
@@ -47,6 +47,7 @@ def create_pipeline_trace(
             name=f"pipeline-{timeframe}",
             session_id=f"orchestrator-{timeframe}",
             metadata=metadata or {},
+            tags=[f"timeframe:{timeframe}", "pipeline"],
         )
         trace_id: str = trace.id
         logger.info(
@@ -66,6 +67,7 @@ def span_step(
     name: str,
     *,
     input_data: Any = None,
+    level: str = "DEFAULT",
 ) -> Generator[dict[str, Any], None, None]:
     """Context manager that wraps a pipeline step in a Langfuse span.
 
@@ -80,12 +82,14 @@ def span_step(
             If ``None`` the block executes without tracing.
         name: Human-readable step name shown in the Langfuse timeline.
         input_data: Optional input payload recorded on the span.
+        level: Span level — ``"DEFAULT"``, ``"DEBUG"``, ``"WARNING"``,
+            or ``"ERROR"``.
 
     Yields:
-        A mutable dict where callers can set ``output`` and
-        ``status_message`` before the span closes.
+        A mutable dict where callers can set ``output``, ``level``,
+        and ``status_message`` before the span closes.
     """
-    ctx: dict[str, Any] = {"output": None, "status_message": "ok"}
+    ctx: dict[str, Any] = {"output": None, "status_message": "ok", "level": level}
 
     if trace_id is None:
         yield ctx
@@ -104,6 +108,7 @@ def span_step(
             name=name,
             start_time=start_ts,
             input=input_data,
+            level=level,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to open span '%s': %s", name, exc)
@@ -118,10 +123,55 @@ def span_step(
                     end_time=datetime.now(tz=timezone.utc),
                     output=ctx.get("output"),
                     status_message=ctx.get("status_message", "ok"),
+                    level=ctx.get("level", level),
                     metadata={"duration_s": round(elapsed, 3)},
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to close span '%s': %s", name, exc)
+
+
+def add_score(
+    trace_id: str | None,
+    name: str,
+    value: float,
+    *,
+    comment: str = "",
+) -> None:
+    """Post a numeric score to a Langfuse trace.
+
+    Args:
+        trace_id: The trace to score.
+        name: Score name (e.g. ``"pipeline_health"``, ``"alert_quality"``).
+        value: Numeric value (0.0\u20131.0 typical).
+        comment: Optional description.
+    """
+    if trace_id is None:
+        return
+    lf = get_langfuse_client()
+    if lf is None:
+        return
+    try:
+        lf.score(trace_id=trace_id, name=name, value=value, comment=comment)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to post score '%s' to trace %s: %s", name, trace_id, exc)
+
+
+def tag_trace(trace_id: str | None, tags: list[str]) -> None:
+    """Append tags to an existing trace.
+
+    Args:
+        trace_id: The trace to tag.
+        tags: List of string tags to add.
+    """
+    if trace_id is None:
+        return
+    lf = get_langfuse_client()
+    if lf is None:
+        return
+    try:
+        lf.trace(id=trace_id).update(tags=tags)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to tag trace %s: %s", trace_id, exc)
 
 
 def end_pipeline_trace(

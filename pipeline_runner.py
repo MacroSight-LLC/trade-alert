@@ -144,9 +144,19 @@ def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> di
 # ── LLM call helper ─────────────────────────────────────────────────
 
 
-def _llm_call(prompt: str, model: str) -> str:
-    """Call the LLM via litellm.completion."""
+def _llm_call(
+    prompt: str,
+    model: str,
+    *,
+    trace_id: str | None = None,
+    step_name: str = "llm-call",
+) -> str:
+    """Call the LLM via litellm.completion with Langfuse tracing."""
     import litellm
+
+    # Enable Langfuse callbacks for automatic generation capture
+    litellm.success_callback = ["langfuse"]
+    litellm.failure_callback = ["langfuse"]
 
     # Parse SYSTEM: ... USER: ... format if present
     system_msg = ""
@@ -168,11 +178,26 @@ def _llm_call(prompt: str, model: str) -> str:
     else:
         litellm_model = model
 
+    # Langfuse metadata — links generation to the pipeline trace
+    lf_metadata: dict[str, Any] = {
+        "generation_name": step_name,
+    }
+    if trace_id:
+        lf_metadata["trace_id"] = trace_id
+
+    try:
+        from prompt_manager import get_prompt_version, get_prompt_source
+        lf_metadata["prompt_version"] = get_prompt_version()
+        lf_metadata["prompt_source"] = get_prompt_source()
+    except Exception:  # noqa: BLE001
+        pass
+
     response = litellm.completion(
         model=litellm_model,
         messages=messages,
         max_tokens=4096,
         temperature=0.2,
+        metadata=lf_metadata,
     )
     return response.choices[0].message.content
 
@@ -251,10 +276,18 @@ def _exec_llm_step(
     steps: dict[str, Any],
     model: str,
     extra_vars: dict[str, Any] | None = None,
+    *,
+    trace_id: str | None = None,
+    step_name: str = "llm-call",
 ) -> str:
-    """Execute an LLM step."""
+    """Execute an LLM step with Langfuse generation tracking."""
     prompt = _render_template(step["prompt"], steps, extra_vars)
-    return _llm_call(str(prompt), model)
+    return _llm_call(
+        str(prompt),
+        model,
+        trace_id=trace_id,
+        step_name=step_name,
+    )
 
 
 # ── Workflow runner ──────────────────────────────────────────────────
@@ -264,6 +297,8 @@ def run_workflow(
     workflow_path: Path,
     inputs: dict[str, Any] | None = None,
     parent_steps: dict[str, Any] | None = None,
+    *,
+    trace_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a YAML workflow file and return all step results.
 
@@ -273,6 +308,8 @@ def run_workflow(
             ``type: workflow`` step with ``inputs:``.
         parent_steps: Step results from the calling workflow (for
             template expressions in inputs).
+        trace_id: Langfuse trace ID — propagated to all child steps
+            so LLM generations and spans are linked to the root trace.
 
     Returns:
         Dict mapping step names to their results.
@@ -316,12 +353,20 @@ def run_workflow(
         for attempt in range(1, max_attempts + 1):
             try:
                 t0 = time.time()
+                # Resolve trace_id: from init-trace step or passed from parent
+                active_trace_id = trace_id
+                if active_trace_id is None:
+                    try:
+                        active_trace_id = step_results.get("init-trace", {}).get("trace_id")
+                    except (AttributeError, TypeError):
+                        pass
                 result = _execute_step(
                     step_def,
                     step_results,
                     model,
                     workflow_path.parent,
                     extra_vars,
+                    trace_id=active_trace_id,
                 )
                 step_results[step_name] = result
                 logger.info("  │  ✓ %s completed (%.1fs)", step_name, time.time() - t0)
@@ -349,12 +394,19 @@ def run_workflow(
                 step_name = step_def.get("name", "unnamed")
                 logger.info("  ├─ step (on-failure): %s", step_name)
                 try:
+                    active_trace_id = trace_id
+                    if active_trace_id is None:
+                        try:
+                            active_trace_id = step_results.get("init-trace", {}).get("trace_id")
+                        except (AttributeError, TypeError):
+                            pass
                     result = _execute_step(
                         step_def,
                         step_results,
                         model,
                         workflow_path.parent,
                         extra_vars,
+                        trace_id=active_trace_id,
                     )
                     step_results[step_name] = result
                 except Exception:
@@ -370,12 +422,21 @@ def _execute_step(
     model: str,
     workflows_dir: Path,
     extra_vars: dict[str, Any],
+    *,
+    trace_id: str | None = None,
 ) -> Any:
     """Dispatch and execute a single step by type."""
     step_type = step_def.get("type", "code")
+    step_name = step_def.get("name", "unnamed")
 
     if step_type == "code":
-        return _exec_code_step(step_def["code"], steps, extra_vars)
+        # Inject trace_id so code blocks can access it for Langfuse scoring
+        code_extra = dict(extra_vars) if extra_vars else {}
+        if trace_id:
+            steps_with_trace = {**steps, "__trace_id__": trace_id}
+        else:
+            steps_with_trace = steps
+        return _exec_code_step(step_def["code"], steps_with_trace, code_extra)
 
     if step_type == "tool_call":
         return _exec_tool_call(step_def, steps, extra_vars)
@@ -384,7 +445,10 @@ def _execute_step(
         return _exec_parallel_tool_calls(step_def, steps, extra_vars)
 
     if step_type == "llm":
-        return _exec_llm_step(step_def, steps, model, extra_vars)
+        return _exec_llm_step(
+            step_def, steps, model, extra_vars,
+            trace_id=trace_id, step_name=step_name,
+        )
 
     if step_type == "workflow":
         sub_path = workflows_dir / step_def["workflow"]
@@ -392,13 +456,22 @@ def _execute_step(
         sub_inputs: dict[str, Any] = {}
         for k, v in step_def.get("inputs", {}).items():
             sub_inputs[k] = _render_params(v, steps, extra_vars)
-        return run_workflow(sub_path, inputs=sub_inputs, parent_steps=steps)
+        return run_workflow(
+            sub_path, inputs=sub_inputs, parent_steps=steps,
+            trace_id=trace_id,
+        )
 
     if step_type == "parallel":
-        return _exec_parallel_workflows(step_def, workflows_dir, steps, extra_vars)
+        return _exec_parallel_workflows(
+            step_def, workflows_dir, steps, extra_vars,
+            trace_id=trace_id,
+        )
 
     if step_type == "conditional":
-        return _exec_conditional(step_def, steps, model, workflows_dir, extra_vars)
+        return _exec_conditional(
+            step_def, steps, model, workflows_dir, extra_vars,
+            trace_id=trace_id, step_name=step_name,
+        )
 
     logger.warning("Unknown step type: %s — skipping", step_type)
     return None
@@ -409,6 +482,8 @@ def _exec_parallel_workflows(
     workflows_dir: Path,
     steps: dict[str, Any],
     extra_vars: dict[str, Any],
+    *,
+    trace_id: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run multiple sub-workflows concurrently via thread pool."""
     workflow_files = step_def.get("workflows", [])
@@ -418,7 +493,7 @@ def _exec_parallel_workflows(
     def _run_one(wf_file: str) -> tuple[str, dict[str, Any] | None]:
         path = workflows_dir / wf_file
         try:
-            return wf_file, run_workflow(path)
+            return wf_file, run_workflow(path, trace_id=trace_id)
         except Exception:
             logger.error("Parallel workflow %s failed:\n%s", wf_file, traceback.format_exc())
             if abort_on_failure:
@@ -440,14 +515,22 @@ def _exec_conditional(
     model: str,
     workflows_dir: Path,
     extra_vars: dict[str, Any],
+    *,
+    trace_id: str | None = None,
+    step_name: str = "conditional",
 ) -> Any:
     """Evaluate a conditional and execute the matching branch."""
     condition = _render_template(step_def["condition"], steps, extra_vars)
     branch = step_def.get("if_true") if condition else step_def.get("if_false")
     if branch is None:
         return None
-    # Branch is a nested step definition
-    return _execute_step(branch, steps, model, workflows_dir, extra_vars)
+    # Propagate step_name into nested branch so LLM steps get the parent name
+    if "name" not in branch:
+        branch = {**branch, "name": step_name}
+    return _execute_step(
+        branch, steps, model, workflows_dir, extra_vars,
+        trace_id=trace_id,
+    )
 
 
 # ── CLI entrypoint ───────────────────────────────────────────────────

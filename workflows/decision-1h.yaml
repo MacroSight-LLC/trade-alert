@@ -137,6 +137,13 @@ steps:
 
         logger = logging.getLogger(__name__)
 
+        # Access parent trace for Langfuse scoring
+        try:
+            from pipeline_tracing import add_score, tag_trace
+            tid = steps.get("__trace_id__")
+        except ImportError:
+            add_score = tag_trace = tid = None
+
         llm_response = steps["ensemble-decide"]
 
         try:
@@ -146,7 +153,12 @@ steps:
             logger.error("Decision engine JSON parse error: %s", e)
             logger.error("Raw response: %s", str(llm_response)[:500])
             result = {"alerts_json": "[]", "count": 0}
+            if add_score and tid:
+                add_score(tid, "llm_json_valid", 0.0, comment="JSON parse failed")
         else:
+            if add_score and tid:
+                add_score(tid, "llm_json_valid", 1.0, comment="valid JSON array")
+
             alerts = []
             for item in raw:
                 try:
@@ -169,6 +181,16 @@ steps:
             logger.info("Decision-1h: %d alerts passed gates", len(alerts))
             alerts_json = json.dumps([a.model_dump() for a in alerts])
             result = {"alerts_json": alerts_json, "count": len(alerts)}
+
+            # Score alert pass rate and tag trace
+            if add_score and tid:
+                pass_rate = len(alerts) / max(len(raw), 1)
+                add_score(tid, "alert_pass_rate", pass_rate,
+                          comment=f"{len(alerts)}/{len(raw)} passed gates")
+                add_score(tid, "alerts_fired", float(len(alerts)),
+                          comment=f"{len(alerts)} alerts")
+            if tag_trace and tid:
+                tag_trace(tid, [f"alerts:{len(alerts)}"])
     if_false:
       type: code
       code: |

@@ -49,7 +49,7 @@ def fetch_latest_trace(session_id: str) -> dict | None:
         response = lf.fetch_traces(
             session_id=session_id,
             limit=1,
-            order_by="timestamp",
+            order_by="timestamp.DESC",
         )
         traces = response.data if response.data else []
         if traces:

@@ -44,18 +44,20 @@ steps:
       - collector-sentiment.yaml
       - collector-macro.yaml
 
-  # Step 1b — Record collector span in Langfuse
+  # Step 1b — Record collector span in Langfuse + score collector health
   - name: span-collectors
     type: code
     code: |
       import logging
       logger = logging.getLogger(__name__)
       try:
-          from pipeline_tracing import span_step
+          from pipeline_tracing import span_step, add_score
           tid = steps["init-trace"]["trace_id"]
           with span_step(tid, "run-collectors", input_data={"workflows": 5}) as ctx:
               ctx["output"] = {"status": "completed"}
               ctx["status_message"] = "5 collectors executed"
+          # Score collector completeness (1.0 = all 5 ran without abort)
+          add_score(tid, "collector_health", 1.0, comment="all 5 collectors completed")
       except Exception as exc:
           logger.debug("Collector span failed (non-blocking): %s", exc)
 
@@ -77,6 +79,11 @@ steps:
           tid = None
 
       try:
+          from pipeline_tracing import add_score, tag_trace
+      except ImportError:
+          add_score = tag_trace = None
+
+      try:
           with span_step(tid, "run-merger") as ctx:
               snapshots = merge("1h", limit=20)
               macro = get_macro_regime()
@@ -84,20 +91,32 @@ steps:
               snapshots_json = json.dumps(
                   [snap.model_dump() for snap in snapshots], indent=2
               )
+              n = len(snapshots)
               logger.info(
                   "Orchestrator-1h merger: %d candidates, macro risk_on=%s",
-                  len(snapshots),
+                  n,
                   macro.get("risk_on", "unknown"),
               )
               result = {
                   "snapshots_json": snapshots_json,
                   "macro": macro,
-                  "n": len(snapshots),
+                  "n": n,
               }
-              ctx["output"] = {"symbols": len(snapshots)}
+              ctx["output"] = {"symbols": n, "risk_on": macro.get("risk_on")}
+
+              # Score merger — normalize candidate count (20 = 1.0)
+              if add_score and tid:
+                  add_score(tid, "merger_candidates", min(n / 20.0, 1.0),
+                            comment=f"{n} symbols merged")
+              # Tag trace with macro regime
+              if tag_trace and tid:
+                  regime = "risk-on" if macro.get("risk_on") else "risk-off"
+                  tag_trace(tid, [f"macro:{regime}", f"candidates:{n}"])
       except Exception as exc:
           logger.error("Orchestrator-1h merger failed: %s", exc)
           result = {"snapshots_json": "[]", "macro": {}, "n": 0}
+          if add_score and tid:
+              add_score(tid, "merger_candidates", 0.0, comment="merger failed")
 
   # Step 3 — Run decision engine for 1h timeframe
   # SSOT §10.3: ensemble reasoning via Claude Sonnet (stricter gates)
@@ -132,16 +151,34 @@ steps:
       except Exception as exc:
           logger.error("Trace analysis failed (non-blocking): %s", exc)
 
-  # Step 6 — Finalise Langfuse pipeline trace with output summary
+  # Step 6 — Finalise Langfuse pipeline trace with rich output summary
   - name: finalise-trace
     type: code
     code: |
       import logging
       logger = logging.getLogger(__name__)
       try:
-          from pipeline_tracing import end_pipeline_trace
+          from pipeline_tracing import end_pipeline_trace, add_score, tag_trace
           tid = steps["init-trace"]["trace_id"]
-          end_pipeline_trace(tid, output={"timeframe": "1h", "status": "completed"})
+
+          # Gather pipeline-wide summary
+          merger_n = steps.get("run-merger", {}).get("n", 0)
+          output = {
+              "timeframe": "1h",
+              "status": "completed",
+              "merger_candidates": merger_n,
+          }
+
+          # Score overall pipeline completeness (reached finalise = 1.0)
+          add_score(tid, "pipeline_completeness", 1.0,
+                    comment="pipeline reached finalise step")
+
+          # Tag with timeframe for easy Langfuse filtering
+          tag_trace(tid, ["status:completed"])
+
+          end_pipeline_trace(tid, output=output, metadata={
+              "merger_candidates": merger_n,
+          })
       except Exception as exc:
           logger.debug("Trace finalisation failed (non-blocking): %s", exc)
 
