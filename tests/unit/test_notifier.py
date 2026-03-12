@@ -212,10 +212,11 @@ class TestSendOpsMessage:
 class TestNotify:
     """Tests for the main notify() entry point."""
 
+    @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_valid_json_sends_and_logs(
-        self, _send: MagicMock, _insert: MagicMock, sample_alert: PlaybookAlert
+        self, _send: MagicMock, _insert: MagicMock, _dedup: MagicMock, sample_alert: PlaybookAlert
     ) -> None:
         alerts_json = json.dumps([sample_alert.model_dump()])
         count = notify(alerts_json, [{"raw": "snap"}])
@@ -223,10 +224,11 @@ class TestNotify:
         _send.assert_called_once()
         _insert.assert_called_once()
 
+    @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=False)
     def test_discord_failure_still_logs(
-        self, _send: MagicMock, _insert: MagicMock, sample_alert: PlaybookAlert
+        self, _send: MagicMock, _insert: MagicMock, _dedup: MagicMock, sample_alert: PlaybookAlert
     ) -> None:
         alerts_json = json.dumps([sample_alert.model_dump()])
         count = notify(alerts_json)
@@ -242,18 +244,20 @@ class TestNotify:
     def test_empty_list(self) -> None:
         assert notify("[]") == 0
 
+    @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert", side_effect=Exception("DB down"))
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_db_error_still_counts_send(
-        self, _send: MagicMock, _insert: MagicMock, sample_alert: PlaybookAlert
+        self, _send: MagicMock, _insert: MagicMock, _dedup: MagicMock, sample_alert: PlaybookAlert
     ) -> None:
         alerts_json = json.dumps([sample_alert.model_dump()])
         count = notify(alerts_json)
         assert count == 1
 
+    @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
-    def test_multiple_alerts(self, _send: MagicMock, _insert: MagicMock, sample_alert: PlaybookAlert) -> None:
+    def test_multiple_alerts(self, _send: MagicMock, _insert: MagicMock, _dedup: MagicMock, sample_alert: PlaybookAlert) -> None:
         alerts_json = json.dumps([sample_alert.model_dump(), sample_alert.model_dump()])
         count = notify(alerts_json)
         assert count == 2

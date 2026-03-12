@@ -206,7 +206,7 @@ class TestAnalyzePipelineTrace:
     def test_healthy_trace(self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock) -> None:
         mock_fetch.return_value = {
             "id": "trace-123",
-            "output": _valid_alert_dict(),
+            "output": {**_valid_alert_dict(), "merger_candidates": 10},
             "total_cost": 0.10,
             "latency": 30.0,
             "observations": [

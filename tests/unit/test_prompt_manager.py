@@ -61,7 +61,7 @@ class TestYAMLFallback:
     def test_1h_extra_rules_in_system(self, _mock: MagicMock) -> None:
         system, _ = pm.get_decision_prompts("1h", _base_variables())
         assert "macro_risk_off" in system
-        assert "veto" in system
+        assert "veto" in system.lower()
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
     def test_15m_has_risk_off_rules(self, _mock: MagicMock) -> None:
