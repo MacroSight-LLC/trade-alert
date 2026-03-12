@@ -137,6 +137,7 @@ MOCK_RESPONSES: dict[int, dict] = {
         "vix_level": {"value": 14.2, "vix_level": 14.2},
         "yield_curve": {"value": 15.0, "spread_bps": 15.0},
         "fed_funds": {"value": 5.33, "rate": 5.33},
+        "fed_funds_rate": {"value": 5.33, "rate": 5.33},
     },
     8010: {
         "classify_text": {"is_spam": False, "confidence": 0.95},
