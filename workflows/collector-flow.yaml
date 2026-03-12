@@ -50,21 +50,19 @@ steps:
 
       result = {"equities": equities, "crypto": crypto, "has_polygon": has_polygon}
 
-  # Step 2 -- Parallel: Polygon unusual_activity + aggs and crypto-orderbook imbalance
-  # SSOT S3: Polygon -- batch symbols; query only screener subset (max 25 per call)
+  # Step 2 -- Parallel: Polygon grouped_daily + crypto-orderbook imbalance
+  # SSOT S3: Polygon -- grouped daily endpoint returns ALL tickers in 1 API call
   # SSOT S3: crypto-orderbook MCP -- only for symbols marked as crypto (batch 15)
   - name: fetch-flow-signals
     type: parallel_tool_calls
     calls:
-      # Polygon aggs for equities -- volume_multiple = current_volume / avg_20d_volume
-      # SSOT S7 Flow: compute volume_multiple from Polygon aggs
-      # Limit to 5 equities: free-tier allows 5 req/min, each symbol needs 2 calls
+      # Polygon grouped daily for all equities -- single API call for ALL symbols
+      # Replaces per-symbol aggs calls that took 12s each (144s for 5 symbols)
       - tool: polygon-mcp
-        method: aggs
+        method: grouped_daily
         params:
-          symbols: "{{ steps['read-universes']['equities'][:5] }}"
-          include_avg_20d_volume: true
-      # Crypto orderbook imbalance (batch 15)
+          symbols: "{{ steps['read-universes']['equities'] }}"
+      # Crypto orderbook imbalance via Bybit (batch 15)
       - tool: crypto-orderbook-mcp
         method: imbalance
         params:

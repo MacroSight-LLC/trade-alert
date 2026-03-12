@@ -51,15 +51,15 @@ steps:
     params:
       limit: 20
 
-  # Step 3 -- Polygon aggs for top 20 volume leaders
-  # SSOT S3: Polygon aggs -- query only screener subset
+  # Step 3 -- Polygon grouped daily for volume leaders (single API call)
+  # Replaces per-symbol aggs calls; the grouped endpoint returns ALL tickers at once.
+  # The response cache in polygon_io.py prevents duplicate calls from collector-flow.
   - name: fetch-polygon-volume-leaders
     type: tool_call
     tool: polygon-mcp
-    method: aggs
+    method: grouped_daily
     params:
-      sort_by: volume_ratio
-      limit: 20
+      symbols: []
 
   # Step 4 -- Code agent: merge, deduplicate, build universes, write to Redis
   # Redis keys: universe:equities (max 50), universe:crypto (max 30)

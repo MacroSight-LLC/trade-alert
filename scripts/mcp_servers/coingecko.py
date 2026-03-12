@@ -18,6 +18,84 @@ SERVICE_NAME = "CoinGecko MCP"
 BASE_URL = "https://api.coingecko.com/api/v3"
 TIMEOUT = 10.0
 
+# Allowlist of crypto symbols that actually trade on major exchanges
+# (Bybit, TradingView, Coinbase).  Filters out junk tokens like
+# FIGR_HELOC, CC, M that CoinGecko returns from obscure market-cap data.
+_KNOWN_CRYPTO: frozenset[str] = frozenset(
+    {
+        "BTC",
+        "ETH",
+        "SOL",
+        "BNB",
+        "AVAX",
+        "DOGE",
+        "ADA",
+        "DOT",
+        "MATIC",
+        "LINK",
+        "XRP",
+        "ATOM",
+        "UNI",
+        "NEAR",
+        "ARB",
+        "OP",
+        "APT",
+        "SUI",
+        "SEI",
+        "INJ",
+        "FET",
+        "RENDER",
+        "FIL",
+        "AAVE",
+        "MKR",
+        "LDO",
+        "TIA",
+        "JUP",
+        "WIF",
+        "PEPE",
+        "SHIB",
+        "LTC",
+        "BCH",
+        "ETC",
+        "ALGO",
+        "FTM",
+        "SAND",
+        "MANA",
+        "AXS",
+        "CRV",
+        "SNX",
+        "COMP",
+        "SUSHI",
+        "YFI",
+        "DYDX",
+        "IMX",
+        "GALA",
+        "ENS",
+        "GRT",
+        "RUNE",
+        "HBAR",
+        "VET",
+        "EGLD",
+        "THETA",
+        "KAVA",
+        "FLOW",
+        "ROSE",
+        "ZEC",
+        "DASH",
+        "XLM",
+        "TRX",
+        "TON",
+        "KAS",
+        "STX",
+        "TAO",
+        "WLD",
+        "PYTH",
+        "BONK",
+        "ORDI",
+        "BLUR",
+    }
+)
+
 
 async def top_gainers(params: dict[str, Any]) -> list[dict]:
     """Fetch top gaining coins by 24h price change.
@@ -51,16 +129,22 @@ async def top_gainers(params: dict[str, Any]) -> list[dict]:
     )
 
     results: list[dict] = []
-    for coin in coins[:limit]:
+    for coin in coins:
+        sym = (coin.get("symbol") or "").upper()
+        # Filter to known tradeable symbols (Issue #8)
+        if sym not in _KNOWN_CRYPTO:
+            continue
         results.append(
             {
-                "symbol": (coin.get("symbol") or "").upper(),
+                "symbol": sym,
                 "change_24h": coin.get("price_change_percentage_24h", 0.0) or 0.0,
                 "market_cap": coin.get("market_cap", 0) or 0,
                 "name": coin.get("name", ""),
                 "price": coin.get("current_price", 0.0),
             }
         )
+        if len(results) >= limit:
+            break
     return {"results": results}
 
 

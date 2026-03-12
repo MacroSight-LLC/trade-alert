@@ -25,6 +25,7 @@ VIXCLS = "VIXCLS"  # VIX close
 DGS10 = "DGS10"  # 10-year Treasury
 DGS2 = "DGS2"  # 2-year Treasury
 FEDFUNDS = "FEDFUNDS"  # Fed funds rate
+T10Y2Y = "T10Y2Y"  # Pre-computed 10Y-2Y spread
 
 
 async def _latest_value(series_id: str) -> float | None:
@@ -37,7 +38,7 @@ async def _latest_value(series_id: str) -> float | None:
                 "api_key": API_KEY,
                 "file_type": "json",
                 "sort_order": "desc",
-                "limit": 5,
+                "limit": 10,
             },
         )
         resp.raise_for_status()
@@ -46,6 +47,7 @@ async def _latest_value(series_id: str) -> float | None:
             val = obs.get("value", ".")
             if val != ".":
                 return float(val)
+    logger.warning("FRED %s: all %d observations are '.'", series_id, len(observations))
     return None
 
 
@@ -64,15 +66,26 @@ async def vix_level(params: dict[str, Any]) -> dict:
 async def yield_curve(params: dict[str, Any]) -> dict:
     """Fetch 10Y-2Y yield curve spread from FRED.
 
+    Tries computing from DGS10 - DGS2 first.  Falls back to the
+    pre-computed T10Y2Y series if either individual series returns None.
+
     Returns:
         {"value": float, "spread_bps": float}
     """
     dgs10 = await _latest_value(DGS10)
     dgs2 = await _latest_value(DGS2)
-    if dgs10 is None or dgs2 is None:
-        return {"value": 0.0, "spread_bps": 0.0, "error": "no data"}
-    spread_bps = round((dgs10 - dgs2) * 100, 1)
-    return {"value": spread_bps, "spread_bps": spread_bps}
+    if dgs10 is not None and dgs2 is not None:
+        spread_bps = round((dgs10 - dgs2) * 100, 1)
+        return {"value": spread_bps, "spread_bps": spread_bps}
+
+    # Fallback: use the pre-computed T10Y2Y series (already in percent)
+    logger.info("FRED yield_curve: DGS10=%s DGS2=%s — falling back to T10Y2Y", dgs10, dgs2)
+    t10y2y = await _latest_value(T10Y2Y)
+    if t10y2y is not None:
+        spread_bps = round(t10y2y * 100, 1)
+        return {"value": spread_bps, "spread_bps": spread_bps}
+
+    return {"value": 0.0, "spread_bps": 0.0, "error": "no data"}
 
 
 async def fed_funds(params: dict[str, Any]) -> dict:

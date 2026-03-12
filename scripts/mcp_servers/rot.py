@@ -7,6 +7,7 @@ Falls back to scraping public Reddit JSON endpoints if not set.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ from collections import Counter
 from typing import Any
 
 import httpx
+import redis as redis_lib
 
 logger = logging.getLogger(__name__)
 
@@ -224,8 +226,64 @@ _COMMON_WORDS = frozenset(
         "RUT",
         "DXY",
         "VIX",
+        # Additional noise tickers — common English words that match 1-5 uppercase
+        "GREAT",
+        "EOY",
+        "NET",
+        "HPE",
+        "PUMP",
+        "MOON",
+        "DIPS",
+        "TOPS",
+        "OPEN",
+        "CORE",
+        "LIFE",
+        "REAL",
+        "BIG",
+        "SAFE",
+        "TRUE",
+        "FAST",
+        "ATH",
+        "RED",
+        "GREEN",
+        "OG",
+        "LMAO",
+        "STOP",
+        "HEAR",
+        "LIVE",
+        "LOVE",
+        "HOPE",
+        "NICE",
+        "SICK",
+        "HOLY",
+        "FINE",
+        "PLAN",
+        "NEAR",
     }
 )
+
+# Redis-based universe validation (Issue #4: filter noise tickers)
+_REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+
+def _load_universe_tickers() -> frozenset[str] | None:
+    """Load valid ticker symbols from Redis universe sets.
+
+    Returns:
+        Set of valid tickers from universe:equities + universe:crypto,
+        or None if Redis is unavailable (fail-open).
+    """
+    try:
+        r = redis_lib.from_url(_REDIS_URL, decode_responses=True, socket_timeout=5.0)
+        tickers: set[str] = set()
+        for key in ("universe:equities", "universe:crypto"):
+            raw = r.get(key)
+            if raw:
+                tickers.update(s.upper() for s in json.loads(raw))
+        return frozenset(tickers) if tickers else None
+    except (redis_lib.RedisError, json.JSONDecodeError) as exc:
+        logger.warning("ROT: Redis universe unavailable (%s) — using word filter only", exc)
+        return None
 
 
 async def _reddit_get(path: str) -> list[dict]:
@@ -325,8 +383,15 @@ async def trending_tickers(params: dict[str, Any]) -> list[dict]:
         return {"results": []}
 
     ticker_counts = _extract_tickers(all_posts)
+
+    # Cross-reference against Redis universe (Issue #4)
+    universe = _load_universe_tickers()
+
     results: list[dict] = []
-    for ticker, mentions in ticker_counts.most_common(limit):
+    for ticker, mentions in ticker_counts.most_common(limit * 3):
+        # If universe is available, only keep tickers present in it
+        if universe is not None and ticker not in universe:
+            continue
         sentiment = _classify_sentiment(all_posts, ticker)
         results.append(
             {
@@ -335,6 +400,8 @@ async def trending_tickers(params: dict[str, Any]) -> list[dict]:
                 "sentiment": sentiment,
             }
         )
+        if len(results) >= limit:
+            break
     return {"results": results}
 
 
@@ -356,6 +423,9 @@ async def options_flow(params: dict[str, Any]) -> list[dict]:
         logger.warning("Reddit fetch failed: %s", exc)
         return {"results": results}
 
+    # Cross-reference against Redis universe (Issue #4)
+    universe = _load_universe_tickers()
+
     # Look for options-related posts
     options_pattern = re.compile(
         r"(\$?[A-Z]{1,5})\s*(\d+[cCpP]|\$?\d+\s*(?:call|put|calls|puts))",
@@ -369,6 +439,8 @@ async def options_flow(params: dict[str, Any]) -> list[dict]:
         for sym_raw, strike_raw in matches:
             sym = sym_raw.replace("$", "").upper()
             if sym in _COMMON_WORDS or sym in seen or len(sym) < 2:
+                continue
+            if universe is not None and sym not in universe:
                 continue
             seen.add(sym)
             flow_type = (
