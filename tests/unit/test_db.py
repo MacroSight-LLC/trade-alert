@@ -41,6 +41,28 @@ class TestInsertAlert:
         assert result == 42
         mock_conn.commit.assert_called_once()
 
+
+class TestGetConn:
+    """Tests for db.get_conn()."""
+
+    @patch("db.DATABASE_URL", None)
+    def test_raises_when_database_url_not_set(self) -> None:
+        from db import get_conn
+
+        with pytest.raises(RuntimeError, match="DATABASE_URL not set"):
+            get_conn()
+
+    @patch("db.psycopg2")
+    @patch("db.DATABASE_URL", "postgresql://user:pass@host/db")
+    def test_passes_connect_timeout(self, mock_psycopg2: MagicMock) -> None:
+        from db import get_conn
+
+        get_conn()
+        mock_psycopg2.connect.assert_called_once_with(
+            "postgresql://user:pass@host/db",
+            connect_timeout=30,
+        )
+
     @patch("db.get_conn")
     def test_passes_all_fields(self, mock_conn_fn: MagicMock, sample_alert: PlaybookAlert) -> None:
         mock_cur = MagicMock()

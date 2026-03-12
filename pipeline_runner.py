@@ -344,7 +344,7 @@ def run_workflow(
         wf = yaml.safe_load(fh)
 
     name = wf.get("name", workflow_path.stem)
-    model = wf.get("llm_model", "claude-sonnet-4-20250514")
+    model = os.getenv("LLM_MODEL") or wf.get("llm_model", "claude-sonnet-4-20250514")
     error_cfg = wf.get("error_handling", {})
     max_attempts = error_cfg.get("retry", {}).get("max_attempts", 1)
     backoff = error_cfg.get("retry", {}).get("backoff_seconds", 0)

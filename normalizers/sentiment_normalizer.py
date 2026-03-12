@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp as _clamp
+from normalizers import clamp as _clamp, safe_float
 
 _log = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         # Finnhub sentiment (SSOT §7)
         fh_score: float | None = data.get("finnhub_score")
         if fh_score is not None:
+            fh_score = safe_float(fh_score)
             score = _clamp(fh_score * 2.0, -2.0, 2.0)
             confidence = min(abs(fh_score) * 1.5, 1.0)
 

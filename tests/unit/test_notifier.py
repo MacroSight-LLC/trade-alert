@@ -246,3 +246,11 @@ class TestNotify:
         count = notify(alerts_json)
         assert count == 2
         assert _send.call_count == 2
+
+    @patch("notifier_and_logger.insert_alert")
+    @patch("notifier_and_logger.send_discord_embed", return_value=True)
+    def test_non_dict_item_skipped(self, _send: MagicMock, _insert: MagicMock) -> None:
+        alerts_json = json.dumps(["not-a-dict", 42])
+        count = notify(alerts_json)
+        assert count == 0
+        _send.assert_not_called()

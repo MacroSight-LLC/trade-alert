@@ -2,11 +2,43 @@
 
 from __future__ import annotations
 
+from normalizers import safe_float
 from normalizers.flow_normalizer import normalize as flow_normalize
 from normalizers.macro_normalizer import normalize as macro_normalize
 from normalizers.market_normalizer import normalize as market_normalize
 from normalizers.sentiment_normalizer import normalize as sentiment_normalize
 from normalizers.ta_normalizer import normalize as ta_normalize
+
+
+# ── safe_float utility ──────────────────────────────────────────
+
+
+class TestSafeFloat:
+    """Tests for normalizers.safe_float NaN/Inf guard."""
+
+    def test_normal_value(self) -> None:
+        assert safe_float(1.5) == 1.5
+
+    def test_nan_returns_default(self) -> None:
+        assert safe_float(float("nan")) == 0.0
+
+    def test_inf_returns_default(self) -> None:
+        assert safe_float(float("inf")) == 0.0
+
+    def test_neg_inf_returns_default(self) -> None:
+        assert safe_float(float("-inf")) == 0.0
+
+    def test_none_returns_default(self) -> None:
+        assert safe_float(None) == 0.0
+
+    def test_custom_default(self) -> None:
+        assert safe_float(float("nan"), default=-1.0) == -1.0
+
+    def test_zero_preserved(self) -> None:
+        assert safe_float(0.0) == 0.0
+
+    def test_int_value(self) -> None:
+        assert safe_float(3) == 3.0
 
 # ── TA Normalizer ───────────────────────────────────────────────
 
@@ -69,6 +101,16 @@ class TestTaNormalizer:
         assert len(result) == 2
         symbols = {s.symbol for s in result}
         assert symbols == {"AAPL", "TSLA"}
+
+    def test_nan_rating_skipped(self) -> None:
+        raw = {"X": {"rating": float("nan"), "patterns": [], "indicators": {}}}
+        result = ta_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_inf_rating_skipped(self) -> None:
+        raw = {"X": {"rating": float("inf"), "patterns": [], "indicators": {}}}
+        result = ta_normalize(raw, timeframe="15m")
+        assert len(result) == 0
 
 
 # ── Flow Normalizer ─────────────────────────────────────────────
@@ -145,6 +187,16 @@ class TestFlowNormalizer:
     def test_empty_input(self) -> None:
         assert flow_normalize({}, timeframe="15m") == []
 
+    def test_nan_volume_no_spike(self) -> None:
+        raw = {"X": {"volume_multiple": float("nan")}}
+        result = flow_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_inf_imbalance_no_signal(self) -> None:
+        raw = {"X": {"volume_multiple": 0.5, "imbalance": float("inf")}}
+        result = flow_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
 
 # ── Sentiment Normalizer ────────────────────────────────────────
 
@@ -205,6 +257,14 @@ class TestSentimentNormalizer:
 
     def test_empty_input(self) -> None:
         assert sentiment_normalize({}, timeframe="15m") == []
+
+    def test_nan_finnhub_score_treated_as_zero(self) -> None:
+        raw = {"X": {"finnhub_score": float("nan"), "spam_filtered": False}}
+        result = sentiment_normalize(raw, timeframe="15m")
+        # safe_float converts NaN → 0.0, so score = clamp(0.0 * 2.0, ...) = 0.0
+        # type will be sentiment_bear (score <= 0), score = 0.0
+        assert len(result) == 1
+        assert result[0].signals[0].score == 0.0
 
 
 # ── Market Normalizer ───────────────────────────────────────────
@@ -298,3 +358,13 @@ class TestMacroNormalizer:
         raw = {"vix": 40.0, "risk_on": False}
         result = macro_normalize(raw, timeframe="1h")
         assert result[0].timeframe == "1h"
+
+    def test_nan_vix_ignored(self) -> None:
+        raw = {"vix": float("nan"), "yield_curve_slope": 50.0, "risk_on": True}
+        result = macro_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_inf_curve_slope_ignored(self) -> None:
+        raw = {"vix": 15.0, "yield_curve_slope": float("inf"), "risk_on": True}
+        result = macro_normalize(raw, timeframe="15m")
+        assert len(result) == 0

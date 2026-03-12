@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp as _clamp
+from normalizers import clamp as _clamp, safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -34,57 +34,61 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         vol_mult: float | None = data.get("volume_multiple")
 
         # Volume spike scoring (SSOT §7)
-        if vol_mult is not None and vol_mult >= 1.5:
-            if vol_mult >= 5.0:
-                vol_score = 3.0
-            elif vol_mult >= 3.0:
-                vol_score = 2.5
-            else:
-                vol_score = 1.0
+        if vol_mult is not None:
+            vol_mult = safe_float(vol_mult)
+            if vol_mult >= 1.5:
+                if vol_mult >= 5.0:
+                    vol_score = 3.0
+                elif vol_mult >= 3.0:
+                    vol_score = 2.5
+                else:
+                    vol_score = 1.0
 
-            unusual: list[str] = data.get("unusual_options", [])
-            reason_parts = [f"volume {vol_mult:.1f}x avg"]
-            if unusual:
-                reason_parts.append(f"unusual options: {', '.join(unusual)}")
+                unusual: list[str] = data.get("unusual_options", [])
+                reason_parts = [f"volume {vol_mult:.1f}x avg"]
+                if unusual:
+                    reason_parts.append(f"unusual options: {', '.join(unusual)}")
 
-            signals.append(
-                Signal(
-                    source="polygon",
-                    type="volume_spike",
-                    score=vol_score,
-                    confidence=min(vol_mult / 5.0, 1.0),
-                    reason="; ".join(reason_parts),
-                    raw=data,
+                signals.append(
+                    Signal(
+                        source="polygon",
+                        type="volume_spike",
+                        score=vol_score,
+                        confidence=min(vol_mult / 5.0, 1.0),
+                        reason="; ".join(reason_parts),
+                        raw=data,
+                    )
                 )
-            )
 
         # Order-book imbalance scoring (SSOT §7 — crypto only)
         imbalance: float | None = data.get("imbalance")
-        if imbalance is not None and imbalance != 0.0:
-            if imbalance > 0:
-                imb_score = _clamp(imbalance * 3.0, 0.0, 3.0)
-                signals.append(
-                    Signal(
-                        source="crypto-orderbook",
-                        type="order_imbalance_long",
-                        score=imb_score,
-                        confidence=min(abs(imbalance), 1.0),
-                        reason=f"bid/ask imbalance {imbalance:+.2f}",
-                        raw=data,
+        if imbalance is not None:
+            imbalance = safe_float(imbalance)
+            if imbalance != 0.0:
+                if imbalance > 0:
+                    imb_score = _clamp(imbalance * 3.0, 0.0, 3.0)
+                    signals.append(
+                        Signal(
+                            source="crypto-orderbook",
+                            type="order_imbalance_long",
+                            score=imb_score,
+                            confidence=min(abs(imbalance), 1.0),
+                            reason=f"bid/ask imbalance {imbalance:+.2f}",
+                            raw=data,
+                        )
                     )
-                )
-            else:
-                imb_score = _clamp(imbalance * 3.0, -3.0, 0.0)
-                signals.append(
-                    Signal(
-                        source="crypto-orderbook",
-                        type="order_imbalance_short",
-                        score=imb_score,
-                        confidence=min(abs(imbalance), 1.0),
-                        reason=f"bid/ask imbalance {imbalance:+.2f}",
-                        raw=data,
+                else:
+                    imb_score = _clamp(imbalance * 3.0, -3.0, 0.0)
+                    signals.append(
+                        Signal(
+                            source="crypto-orderbook",
+                            type="order_imbalance_short",
+                            score=imb_score,
+                            confidence=min(abs(imbalance), 1.0),
+                            reason=f"bid/ask imbalance {imbalance:+.2f}",
+                            raw=data,
+                        )
                     )
-                )
 
         if signals:
             snapshots.append(

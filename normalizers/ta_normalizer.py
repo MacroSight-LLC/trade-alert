@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
+from normalizers import safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -30,6 +31,9 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     for symbol, data in raw_results.items():
         rating = data.get("rating")
         if rating is None:
+            continue
+        rating = safe_float(rating)
+        if rating == 0.0 and data.get("rating") != 0:
             continue
 
         patterns: list[str] = data.get("patterns", [])

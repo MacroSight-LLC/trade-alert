@@ -19,8 +19,10 @@ from models import Signal, Snapshot
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
-MERGER_TOP_N: int = int(os.getenv("MERGER_TOP_N", "20"))
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
+_raw_top_n = int(os.getenv("MERGER_TOP_N", "20"))
+MERGER_TOP_N: int = _raw_top_n if _raw_top_n > 0 else 20
+REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
 
 
 def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
@@ -40,7 +42,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         limit = MERGER_TOP_N
 
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True)
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
         raw_entries: list[str] = r.lrange(f"snapshots:{timeframe}", 0, -1)
     except redis.RedisError as exc:
         logger.error("Redis read failed for snapshots:%s — %s", timeframe, exc)
@@ -103,7 +105,7 @@ def get_macro_regime() -> dict:
         ``{"risk_on": True}`` if the key is missing or on error.
     """
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True)
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
         raw: str | None = r.get("macro:regime")
         if raw is None:
             return {"risk_on": True}

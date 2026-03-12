@@ -22,7 +22,8 @@ from notifier_and_logger import send_ops_message
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
+REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
 # SSOT §3: all 10 MCP services with /health endpoints
@@ -45,6 +46,7 @@ MCP_SERVICES: list[tuple[str, str]] = [
 
 
 HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.jsonl"
+MCP_HEALTH_TIMEOUT: float = float(os.getenv("MCP_HEALTH_TIMEOUT", "5.0"))
 
 
 def _append_jsonl(record: dict) -> None:
@@ -71,7 +73,7 @@ def check_redis() -> bool:
         True if Redis responds to PING, False otherwise.
     """
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True)
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
         r.ping()
         logger.info("Healthcheck: Redis OK")
         return True
@@ -90,7 +92,7 @@ def check_postgres() -> bool:
         logger.error("Healthcheck: DATABASE_URL not set")
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
@@ -127,15 +129,18 @@ def check_recent_alerts(timeframe: str) -> bool:
         return False
 
 
-def check_mcps(timeout: float = 5.0) -> tuple[list[str], list[str]]:
+def check_mcps(timeout: float | None = None) -> tuple[list[str], list[str]]:
     """Hit /health on every MCP service defined in SSOT §3.
 
     Args:
         timeout: HTTP request timeout in seconds per service.
+            Defaults to MCP_HEALTH_TIMEOUT env var (5.0).
 
     Returns:
         Tuple of (healthy_names, unhealthy_names).
     """
+    if timeout is None:
+        timeout = MCP_HEALTH_TIMEOUT
     healthy: list[str] = []
     unhealthy: list[str] = []
     for name, url in MCP_SERVICES:

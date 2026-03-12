@@ -25,10 +25,14 @@ logger = logging.getLogger(__name__)
 POLYGON_API_KEY: str | None = os.getenv("POLYGON_API_KEY")
 PRICE_POLL_INTERVAL_SECONDS: int = int(os.getenv("PRICE_POLL_INTERVAL", "60"))
 OUTCOME_WINDOW_HOURS: int = int(os.getenv("OUTCOME_WINDOW_HOURS", "4"))
+PRICE_FETCH_MAX_RETRIES: int = int(os.getenv("PRICE_FETCH_MAX_RETRIES", "3"))
+PRICE_FETCH_TIMEOUT: float = float(os.getenv("PRICE_FETCH_TIMEOUT", "10.0"))
 
 
 def get_current_price(symbol: str) -> float | None:
     """Fetch latest trade price from Polygon.io snapshot endpoint.
+
+    Retries with exponential backoff on transient failures.
 
     Args:
         symbol: Ticker symbol (e.g. ``"AAPL"``).
@@ -36,14 +40,35 @@ def get_current_price(symbol: str) -> float | None:
     Returns:
         Latest close/last price, or ``None`` on any error.
     """
-    url = f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
-    try:
-        resp = httpx.get(url, params={"apiKey": POLYGON_API_KEY}, timeout=10.0)
-        resp.raise_for_status()
-        return float(resp.json()["ticker"]["day"]["c"])
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-        logger.error("Failed to fetch price for %s: %s", symbol, exc)
+    if not POLYGON_API_KEY:
+        logger.error("POLYGON_API_KEY not set — configure via Vault or .env")
         return None
+
+    url = f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
+    for attempt in range(PRICE_FETCH_MAX_RETRIES):
+        try:
+            resp = httpx.get(
+                url,
+                params={"apiKey": POLYGON_API_KEY},
+                timeout=PRICE_FETCH_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return float(resp.json()["ticker"]["day"]["c"])
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            if attempt < PRICE_FETCH_MAX_RETRIES - 1:
+                delay = 2 ** attempt
+                logger.warning(
+                    "Price fetch attempt %d/%d for %s failed: %s — retrying in %ds",
+                    attempt + 1,
+                    PRICE_FETCH_MAX_RETRIES,
+                    symbol,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.error("Failed to fetch price for %s after %d attempts: %s", symbol, PRICE_FETCH_MAX_RETRIES, exc)
+    return None
 
 
 def evaluate_outcome(alert_row: dict, current_price: float) -> str | None:
@@ -73,6 +98,9 @@ def evaluate_outcome(alert_row: dict, current_price: float) -> str | None:
                 return "WIN"
             if current_price >= stop_level:
                 return "LOSS"
+        else:
+            logger.warning("Unknown direction '%s' — cannot evaluate outcome", direction)
+            return None
 
         # Check expiry window
         now = datetime.now(timezone.utc)

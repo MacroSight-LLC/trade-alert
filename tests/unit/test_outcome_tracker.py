@@ -96,6 +96,16 @@ class TestEvaluateOutcome:
         }
         assert evaluate_outcome(bad, 100.0) is None
 
+    def test_invalid_direction_returns_none(self) -> None:
+        bad = {
+            "direction": "INVALID",
+            "entry_level": 100,
+            "stop_level": 95,
+            "target_level": 110,
+            "fired_at": datetime.now(timezone.utc),
+        }
+        assert evaluate_outcome(bad, 100.0) is None
+
     def test_missing_stop_level(self, long_alert: dict) -> None:
         del long_alert["stop_level"]
         assert evaluate_outcome(long_alert, 100.0) is None
@@ -152,6 +162,7 @@ class TestMapDbRow:
 class TestGetCurrentPrice:
     """Tests for Polygon.io price fetching."""
 
+    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
     @patch("outcome_tracker.httpx.get")
     def test_success(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
@@ -161,11 +172,15 @@ class TestGetCurrentPrice:
         mock_get.return_value.raise_for_status = MagicMock()
         assert get_current_price("AAPL") == pytest.approx(185.50)
 
+    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
     @patch("outcome_tracker.httpx.get")
     def test_http_error_returns_none(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = httpx.HTTPError("500")
         assert get_current_price("AAPL") is None
 
+    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
     @patch("outcome_tracker.httpx.get")
     def test_bad_json_returns_none(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
@@ -174,6 +189,30 @@ class TestGetCurrentPrice:
         )
         mock_get.return_value.raise_for_status = MagicMock()
         assert get_current_price("AAPL") is None
+
+    @patch("outcome_tracker.POLYGON_API_KEY", None)
+    def test_no_api_key_returns_none(self) -> None:
+        assert get_current_price("AAPL") is None
+
+    @patch("outcome_tracker.POLYGON_API_KEY", "test-key")
+    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 3)
+    @patch("outcome_tracker.time.sleep")
+    @patch("outcome_tracker.httpx.get")
+    def test_retries_on_failure(self, mock_get: MagicMock, mock_sleep: MagicMock) -> None:
+        """Verify retry logic with exponential backoff."""
+        mock_get.side_effect = [
+            httpx.HTTPError("503"),
+            httpx.HTTPError("503"),
+            MagicMock(
+                status_code=200,
+                json=MagicMock(return_value={"ticker": {"day": {"c": 190.0}}}),
+                raise_for_status=MagicMock(),
+            ),
+        ]
+        result = get_current_price("AAPL")
+        assert result == pytest.approx(190.0)
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
 
 
 # ── run_tracker_cycle ───────────────────────────────────────────

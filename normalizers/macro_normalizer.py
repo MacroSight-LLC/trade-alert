@@ -6,10 +6,24 @@ Transforms VIX, yield-curve, and risk-on/off data into
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
+
+VIX_EXTREME_THRESHOLD: float = float(os.getenv("VIX_EXTREME_THRESHOLD", "35.0"))
+VIX_ELEVATED_THRESHOLD: float = float(os.getenv("VIX_ELEVATED_THRESHOLD", "25.0"))
+
+
+def _safe_float(value: float | None) -> float | None:
+    """Return value if finite, else None."""
+    if value is None:
+        return None
+    import math
+    if not isinstance(value, (int, float)) or math.isnan(value) or math.isinf(value):
+        return None
+    return float(value)
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -28,13 +42,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         triggered, otherwise empty list.
     """
     signals: list[Signal] = []
-    vix: float | None = raw_results.get("vix")
-    curve_slope: float | None = raw_results.get("yield_curve_slope")
+    vix: float | None = _safe_float(raw_results.get("vix"))
+    curve_slope: float | None = _safe_float(raw_results.get("yield_curve_slope"))
     risk_on: bool | None = raw_results.get("risk_on")
 
     # VIX thresholds (SSOT §7)
     if vix is not None:
-        if vix > 35:
+        if vix > VIX_EXTREME_THRESHOLD:
             signals.append(
                 Signal(
                     source="fred",
@@ -45,7 +59,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     raw=raw_results,
                 )
             )
-        elif vix > 25:
+        elif vix > VIX_ELEVATED_THRESHOLD:
             signals.append(
                 Signal(
                     source="fred",

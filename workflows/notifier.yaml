@@ -59,6 +59,17 @@ error_handling:
   # SSOT §11: never block the cron cycle
   # Any exception in notify(): log and continue
   abort_on_failure: false
+  on_error:
+    type: code
+    code: |
+      import logging
+      logger = logging.getLogger(__name__)
+      logger.error("Notifier workflow failed: %s", error)
+      try:
+          from notifier_and_logger import send_ops_message
+          send_ops_message(f"⚠️ Notifier workflow error: {error}")
+      except Exception:
+          pass
   retry:
     max_attempts: 1
     backoff_seconds: 0

@@ -22,6 +22,8 @@ from models import PlaybookAlert
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
+
 
 def _discord_webhook() -> str | None:
     return os.getenv("DISCORD_WEBHOOK")
@@ -130,7 +132,7 @@ def send_discord_embed(embed_payload: dict) -> bool:
     try:
         webhook = _discord_webhook()
         if webhook:
-            resp = httpx.post(webhook, json=embed_payload, timeout=10.0)
+            resp = httpx.post(webhook, json=embed_payload, timeout=DISCORD_HTTP_TIMEOUT)
             resp.raise_for_status()
             return True
 
@@ -143,7 +145,7 @@ def send_discord_embed(embed_payload: dict) -> bool:
                 url,
                 json=embed_payload,
                 headers=headers,
-                timeout=10.0,
+                timeout=DISCORD_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
             return True
@@ -174,7 +176,7 @@ def send_ops_message(message: str) -> None:
             url,
             json={"content": message},
             headers=headers,
-            timeout=10.0,
+            timeout=DISCORD_HTTP_TIMEOUT,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -208,6 +210,9 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
 
     for item in items:
         try:
+            if not isinstance(item, dict):
+                logger.warning("Notifier: skipping non-dict item %s", type(item).__name__)
+                continue
             alert = PlaybookAlert(**item)
             embed = format_embed(alert)
             sent = send_discord_embed(embed)

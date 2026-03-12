@@ -8,8 +8,8 @@
 # Every hour — 1h pipeline orchestrator
 0 * * * * cd /app && python pipeline_runner.py workflows/orchestrator-1h.yaml >> /app/logs/cron.log 2>&1
 
-# Every 15 minutes — outcome tracker
-*/15 * * * * cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1
+# Every 15 minutes — outcome tracker (flock prevents overlapping runs)
+*/15 * * * * flock -n /tmp/outcome-tracker.lock -c 'cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1'
 
 # Every hour — healthcheck
 0 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1

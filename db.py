@@ -18,19 +18,19 @@ from models import PlaybookAlert
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL: str = os.getenv(
-    "DATABASE_URL",
-    "postgresql://trade_alert:password@localhost:5432/trade_alert",
-)
+DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
 
 def get_conn() -> psycopg2.extensions.connection:
     """Return a psycopg2 connection to the alerts database.
 
     Raises:
+        RuntimeError: If DATABASE_URL is not configured.
         psycopg2.OperationalError: If the database is unreachable.
     """
-    return psycopg2.connect(DATABASE_URL)
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not set — configure via Vault or .env")
+    return psycopg2.connect(DATABASE_URL, connect_timeout=30)
 
 
 def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
