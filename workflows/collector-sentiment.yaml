@@ -166,8 +166,9 @@ steps:
     type: code
     code: |
       import logging
-      n = steps["normalize-and-store-snapshots"]["n_snapshots"]
-      f = steps["normalize-and-store-snapshots"]["n_filtered"]
+      _ns = steps.get("normalize-and-store-snapshots") or {}
+      n = _ns.get("n_snapshots", 0)
+      f = _ns.get("n_filtered", 0)
       logging.getLogger(__name__).info("Sentiment collector: %d snapshots, %d spam filtered", n, f)
       result = f"Sentiment collector: {n} snapshots, {f} spam filtered"
 

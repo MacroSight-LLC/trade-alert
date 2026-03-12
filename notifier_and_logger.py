@@ -14,6 +14,7 @@ import os
 from datetime import datetime, timezone
 
 import httpx
+import redis as _redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from db import insert_alert
@@ -23,6 +24,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
+DEDUP_WINDOW_SECONDS: int = int(os.getenv("DEDUP_WINDOW_SECONDS", "900"))  # 15 min default
 
 _discord_client: httpx.Client | None = None
 
@@ -196,6 +198,37 @@ def send_ops_message(message: str) -> None:
         logger.error("Ops message request failed: %s", exc)
 
 
+def _is_duplicate_alert(symbol: str, direction: str, timeframe: str) -> bool:
+    """Check Redis for a recent alert with the same symbol/direction/timeframe.
+
+    Sets a key with TTL on first fire, returns True if key already exists.
+    Prevents duplicate alerts within the dedup window.
+
+    Args:
+        symbol: Ticker symbol.
+        direction: LONG/SHORT/WATCH.
+        timeframe: Pipeline timeframe.
+
+    Returns:
+        True if a duplicate was found (alert should be suppressed).
+    """
+    dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}"
+    try:
+        r = _redis.from_url(
+            os.getenv("REDIS_URL", "redis://redis:6379"),
+            decode_responses=True,
+            socket_timeout=5.0,
+        )
+        if r.exists(dedup_key):
+            logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
+            return True
+        r.setex(dedup_key, DEDUP_WINDOW_SECONDS, "1")
+        return False
+    except _redis.RedisError as exc:
+        logger.warning("Dedup check failed (allowing alert through): %s", exc)
+        return False
+
+
 def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
     """Main entry point called by decision workflows.
 
@@ -225,6 +258,9 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                 logger.warning("Notifier: skipping non-dict item %s", type(item).__name__)
                 continue
             alert = PlaybookAlert(**item)
+            # Dedup: suppress duplicate alerts within the window
+            if _is_duplicate_alert(alert.symbol, alert.direction, alert.timeframe):
+                continue
             embed = format_embed(alert)
             sent = send_discord_embed(embed)
             if sent:

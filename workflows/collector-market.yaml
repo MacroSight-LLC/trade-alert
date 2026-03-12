@@ -157,9 +157,10 @@ steps:
     type: code
     code: |
       import logging
-      ne = steps["build-and-store-universes"]["n_equities"]
-      nc = steps["build-and-store-universes"]["n_crypto"]
-      ns = steps.get("normalize-market-signals", {}).get("n_snapshots", 0)
+      bsu = steps.get("build-and-store-universes") or {}
+      ne = bsu.get("n_equities", 0)
+      nc = bsu.get("n_crypto", 0)
+      ns = (steps.get("normalize-market-signals") or {}).get("n_snapshots", 0)
       logging.getLogger(__name__).info("Universe built: %d equities, %d crypto, %d market signal snapshots", ne, nc, ns)
       result = f"Universe built: {ne} equities, {nc} crypto, {ns} market signal snapshots"
 

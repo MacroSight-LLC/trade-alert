@@ -32,6 +32,20 @@ steps:
               logger.warning("Pipeline trace init failed (non-blocking): %s", exc)
               result = {"trace_id": None}
 
+    # Step 0b — Flush stale 1h snapshots from the previous cycle
+    # Prevents mixing old and fresh collector data in the merger.
+    - name: flush-stale-snapshots
+      type: code
+      code: |
+          import os, logging, redis
+          logger = logging.getLogger(__name__)
+          try:
+              r = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"), decode_responses=True)
+              deleted = r.delete("snapshots:1h")
+              logger.info("Flushed %d stale 1h snapshot keys before collector run", deleted)
+          except Exception as exc:
+              logger.warning("Snapshot flush failed (non-blocking): %s", exc)
+
     # Step 1 — Record collector start time, run all 5 in parallel, then
     # post a parent span + per-collector child spans to Langfuse.
     - name: collector-start-ts

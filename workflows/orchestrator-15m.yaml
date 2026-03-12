@@ -34,6 +34,7 @@ steps:
 
     # Step 0b — Flush stale snapshots from the previous cycle
     # Prevents mixing old and fresh collector data in the merger.
+    # Only flush snapshots:15m — do NOT touch snapshots:1h (owned by orchestrator-1h).
     - name: flush-stale-snapshots
       type: code
       code: |
@@ -41,10 +42,8 @@ steps:
           logger = logging.getLogger(__name__)
           try:
               r = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"), decode_responses=True)
-              deleted = 0
-              for key in ["snapshots:15m", "snapshots:1h"]:
-                  deleted += r.delete(key)
-              logger.info("Flushed %d stale snapshot keys before collector run", deleted)
+              deleted = r.delete("snapshots:15m")
+              logger.info("Flushed %d stale 15m snapshot keys before collector run", deleted)
           except Exception as exc:
               logger.warning("Snapshot flush failed (non-blocking): %s", exc)
 

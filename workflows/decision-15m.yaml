@@ -176,6 +176,15 @@ steps:
                     if (alert.edge_probability >= 0.70
                             and alert.sources_agree >= 3
                             and alert.confidence >= 0.75):
+                        # R:R gate: reward must be >= 2x risk for actionable alerts
+                        risk = abs(alert.entry["level"] - alert.entry["stop"])
+                        reward = abs(alert.entry["target"] - alert.entry["level"])
+                        if alert.direction != "WATCH" and risk > 0 and reward / risk < 2.0:
+                            logger.info(
+                                "Alert filtered: %s R:R %.1f:1 below 2:1 minimum",
+                                alert.symbol, reward / risk,
+                            )
+                            continue
                         alerts.append(alert)
                     else:
                         logger.info(
@@ -189,6 +198,31 @@ steps:
             logger.info("Decision-15m: %d alerts passed gates", len(alerts))
             alerts_json = json.dumps([a.model_dump() for a in alerts])
             result = {"alerts_json": alerts_json, "count": len(alerts)}
+
+            # Deep quality scoring via Langfuse
+            quality_report = None
+            try:
+                from alert_quality import post_quality_scores
+                quality_report = post_quality_scores(tid, alerts)
+                result["quality"] = quality_report
+            except Exception as qe:
+                logger.debug("Quality scoring failed (non-blocking): %s", qe)
+
+            # Capture to Langfuse dataset for continuous improvement
+            try:
+                from langfuse_datasets import capture_decision_run
+                from prompt_manager import get_prompt_version
+                capture_decision_run(
+                    "15m",
+                    steps["merge-snapshots"]["snapshots_json"],
+                    llm_response,
+                    alerts_json,
+                    quality_report,
+                    trace_id=tid,
+                    prompt_version=get_prompt_version(),
+                )
+            except Exception as de:
+                logger.debug("Dataset capture failed (non-blocking): %s", de)
 
             # Score alert pass rate and tag trace
             if add_score and tid:

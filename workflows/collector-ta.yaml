@@ -141,7 +141,7 @@ steps:
     type: code
     code: |
       import logging
-      n = steps["normalize-and-store-snapshots"]["n_snapshots"]
+      n = (steps.get("normalize-and-store-snapshots") or {}).get("n_snapshots", 0)
       logging.getLogger(__name__).info("TA collector: %d snapshots pushed to Redis", n)
       result = f"TA collector: {n} snapshots pushed to Redis"
 

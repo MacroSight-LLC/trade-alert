@@ -220,6 +220,62 @@ def score_trace(trace_id: str, score: float, comment: str) -> None:
 # ── Main Entry Point ─────────────────────────────────────────────────────────
 
 
+def _check_collector_coverage(trace: dict) -> list[str]:
+    """Check that the trace output reports adequate collector success.
+
+    Args:
+        trace: A Langfuse trace dict.
+
+    Returns:
+        List of collector coverage issues.
+    """
+    issues: list[str] = []
+    output = trace.get("output")
+    if not isinstance(output, dict):
+        return issues
+
+    # If merger_candidates is very low, signal data was likely thin
+    candidates = output.get("merger_candidates", 0)
+    if isinstance(candidates, (int, float)) and candidates < 3:
+        issues.append(f"Low merger candidates ({candidates}) — collectors may have failed")
+    return issues
+
+
+def _check_alert_quality_scores(trace_id: str) -> list[str]:
+    """Fetch Langfuse scores for this trace and flag quality regressions.
+
+    Looks for batch_avg_quality scores posted by alert_quality.py.
+
+    Args:
+        trace_id: Langfuse trace ID.
+
+    Returns:
+        List of quality-related issues.
+    """
+    issues: list[str] = []
+    lf = get_langfuse_client()
+    if lf is None:
+        return issues
+
+    try:
+        # Fetch the full trace to look at scores
+        full = lf.fetch_trace(trace_id)
+        if full and full.data:
+            # Check scores attached to this trace
+            scores = getattr(full.data, "scores", None) or []
+            for score_obj in scores:
+                name = getattr(score_obj, "name", "")
+                value = getattr(score_obj, "value", None)
+                if name == "batch_avg_quality" and value is not None and value < 0.5:
+                    issues.append(f"Low batch alert quality ({value:.2f}) — prompt may need tuning")
+                if name == "llm_json_valid" and value is not None and value < 1.0:
+                    issues.append("LLM produced invalid JSON — prompt compliance issue")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not fetch quality scores for trace %s: %s", trace_id, exc)
+
+    return issues
+
+
 def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     """Analyze the most recent pipeline trace and trigger self-healing alerts.
 
@@ -255,6 +311,8 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     all_issues.extend(check_output_validity(trace))
     all_issues.extend(check_cost(trace, TRACE_COST_BUDGET))
     all_issues.extend(check_latency(trace, TRACE_LATENCY_MAX))
+    all_issues.extend(_check_collector_coverage(trace))
+    all_issues.extend(_check_alert_quality_scores(trace_id))
 
     is_healthy = len(all_issues) == 0
     cost = trace.get("total_cost") or 0.0
@@ -265,8 +323,8 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     llm_calls = len(observations)
     total_tokens = _sum_tokens(observations)
 
-    # Compute health score: 1.0 = perfect, deduct 0.25 per issue, floor 0.0
-    health_score = max(0.0, 1.0 - 0.25 * len(all_issues))
+    # Compute health score: 1.0 = perfect, deduct 0.20 per issue, floor 0.0
+    health_score = max(0.0, 1.0 - 0.20 * len(all_issues))
 
     # Post score to Langfuse
     comment = "healthy" if is_healthy else f"issues: {', '.join(all_issues)}"
@@ -289,6 +347,21 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("Failed to post tokens_per_candidate score: %s", exc)
+
+    # Cost efficiency: cost per alert
+    output = trace.get("output")
+    if isinstance(output, dict) and cost:
+        try:
+            from pipeline_tracing import add_score
+
+            add_score(
+                trace_id,
+                "cost_per_alert",
+                cost / max(1, output.get("alerts_fired", 1)),
+                comment=f"${cost:.4f} total / alerts",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     # Alert ops on Discord if unhealthy
     if not is_healthy:

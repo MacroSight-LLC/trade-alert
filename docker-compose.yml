@@ -386,6 +386,25 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
+    volumes:
+      - ./workflows:/app/workflows
+      - ./normalizers:/app/normalizers
+      - ./models.py:/app/models.py
+      - ./merger.py:/app/merger.py
+      - ./db.py:/app/db.py
+      - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./healthcheck.py:/app/healthcheck.py
+      - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./trace_analyzer.py:/app/trace_analyzer.py
+      - ./langfuse_client.py:/app/langfuse_client.py
+      - ./prompt_manager.py:/app/prompt_manager.py
+      - ./pipeline_tracing.py:/app/pipeline_tracing.py
+      - ./pipeline_runner.py:/app/pipeline_runner.py
+      - ./alert_quality.py:/app/alert_quality.py
+      - ./langfuse_datasets.py:/app/langfuse_datasets.py
+      - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./logs:/app/logs
+      - ./tests:/app/tests
     command: ["sleep", "infinity"]
     networks:
       - trade-net

@@ -44,6 +44,8 @@ COPY langfuse_client.py /app/langfuse_client.py
 COPY prompt_manager.py /app/prompt_manager.py
 COPY pipeline_tracing.py /app/pipeline_tracing.py
 COPY pipeline_runner.py /app/pipeline_runner.py
+COPY alert_quality.py /app/alert_quality.py
+COPY langfuse_datasets.py /app/langfuse_datasets.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
