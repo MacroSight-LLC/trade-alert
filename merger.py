@@ -59,6 +59,9 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Skipping malformed snapshot entry — %s", exc)
 
+    # Filter pseudo-symbols (e.g. __GLOBAL_MACRO__) that are not real tickers
+    snapshots = [s for s in snapshots if not s.symbol.startswith("__")]
+
     # Group by (symbol, timeframe)
     groups: dict[tuple[str, str], list[Snapshot]] = defaultdict(list)
     for snap in snapshots:
@@ -116,13 +119,12 @@ def get_macro_regime() -> dict:
 
 
 if __name__ == "__main__":
-    # Mock test — push fake snapshots to Redis then merge
+    # Integration test — push sample snapshots to Redis then merge
     from models import Signal, Snapshot
 
     try:
         r = redis.from_url(REDIS_URL)
 
-        # Push 3 mock snapshots for AAPL from different sources
         for source in ["tradingview", "polygon", "finnhub"]:
             s = Snapshot(
                 symbol="AAPL",
@@ -134,7 +136,7 @@ if __name__ == "__main__":
                         type="technical_trend",
                         score=1.5,
                         confidence=0.8,
-                        reason=f"Mock signal from {source}",
+                        reason=f"Sample signal from {source}",
                     )
                 ],
             )
@@ -146,12 +148,10 @@ if __name__ == "__main__":
         for snap in results:
             print(f"  {snap.symbol}: {len(snap.signals)} signals")
 
-        # Verify deduplication: AAPL should have 3 signals (different sources)
         assert len(results) > 0
         assert results[0].symbol == "AAPL"
         print("Merger working ✅")
 
-        # Cleanup
         r.delete("snapshots:15m")
     except redis.RedisError as exc:
         print(f"Redis not available (expected in dev): {exc}")

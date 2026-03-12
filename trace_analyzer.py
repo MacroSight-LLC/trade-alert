@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration via environment ────────────────────────────────────────────
 TRACE_COST_BUDGET: float = float(os.getenv("TRACE_COST_BUDGET", "0.50"))
-TRACE_LATENCY_MAX: float = float(os.getenv("TRACE_LATENCY_MAX", "120"))
+TRACE_LATENCY_MAX: float = float(os.getenv("TRACE_LATENCY_MAX", "180"))
 
 
 # ── Trace Fetching ───────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def fetch_latest_trace(session_id: str) -> dict | None:
         # Pydantic v1 .dict() emits camelCase (e.g. totalCost), so we read
         # attributes directly to get the snake_case Python values.
         obs_list = []
-        for obs in (trace_obj.observations or []):
+        for obs in trace_obj.observations or []:
             obs_dict = obs.dict() if hasattr(obs, "dict") else obs.__dict__
             # Normalise observation cost/token fields
             obs_dict["calculated_total_cost"] = getattr(obs, "calculated_total_cost", None)
@@ -271,6 +271,24 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     # Post score to Langfuse
     comment = "healthy" if is_healthy else f"issues: {', '.join(all_issues)}"
     score_trace(trace_id, health_score, comment)
+
+    # Token efficiency: tokens per candidate evaluated
+    n_candidates = (
+        trace.get("output", {}).get("merger_candidates", 0) if isinstance(trace.get("output"), dict) else 0
+    )
+    if total_tokens and n_candidates:
+        tokens_per_candidate = total_tokens / n_candidates
+        try:
+            from pipeline_tracing import add_score
+
+            add_score(
+                trace_id,
+                "tokens_per_candidate",
+                tokens_per_candidate,
+                comment=f"{total_tokens} tokens / {n_candidates} candidates",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to post tokens_per_candidate score: %s", exc)
 
     # Alert ops on Discord if unhealthy
     if not is_healthy:

@@ -359,10 +359,11 @@ def _llm_call(
         lf_metadata["update_trace_keys"] = []
 
     try:
-        from prompt_manager import get_prompt_source, get_prompt_version
+        from prompt_manager import get_gate_defaults, get_prompt_source, get_prompt_version
 
         lf_metadata["prompt_version"] = get_prompt_version()
         lf_metadata["prompt_source"] = get_prompt_source()
+        lf_metadata["gates"] = get_gate_defaults()
     except Exception:  # noqa: BLE001
         pass
 
@@ -392,6 +393,7 @@ def _exec_code_step(
     local_ns: dict[str, Any] = {
         "steps": steps,
         "mcp_call": mcp_call,
+        "inputs": extra_vars or {},
     }
     if extra_vars:
         local_ns.update(extra_vars)

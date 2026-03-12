@@ -88,7 +88,12 @@ Return ONLY the JSON array. No other text."""
 
 # Per-timeframe extra rules injected into {{extra_rules}}
 _EXTRA_RULES: dict[str, str] = {
-    "15m": "",
+    "15m": (
+        "- If VIX > 20 and the macro regime is risk-off, suppress LONG alerts "
+        "unless sources_agree >= 4 and edge_probability >= 0.80. "
+        "In elevated-volatility environments, only the strongest confluences "
+        "justify short-timeframe longs."
+    ),
     "1h": (
         "- For 1h timeframe, a strong macro_risk_off signal (score >= 2.0) "
         "should veto otherwise valid long setups.\n"
@@ -107,6 +112,10 @@ _GATE_DEFAULTS: dict[str, dict[str, str]] = {
 # Module-level cache for last prompt source
 _last_source: str = "not-loaded"
 _last_version: str = "yaml-fallback"
+
+# TTL cache for Langfuse prompt objects (avoids repeated API calls)
+_prompt_cache: dict[str, tuple[float, Any, Any]] = {}  # key → (ts, sys_obj, usr_obj)
+_PROMPT_CACHE_TTL: float = 300.0  # seconds
 
 
 def _compile_template(template: str, variables: dict[str, Any]) -> str:
@@ -156,11 +165,28 @@ def get_decision_prompts(
     }
 
     # ── Try Langfuse first ───────────────────────────────────────
+    import time as _time
+
+    cache_key = timeframe
+    cached = _prompt_cache.get(cache_key)
+    if cached:
+        ts, sys_obj, usr_obj = cached
+        if (_time.monotonic() - ts) < _PROMPT_CACHE_TTL:
+            try:
+                system = sys_obj.compile(**merged)
+                user = usr_obj.compile(**merged)
+                _last_source = "langfuse"
+                _last_version = str(getattr(sys_obj, "version", "unknown"))
+                return (system, user)
+            except Exception:  # noqa: BLE001
+                pass  # stale/broken cache entry — refetch below
+
     lf = get_langfuse_client()
     if lf is not None:
         try:
             sys_prompt_obj = lf.get_prompt("decision-system", label="production")
             usr_prompt_obj = lf.get_prompt("decision-user", label="production")
+            _prompt_cache[cache_key] = (_time.monotonic(), sys_prompt_obj, usr_prompt_obj)
             system = sys_prompt_obj.compile(**merged)
             user = usr_prompt_obj.compile(**merged)
             _last_source = "langfuse"
@@ -192,3 +218,12 @@ def get_prompt_version() -> str:
 def get_prompt_source() -> str:
     """Return ``"langfuse"`` or ``"yaml-fallback"``."""
     return _last_source
+
+
+def get_gate_defaults() -> dict[str, dict[str, str]]:
+    """Return per-timeframe gate threshold defaults for generation metadata.
+
+    Returns:
+        Dict mapping timeframe to gate thresholds (ep, sa, conf).
+    """
+    return dict(_GATE_DEFAULTS)

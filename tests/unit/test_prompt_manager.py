@@ -24,6 +24,7 @@ def _reset_module() -> None:
     """Reset module-level caches between tests."""
     pm._last_source = "not-loaded"
     pm._last_version = "yaml-fallback"
+    pm._prompt_cache.clear()
 
 
 # ── YAML Fallback Tests ─────────────────────────────────────────
@@ -63,9 +64,10 @@ class TestYAMLFallback:
         assert "veto" in system
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
-    def test_15m_no_extra_rules(self, _mock: MagicMock) -> None:
+    def test_15m_has_risk_off_rules(self, _mock: MagicMock) -> None:
         system, _ = pm.get_decision_prompts("15m", _base_variables())
-        assert "veto" not in system
+        assert "VIX > 20" in system
+        assert "suppress LONG" in system
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
     def test_variables_interpolated(self, _mock: MagicMock) -> None:

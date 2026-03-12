@@ -332,10 +332,6 @@ docker network inspect trade-alert_trade-net
 # Execute a specific workflow (bypasses schedule)
 docker compose -f docker-compose.prod.yml exec cuga \
   python pipeline_runner.py workflows/orchestrator-15m.yaml
-
-# Run with mock data (no real API calls)
-docker compose -f docker-compose.prod.yml exec -e MOCK_DATA=1 cuga \
-  python pipeline_runner.py workflows/orchestrator-15m.yaml
 ```
 
 ### Execute Python Code in CUGA

@@ -109,15 +109,59 @@ steps:
 
       result = {"n_equities": len(equity_list), "n_crypto": len(crypto_list)}
 
-  # Step 5 -- Log completion
+  # Step 5 -- Produce signal snapshots from CoinGecko top movers + insider activity
+  # SSOT S7: market_normalizer scores 24h movers as supplementary TA signals
+  - name: normalize-market-signals
+    type: code
+    code: |
+      import json
+      import os
+      import redis
+      from normalizers.market_normalizer import normalize
+
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+
+      raw_results = {}
+
+      # CoinGecko top movers → price_change_24h signals
+      cg_data = steps["fetch-coingecko"][0]
+      for item in cg_data.get("results", []):
+          sym = item.get("symbol", "").upper()
+          change = item.get("change_24h")
+          if sym and change is not None:
+              raw_results[sym] = {"price_change_24h": change}
+
+      # Insider activity signals
+      insider_data = steps.get("fetch-insider-activity", {})
+      for item in insider_data.get("results", []):
+          sym = (item.get("symbol") or item.get("ticker", "")).upper()
+          activity = item.get("activity") or item.get("insider_activity")
+          if sym and activity:
+              raw_results.setdefault(sym, {})
+              raw_results[sym]["insider_activity"] = activity
+
+      n_pushed = 0
+      for timeframe in ["15m", "1h"]:
+          snapshots = normalize(raw_results, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
+
+      result = {"n_snapshots": n_pushed}
+
+  # Step 6 -- Log completion
   - name: log-completion
     type: code
     code: |
       import logging
       ne = steps["build-and-store-universes"]["n_equities"]
       nc = steps["build-and-store-universes"]["n_crypto"]
-      logging.getLogger(__name__).info("Universe built: %d equities, %d crypto", ne, nc)
-      result = f"Universe built: {ne} equities, {nc} crypto"
+      ns = steps.get("normalize-market-signals", {}).get("n_snapshots", 0)
+      logging.getLogger(__name__).info("Universe built: %d equities, %d crypto, %d market signal snapshots", ne, nc, ns)
+      result = f"Universe built: {ne} equities, {nc} crypto, {ns} market signal snapshots"
 
 error_handling:
   # SSOT S8: never abort -- always produce a universe.

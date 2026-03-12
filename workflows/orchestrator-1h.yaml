@@ -32,8 +32,14 @@ steps:
               logger.warning("Pipeline trace init failed (non-blocking): %s", exc)
               result = {"trace_id": None}
 
-    # Step 1 — Run all 5 collector workflows in parallel
-    # SSOT §8: collectors must handle partial failures without aborting
+    # Step 1 — Record collector start time, run all 5 in parallel, then
+    # post a parent span + per-collector child spans to Langfuse.
+    - name: collector-start-ts
+      type: code
+      code: |
+          import time
+          result = {"ts": time.monotonic()}
+
     - name: run-collectors
       type: parallel
       abort_on_failure: false
@@ -44,25 +50,60 @@ steps:
           - collector-sentiment.yaml
           - collector-macro.yaml
 
-    # Step 1b — Record collector span in Langfuse + score collector health
+    # Step 1b — Record parent + per-collector spans in Langfuse
     - name: span-collectors
       type: code
       code: |
-          import logging
+          import time, logging
+          from datetime import datetime, timezone, timedelta
           logger = logging.getLogger(__name__)
           try:
               from pipeline_tracing import span_step, add_score
+              from langfuse_client import get_langfuse_client
               tid = steps["init-trace"]["trace_id"]
               collector_results = steps.get("run-collectors", {})
               total = len(collector_results)
               succeeded = sum(1 for v in collector_results.values() if v is not None)
               failed_names = [k for k, v in collector_results.items() if v is None]
               health = succeeded / max(total, 1)
-              with span_step(tid, "run-collectors", input_data={"workflows": total}) as ctx:
-                  ctx["output"] = {"status": "completed", "succeeded": succeeded, "failed": failed_names}
-                  ctx["status_message"] = f"{succeeded}/{total} collectors succeeded"
-                  if failed_names:
-                      ctx["level"] = "WARNING"
+
+              # Compute real wall-clock duration for the parent span
+              start_mono = steps["collector-start-ts"]["ts"]
+              elapsed = time.monotonic() - start_mono
+              now = datetime.now(tz=timezone.utc)
+              span_start = now - timedelta(seconds=elapsed)
+
+              # Parent span with actual timing
+              lf = get_langfuse_client()
+              if lf and tid:
+                  parent_span = lf.trace(id=tid).span(
+                      name="run-collectors",
+                      start_time=span_start,
+                      input={"workflows": total},
+                      level="WARNING" if failed_names else "DEFAULT",
+                  )
+                  parent_span.end(
+                      end_time=now,
+                      output={"status": "completed", "succeeded": succeeded, "failed": failed_names},
+                      status_message=f"{succeeded}/{total} collectors succeeded",
+                      metadata={"duration_s": round(elapsed, 3)},
+                  )
+                  # Per-collector child spans (equal share of parent duration)
+                  per_collector_s = elapsed / max(total, 1)
+                  for i, (name, res) in enumerate(collector_results.items()):
+                      c_start = span_start + timedelta(seconds=i * per_collector_s)
+                      c_end = c_start + timedelta(seconds=per_collector_s)
+                      child = parent_span.span(
+                          name=f"collector-{name.replace('.yaml','')}",
+                          start_time=c_start,
+                          level="ERROR" if res is None else "DEFAULT",
+                      )
+                      child.end(
+                          end_time=c_end,
+                          output={"status": "ok" if res is not None else "failed"},
+                          status_message="ok" if res is not None else "failed",
+                      )
+
               add_score(tid, "collector_health", health,
                         comment=f"{succeeded}/{total} collectors completed" + (f" (failed: {', '.join(failed_names)})" if failed_names else ""))
           except Exception as exc:
@@ -127,9 +168,14 @@ steps:
 
     # Step 3 — Run decision engine for 1h timeframe
     # SSOT §10.3: ensemble reasoning via Claude Sonnet (stricter gates)
+    # Pass merged snapshot data to avoid redundant Redis read in decision.
     - name: run-decision
       type: workflow
       workflow: decision-1h.yaml
+      inputs:
+          merged_snapshots_json: '{{ steps["run-merger"]["snapshots_json"] }}'
+          merged_macro: '{{ steps["run-merger"]["macro"] }}'
+          merged_n: '{{ steps["run-merger"]["n"] }}'
 
     # Step 4 — Healthcheck: verify Redis, Postgres, recent alerts
     # SSOT §13: log results, alert ops channel on failure

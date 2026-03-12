@@ -14,6 +14,16 @@ mcp_servers:
     endpoint: http://crypto-orderbook-mcp:8006
 
 steps:
+  # Step 0 -- Early-exit check for POLYGON_API_KEY
+  # Without a Polygon key the aggs call returns empty; skip the full collector to save ~110s
+  - name: check-api-keys
+    type: code
+    code: |
+      import os
+      polygon_key = os.environ.get("POLYGON_API_KEY", "")
+      has_polygon = bool(polygon_key and polygon_key != "your_polygon_api_key_here")
+      result = {"has_polygon": has_polygon}
+
   # Step 1 -- Read universes from Redis
   # SSOT S8: read universe:equities and universe:crypto set by collector-market
   - name: read-universes
@@ -31,7 +41,14 @@ steps:
       equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
       crypto   = json.loads(crypto_raw)   if crypto_raw   else ["BTC", "ETH", "SOL"]
 
-      result = {"equities": equities, "crypto": crypto}
+      # If no polygon key, clear equities to skip polygon call
+      has_polygon = steps["check-api-keys"]["has_polygon"]
+      if not has_polygon:
+          import logging
+          logging.getLogger(__name__).info("POLYGON_API_KEY not set — skipping equity flow signals")
+          equities = []
+
+      result = {"equities": equities, "crypto": crypto, "has_polygon": has_polygon}
 
   # Step 2 -- Parallel: Polygon unusual_activity + aggs and crypto-orderbook imbalance
   # SSOT S3: Polygon -- batch symbols; query only screener subset (max 25 per call)

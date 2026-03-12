@@ -16,35 +16,48 @@ mcp_servers:
     endpoint: http://fred-mcp:8009
 
 steps:
-  # Step 1 — Merge snapshots from Redis
+  # Step 1 — Merge snapshots (prefer pre-merged inputs from orchestrator)
   # SSOT §9: merger.merge returns top N symbols by aggregate strength
   # SSOT §10.1: accept merged snapshots + macro regime context
+  # When invoked from orchestrator, inputs provide pre-merged data to avoid
+  # a redundant Redis round-trip.  Falls back to Redis when run standalone.
   - name: merge-snapshots
     type: code
     code: |
       import json
       import logging
-      from merger import merge, get_macro_regime
 
       logger = logging.getLogger(__name__)
 
-      snapshots = merge("15m", limit=20)
-      macro = get_macro_regime()
+      # Orchestrator passes pre-merged data via workflow inputs
+      _inp_json = inputs.get("merged_snapshots_json", "") if inputs else ""
+      _inp_macro = inputs.get("merged_macro") if inputs else None
+      _inp_n = inputs.get("merged_n") if inputs else None
 
-      if len(snapshots) == 0:
-          logger.info("No snapshots available for 15m decision — skipping")
-          result = {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
+      if _inp_json and _inp_n:
+          snapshots_json = _inp_json
+          macro = _inp_macro or {}
+          n = int(_inp_n)
+          logger.info("Decision-15m: using %d pre-merged symbols from orchestrator", n)
+          result = {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
       else:
-          snapshots_json = json.dumps(
-              [snap.model_dump() for snap in snapshots], indent=2
-          )
-          logger.info("Decision-15m: merged %d symbols for evaluation", len(snapshots))
-          result = {
-              "skip": False,
-              "snapshots_json": snapshots_json,
-              "macro": macro,
-              "n": len(snapshots),
-          }
+          from merger import merge, get_macro_regime
+          snapshots = merge("15m", limit=20)
+          macro = get_macro_regime()
+          if len(snapshots) == 0:
+              logger.info("No snapshots available for 15m decision — skipping")
+              result = {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
+          else:
+              snapshots_json = json.dumps(
+                  [snap.model_dump() for snap in snapshots], indent=2
+              )
+              logger.info("Decision-15m: merged %d symbols for evaluation", len(snapshots))
+              result = {
+                  "skip": False,
+                  "snapshots_json": snapshots_json,
+                  "macro": macro,
+                  "n": len(snapshots),
+              }
 
   # Step 2 — Fetch live FRED context (VIX + yield curve)
   # SSOT §3: FRED bundle MCP — use in decision prompts

@@ -45,11 +45,6 @@ docker compose up -d
 python -m cuga run --workflows-dir workflows/ --schedule
 ```
 
-### 6. Mock mode (no real API keys)
-```bash
-MOCK_DATA=1 python -m cuga run --workflows-dir workflows/ --schedule
-```
-
 ## Project Structure
 
 | File                     | Purpose                                               |

@@ -19,10 +19,7 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": true,
-      "env": {
-        "MOCK_DATA": "1"
-      }
+      "justMyCode": true
     },
     {
       "name": "Run: healthcheck",

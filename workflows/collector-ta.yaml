@@ -33,38 +33,22 @@ steps:
 
       result = {"equities": equities, "crypto": crypto}
 
-  # Step 2 -- TradingView bollinger_scan + rsi_scan for equities and crypto (15m)
+  # Step 2 -- TradingView combined ta_scan for equities and crypto (15m)
   # SSOT S3: TradingView MCP -- batch symbols/timeframes to respect rate limits (max 20 per call)
-  # Sequential calls to avoid TradingView 429 rate limits. Each call processes
-  # symbols serially with 2s delay. 15m signals reused for 1h snapshots.
-  - name: fetch-tv-eq-bollinger
+  # Uses ta_scan to fetch RSI + Bollinger in a single analysis call per symbol,
+  # cutting total TradingView calls from 4 to 2 (equities + crypto).
+  - name: fetch-tv-eq-ta
     type: tool_call
     tool: tradingview-mcp
-    method: bollinger_scan
+    method: ta_scan
     params:
       symbols: "{{ steps['read-universes']['equities'][:10] }}"
       timeframe: "15m"
 
-  - name: fetch-tv-eq-rsi
+  - name: fetch-tv-crypto-ta
     type: tool_call
     tool: tradingview-mcp
-    method: rsi_scan
-    params:
-      symbols: "{{ steps['read-universes']['equities'][:10] }}"
-      timeframe: "15m"
-
-  - name: fetch-tv-crypto-bollinger
-    type: tool_call
-    tool: tradingview-mcp
-    method: bollinger_scan
-    params:
-      symbols: "{{ steps['read-universes']['crypto'][:10] }}"
-      timeframe: "15m"
-
-  - name: fetch-tv-crypto-rsi
-    type: tool_call
-    tool: tradingview-mcp
-    method: rsi_scan
+    method: ta_scan
     params:
       symbols: "{{ steps['read-universes']['crypto'][:10] }}"
       timeframe: "15m"
@@ -94,47 +78,43 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
-      # Sequential tool_call steps (no longer parallel_tool_calls):
-      #   fetch-tv-eq-bollinger, fetch-tv-eq-rsi, fetch-tv-crypto-bollinger, fetch-tv-crypto-rsi
-      raw_bb_eq = steps.get("fetch-tv-eq-bollinger", {})
-      raw_rsi_eq = steps.get("fetch-tv-eq-rsi", {})
-      raw_bb_crypto = steps.get("fetch-tv-crypto-bollinger", {})
-      raw_rsi_crypto = steps.get("fetch-tv-crypto-rsi", {})
+      # Combined ta_scan steps: fetch-tv-eq-ta, fetch-tv-crypto-ta
+      # Each result contains both RSI and BB fields per symbol.
+      raw_eq_ta = steps.get("fetch-tv-eq-ta", {})
+      raw_crypto_ta = steps.get("fetch-tv-crypto-ta", {})
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
           merged = {}
 
-          # Merge bollinger results (equities + crypto)
-          for raw in [raw_bb_eq, raw_bb_crypto]:
+          # Merge combined TA results (equities + crypto)
+          for raw in [raw_eq_ta, raw_crypto_ta]:
               items = raw.get("results", []) if isinstance(raw, dict) else []
               for item in items:
                   sym = item.get("symbol", "")
                   if not sym:
                       continue
                   merged.setdefault(sym, {"indicators": {}, "patterns": []})
-                  merged[sym]["indicators"]["bb_squeeze"] = item.get("squeeze", False)
-                  bb_pos = item.get("bb_position", 0.5)
-                  merged[sym]["indicators"]["bb_position"] = bb_pos
-                  merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
-                  if item.get("squeeze") and "bb_squeeze" not in merged[sym]["patterns"]:
-                      merged[sym]["patterns"].append("bb_squeeze")
 
-          # Merge RSI results (equities + crypto)
-          for raw in [raw_rsi_eq, raw_rsi_crypto]:
-              items = raw.get("results", []) if isinstance(raw, dict) else []
-              for item in items:
-                  sym = item.get("symbol", "")
-                  if not sym:
-                      continue
-                  merged.setdefault(sym, {"indicators": {}, "patterns": []})
-                  rsi = item.get("rsi", 50.0)
-                  merged[sym]["indicators"]["rsi"] = rsi
-                  # Compute rating from RSI: center at 50, scale to [-3, +3]
-                  merged[sym]["rating"] = round((rsi - 50) / 50 * 3, 2)
-                  if rsi < 30 or rsi > 70:
-                      if "trend_change" not in merged[sym]["patterns"]:
-                          merged[sym]["patterns"].append("trend_change")
+                  # Bollinger data
+                  bb_pos = item.get("bb_position")
+                  squeeze = item.get("squeeze")
+                  if bb_pos is not None:
+                      merged[sym]["indicators"]["bb_position"] = bb_pos
+                      merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
+                  if squeeze is not None:
+                      merged[sym]["indicators"]["bb_squeeze"] = squeeze
+                      if squeeze and "bb_squeeze" not in merged[sym]["patterns"]:
+                          merged[sym]["patterns"].append("bb_squeeze")
+
+                  # RSI data
+                  rsi = item.get("rsi")
+                  if rsi is not None:
+                      merged[sym]["indicators"]["rsi"] = rsi
+                      merged[sym]["rating"] = round((rsi - 50) / 50 * 3, 2)
+                      if rsi < 30 or rsi > 70:
+                          if "trend_change" not in merged[sym]["patterns"]:
+                              merged[sym]["patterns"].append("trend_change")
 
           # Fallback: for symbols with BB data but no RSI, derive rating from bb_position
           for sym, data in merged.items():

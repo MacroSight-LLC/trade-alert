@@ -1,11 +1,10 @@
 # MCP server image for trade-alert.
 # Packages real API integrations (scripts/mcp_servers/) and the server
-# framework (scripts/mcp_server.py). Falls back to mock when APIs unavailable.
+# framework (scripts/mcp_server.py).
 #
 # Build: docker compose --profile mcp build
 # Usage: Each service passes its port as a command arg.
-#   MODE=mock  → uses mock_mcp_server.py (default for dev)
-#   MODE=live  → uses real API integrations via mcp_server.py
+#   Servers use real API integrations; graceful degradation if keys missing.
 
 FROM python:3.11-slim
 
@@ -18,28 +17,10 @@ RUN pip install --no-cache-dir \
     hvac \
     tradingview-ta
 
-# Copy both mock and real server code
-COPY scripts/mock_mcp_server.py /app/mock_mcp_server.py
 COPY scripts/mcp_server.py /app/mcp_server.py
 COPY scripts/mcp_servers/ /app/mcp_servers/
 COPY vault_env_loader.py /app/vault_env_loader.py
 
 EXPOSE 8001-8010
 
-# MODE=live → real APIs; MODE=mock (default) → synthetic data
-ENV MODE=mock
-
-# Entrypoint selects mock or live based on MODE
-COPY <<'EOF' /app/entrypoint.sh
-#!/bin/sh
-set -e
-PORT="${1:-8001}"
-if [ "$MODE" = "live" ]; then
-    exec python mcp_server.py "$PORT"
-else
-    exec python mock_mcp_server.py "$PORT"
-fi
-EOF
-RUN chmod +x /app/entrypoint.sh
-
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["python", "mcp_server.py"]

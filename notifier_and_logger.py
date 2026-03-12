@@ -242,7 +242,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
 
 if __name__ == "__main__":
     # Dry-run test — format only, no real Discord send
-    mock_alert = PlaybookAlert(
+    sample_alert = PlaybookAlert(
         symbol="NVDA",
         direction="LONG",
         edge_probability=0.82,
@@ -258,10 +258,10 @@ if __name__ == "__main__":
         sources_agree=5,
     )
 
-    embed = format_embed(mock_alert)
-    rr = compute_rr(mock_alert.entry)
+    embed = format_embed(sample_alert)
+    rr = compute_rr(sample_alert.entry)
 
-    print("=== MOCK DISCORD EMBED ===")
+    print("=== DISCORD EMBED (dry-run) ===")
     print(json.dumps(embed, indent=2))
     print(f"\nR:R computed: {rr}")
     print(f"Title: {embed['embeds'][0]['title']}")

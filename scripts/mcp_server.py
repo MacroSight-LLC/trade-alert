@@ -13,7 +13,7 @@ Handler modules are in scripts/mcp_servers/<name>.py and must export:
     SERVICE_NAME: str
     TOOLS: dict[str, Callable[[dict], Awaitable[dict|list]]]
 
-Falls back to mock responses if the handler module raises or if
+Falls back to error responses if the handler module raises or if
 the required API key is not set (graceful degradation).
 """
 
@@ -25,10 +25,11 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def create_app(port: int) -> FastAPI:
                 "status": "healthy",
                 "service": service_name,
                 "port": port,
-                "mock": False,
+                "live": True,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )

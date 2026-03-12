@@ -105,24 +105,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
 
 if __name__ == "__main__":
-    mock = {
+    sample = {
         "AAPL": {
             "volume_multiple": 3.5,
             "unusual_options": ["$190c sweep"],
         },
-        "BTC-USD": {
-            "volume_multiple": 1.2,
-            "imbalance": 0.65,
-        },
-        "ETH-USD": {
-            "volume_multiple": 6.0,
-            "imbalance": -0.4,
-        },
     }
-    import os
-
-    if os.environ.get("MOCK_DATA"):
-        results = normalize(mock, timeframe="15m")
-        for r in results:
-            print(r.model_dump())
-        print(f"Flow normalizer: {len(results)} snapshots ✅")
+    results = normalize(sample, timeframe="15m")
+    for r in results:
+        print(r.model_dump())
+    print(f"Flow normalizer: {len(results)} snapshots ✅")

@@ -13,6 +13,7 @@ All functions degrade to no-ops when Langfuse is not configured.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from contextlib import contextmanager
@@ -151,7 +152,9 @@ def add_score(
     if lf is None:
         return
     try:
-        lf.score(trace_id=trace_id, name=name, value=value, comment=comment)
+        # Deterministic ID so re-runs upsert instead of appending duplicates
+        score_id = hashlib.sha256(f"{trace_id}:{name}".encode()).hexdigest()[:32]
+        lf.score(id=score_id, trace_id=trace_id, name=name, value=value, comment=comment)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to post score '%s' to trace %s: %s", name, trace_id, exc)
 
@@ -203,7 +206,7 @@ def end_pipeline_trace(
             output=output,
             metadata=metadata or {},
         )
-        lf.shutdown()
+        lf.flush()
         logger.info("Finalised pipeline trace %s", trace_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to finalise pipeline trace: %s", exc)

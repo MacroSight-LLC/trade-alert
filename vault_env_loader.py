@@ -78,7 +78,7 @@ def load_vault_secrets() -> int:
     try:
         client = hvac.Client(url=vault_addr, token=vault_token)
         if not client.is_authenticated():
-            logger.warning("Vault authentication failed — falling back to env vars")
+            logger.debug("Vault authentication failed — falling back to env vars")
             _loaded = True
             return 0
 

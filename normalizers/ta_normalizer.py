@@ -85,23 +85,14 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
 
 if __name__ == "__main__":
-    mock = {
+    sample = {
         "AAPL": {
             "rating": 2.1,
             "patterns": ["trend_change"],
             "indicators": {"rsi": 62, "bb_width": 0.04, "bb_squeeze": True},
         },
-        "TSLA": {
-            "rating": -1.5,
-            "patterns": [],
-            "indicators": {"rsi": 38, "bb_width": 0.08, "bb_squeeze": False},
-        },
-        "BAD": {"rating": None, "patterns": [], "indicators": {}},
     }
-    import os
-
-    if os.environ.get("MOCK_DATA"):
-        results = normalize(mock, timeframe="15m")
-        for r in results:
-            print(r.model_dump())
-        print(f"TA normalizer: {len(results)} snapshots ✅")
+    results = normalize(sample, timeframe="15m")
+    for r in results:
+        print(r.model_dump())
+    print(f"TA normalizer: {len(results)} snapshots ✅")

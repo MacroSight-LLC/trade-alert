@@ -49,11 +49,16 @@ HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.json
 MCP_HEALTH_TIMEOUT: float = float(os.getenv("MCP_HEALTH_TIMEOUT", "5.0"))
 
 
+HEALTH_LOG_MAX_LINES: int = int(os.getenv("HEALTH_LOG_MAX_LINES", "2000"))
+
+
 def _append_jsonl(record: dict) -> None:
     """Append a single JSON record to the structured health log.
 
-    Creates the log directory if it doesn't exist. Fails silently
-    so logging never breaks the healthcheck itself.
+    Creates the log directory if it doesn't exist. Rotates the log
+    by keeping only the most recent HEALTH_LOG_MAX_LINES entries when
+    the file exceeds the limit. Fails silently so logging never
+    breaks the healthcheck itself.
 
     Args:
         record: Dict to serialize as one JSONL line.
@@ -62,6 +67,14 @@ def _append_jsonl(record: dict) -> None:
         HEALTH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with HEALTH_LOG_PATH.open("a") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
+        # Rotate: keep only the tail when the file grows too large
+        try:
+            lines = HEALTH_LOG_PATH.read_text().splitlines()
+            if len(lines) > HEALTH_LOG_MAX_LINES:
+                keep = lines[-HEALTH_LOG_MAX_LINES:]
+                HEALTH_LOG_PATH.write_text("\n".join(keep) + "\n")
+        except OSError:
+            pass
     except OSError as exc:
         logger.warning("Failed to write health.jsonl — %s", exc)
 

@@ -120,7 +120,7 @@ services:
     restart: unless-stopped
 
   # --- MCP Services (ports 8001-8010, SSOT §3) ---
-  # All share one image built from docker/Dockerfile.mcp (mock server).
+  # All share one image built from docker/Dockerfile.mcp (live API integrations).
   # Activate with: docker compose --profile mcp up -d
 
   tradingview-mcp:
@@ -133,7 +133,6 @@ services:
     ports:
       - "8001:8001"
     environment: &mcp-env
-      MODE: ${MCP_MODE:-live}
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
     env_file: &mcp-envfile

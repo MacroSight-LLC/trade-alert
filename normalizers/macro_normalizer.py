@@ -113,16 +113,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
 
 if __name__ == "__main__":
-    mock = {
+    sample = {
         "vix": 28.5,
         "yield_curve_slope": -75.0,
         "fed_funds_rate": 4.5,
         "risk_on": False,
     }
-    import os
-
-    if os.environ.get("MOCK_DATA"):
-        results = normalize(mock, timeframe="15m")
-        for r in results:
-            print(r.model_dump())
-        print(f"Macro normalizer: {len(results)} snapshots ✅")
+    results = normalize(sample, timeframe="15m")
+    for r in results:
+        print(r.model_dump())
+    print(f"Macro normalizer: {len(results)} snapshots ✅")

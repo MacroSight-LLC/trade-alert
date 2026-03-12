@@ -108,27 +108,14 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
 
 if __name__ == "__main__":
-    mock = {
+    sample = {
         "AAPL": {
             "finnhub_score": 0.7,
             "rot_signal": "strong_bullish",
             "spam_filtered": False,
         },
-        "TSLA": {
-            "finnhub_score": -0.4,
-            "rot_signal": "bearish",
-            "spam_filtered": False,
-        },
-        "SPAM": {
-            "finnhub_score": 0.9,
-            "rot_signal": "strong_bullish",
-            "spam_filtered": True,
-        },
     }
-    import os
-
-    if os.environ.get("MOCK_DATA"):
-        results = normalize(mock, timeframe="15m")
-        for r in results:
-            print(r.model_dump())
-        print(f"Sentiment normalizer: {len(results)} snapshots ✅")
+    results = normalize(sample, timeframe="15m")
+    for r in results:
+        print(r.model_dump())
+    print(f"Sentiment normalizer: {len(results)} snapshots ✅")

@@ -363,7 +363,7 @@ def run_tracker_loop() -> None:
 if __name__ == "__main__":
     from datetime import datetime, timedelta, timezone
 
-    mock_alert: dict = {
+    sample_alert: dict = {
         "id": 1,
         "symbol": "AAPL",
         "direction": "LONG",
@@ -375,20 +375,20 @@ if __name__ == "__main__":
     }
 
     # Test WIN
-    result = evaluate_outcome(mock_alert, 193.0)
+    result = evaluate_outcome(sample_alert, 193.0)
     assert result == "WIN", f"Expected WIN, got {result}"
 
     # Test LOSS
-    result = evaluate_outcome(mock_alert, 181.0)
+    result = evaluate_outcome(sample_alert, 181.0)
     assert result == "LOSS", f"Expected LOSS, got {result}"
 
     # Test OPEN (within window, price between stop and target)
-    result = evaluate_outcome(mock_alert, 186.0)
+    result = evaluate_outcome(sample_alert, 186.0)
     assert result is None, f"Expected None (open), got {result}"
 
     # Test EXPIRED (past window)
     expired_alert: dict = {
-        **mock_alert,
+        **sample_alert,
         "fired_at": datetime.now(timezone.utc) - timedelta(hours=5),
     }
     result = evaluate_outcome(expired_alert, 186.0)
@@ -396,7 +396,7 @@ if __name__ == "__main__":
 
     # Test SHORT WIN
     short_alert: dict = {
-        **mock_alert,
+        **sample_alert,
         "direction": "SHORT",
         "entry_level": 185.0,
         "stop_level": 188.0,
