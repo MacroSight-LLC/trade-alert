@@ -64,8 +64,20 @@ MOCK_RESPONSES: dict[int, dict] = {
         },
         "aggs": {
             "results": [
-                {"symbol": "AAPL", "volume": 85000000, "avg_volume": 55000000, "avg_20d_volume": 55000000, "close": 185.50},
-                {"symbol": "NVDA", "volume": 120000000, "avg_volume": 60000000, "avg_20d_volume": 60000000, "close": 875.00},
+                {
+                    "symbol": "AAPL",
+                    "volume": 85000000,
+                    "avg_volume": 55000000,
+                    "avg_20d_volume": 55000000,
+                    "close": 185.50,
+                },
+                {
+                    "symbol": "NVDA",
+                    "volume": 120000000,
+                    "avg_volume": 60000000,
+                    "avg_20d_volume": 60000000,
+                    "close": 875.00,
+                },
             ]
         },
     },

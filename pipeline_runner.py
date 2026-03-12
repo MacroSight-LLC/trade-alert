@@ -69,11 +69,25 @@ def _new_http_client() -> httpx.AsyncClient:
 _TEMPLATE_RE = re.compile(r"\{\{(.+?)\}\}", re.DOTALL)
 
 _SAFE_BUILTINS: dict[str, Any] = {
-    "len": len, "str": str, "int": int, "float": float, "bool": bool,
-    "list": list, "dict": dict, "tuple": tuple, "set": set,
-    "True": True, "False": False, "None": None,
-    "min": min, "max": max, "abs": abs, "round": round,
-    "isinstance": isinstance, "sorted": sorted, "enumerate": enumerate,
+    "len": len,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict,
+    "tuple": tuple,
+    "set": set,
+    "True": True,
+    "False": False,
+    "None": None,
+    "min": min,
+    "max": max,
+    "abs": abs,
+    "round": round,
+    "isinstance": isinstance,
+    "sorted": sorted,
+    "enumerate": enumerate,
 }
 
 

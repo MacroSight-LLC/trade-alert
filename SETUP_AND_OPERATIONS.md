@@ -19,28 +19,28 @@
 
 ### Running Containers (17 total)
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Infrastructure** | | |
-| Vault | ❌ **UNHEALTHY** | Needs initialization (unsealing) — see below |
-| Redis | ✅ Healthy | Ready to store snapshots & state |
-| PostgreSQL (main) | ✅ Healthy | Ready to store alerts & outcomes |
-| PostgreSQL (Langfuse) | ✅ Healthy | Ready for observability traces |
-| Langfuse | ✅ Healthy | Available at http://localhost:3000 |
-| **Application** | | |
-| CUGA (app) | ✅ Healthy | Ready to execute workflows |
-| Cron | ⚠️ UP (no health check) | Running fine, attempting Vault connection |
-| **MCP Services** (10 total) | ✅ All Healthy | All data connectors ready |
-| - tradingview-mcp | ✅ Healthy | TradingView data on :8001 |
-| - polygon-mcp | ✅ Healthy | Polygon.io data on :8002 |
-| - discord-mcp | ✅ Healthy | Discord notifications on :8003 |
-| - finnhub-mcp | ✅ Healthy | Finnhub financial data on :8004 |
-| - rot-mcp | ✅ Healthy | ROT sentiment on :8005 |
-| - crypto-orderbook-mcp | ✅ Healthy | Crypto orderbook on :8006 |
-| - coingecko-mcp | ✅ Healthy | CoinGecko crypto data on :8007 |
-| - trading-mcp | ✅ Healthy | Trading signals on :8008 |
-| - fred-mcp | ✅ Healthy | Federal Reserve economic data on :8009 |
-| - spamshield-mcp | ✅ Healthy | Spam filtering on :8010 |
+| Component                   | Status                 | Notes                                        |
+| --------------------------- | ---------------------- | -------------------------------------------- |
+| **Infrastructure**          |                        |                                              |
+| Vault                       | ❌ **UNHEALTHY**        | Needs initialization (unsealing) — see below |
+| Redis                       | ✅ Healthy              | Ready to store snapshots & state             |
+| PostgreSQL (main)           | ✅ Healthy              | Ready to store alerts & outcomes             |
+| PostgreSQL (Langfuse)       | ✅ Healthy              | Ready for observability traces               |
+| Langfuse                    | ✅ Healthy              | Available at http://localhost:3000           |
+| **Application**             |                        |                                              |
+| CUGA (app)                  | ✅ Healthy              | Ready to execute workflows                   |
+| Cron                        | ⚠️ UP (no health check) | Running fine, attempting Vault connection    |
+| **MCP Services** (10 total) | ✅ All Healthy          | All data connectors ready                    |
+| - tradingview-mcp           | ✅ Healthy              | TradingView data on :8001                    |
+| - polygon-mcp               | ✅ Healthy              | Polygon.io data on :8002                     |
+| - discord-mcp               | ✅ Healthy              | Discord notifications on :8003               |
+| - finnhub-mcp               | ✅ Healthy              | Finnhub financial data on :8004              |
+| - rot-mcp                   | ✅ Healthy              | ROT sentiment on :8005                       |
+| - crypto-orderbook-mcp      | ✅ Healthy              | Crypto orderbook on :8006                    |
+| - coingecko-mcp             | ✅ Healthy              | CoinGecko crypto data on :8007               |
+| - trading-mcp               | ✅ Healthy              | Trading signals on :8008                     |
+| - fred-mcp                  | ✅ Healthy              | Federal Reserve economic data on :8009       |
+| - spamshield-mcp            | ✅ Healthy              | Spam filtering on :8010                      |
 
 ---
 
@@ -174,13 +174,13 @@ ENCRYPTION_KEY=<random_32_char_string>
 
 ### Get API Keys
 
-| Service | URL | Time |
-|---------|-----|------|
-| Discord Bot Token | https://discord.com/developers/applications | 5 min |
-| Anthropic | https://console.anthropic.com/keys | 5 min |
-| Finnhub | https://finnhub.io/dashboard (free tier available) | 5 min |
-| FRED | https://stlouisfed.org/fred (free tier available) | 5 min |
-| Polygon.io | https://polygon.io/dashboard/keys (free tier available) | 5 min |
+| Service           | URL                                                     | Time  |
+| ----------------- | ------------------------------------------------------- | ----- |
+| Discord Bot Token | https://discord.com/developers/applications             | 5 min |
+| Anthropic         | https://console.anthropic.com/keys                      | 5 min |
+| Finnhub           | https://finnhub.io/dashboard (free tier available)      | 5 min |
+| FRED              | https://stlouisfed.org/fred (free tier available)       | 5 min |
+| Polygon.io        | https://polygon.io/dashboard/keys (free tier available) | 5 min |
 
 ### Langfuse Setup (After First Run)
 

@@ -38,6 +38,7 @@ def _discord_alert_channel_id() -> str | None:
 def _discord_ops_channel_id() -> str | None:
     return os.getenv("DISCORD_OPS_CHANNEL_ID")
 
+
 _COLOR_MAP: dict[str, int] = {
     "LONG": 3066993,
     "SHORT": 15158332,
