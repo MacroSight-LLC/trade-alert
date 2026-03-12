@@ -32,74 +32,53 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
         change: float | None = data.get("price_change_24h")
         if change is not None:
-            if change >= 10.0:
+            abs_change = abs(change)
+            if abs_change >= 5.0:
+                score = 2.5 if change > 0 else -2.5
+                conf = 0.8
+            elif abs_change >= 2.0:
+                score = 1.5 if change > 0 else -1.5
+                conf = 0.65
+            else:
+                score = None
+                conf = None
+            if score is not None:
                 signals.append(
                     Signal(
                         source="trading",
                         type="technical_trend",
-                        score=2.5,
-                        confidence=0.8,
-                        reason=f"24h change {change:+.1f}%",
-                        raw=data,
-                    )
-                )
-            elif change >= 5.0:
-                signals.append(
-                    Signal(
-                        source="trading",
-                        type="technical_trend",
-                        score=1.5,
-                        confidence=0.7,
-                        reason=f"24h change {change:+.1f}%",
-                        raw=data,
-                    )
-                )
-            elif change <= -10.0:
-                signals.append(
-                    Signal(
-                        source="trading",
-                        type="technical_trend",
-                        score=-2.5,
-                        confidence=0.8,
-                        reason=f"24h change {change:+.1f}%",
-                        raw=data,
-                    )
-                )
-            elif change <= -5.0:
-                signals.append(
-                    Signal(
-                        source="trading",
-                        type="technical_trend",
-                        score=-1.5,
-                        confidence=0.7,
+                        score=score,
+                        confidence=conf,
                         reason=f"24h change {change:+.1f}%",
                         raw=data,
                     )
                 )
 
         insider: str | None = data.get("insider_activity")
-        if insider == "buying":
-            signals.append(
-                Signal(
-                    source="trading",
-                    type="sentiment_bull",
-                    score=1.5,
-                    confidence=0.75,
-                    reason="Insider buying activity",
-                    raw=data,
+        if insider:
+            insider_lower = insider.strip().lower()
+            if insider_lower in ("buying", "purchase", "buy"):
+                signals.append(
+                    Signal(
+                        source="trading",
+                        type="sentiment_bull",
+                        score=1.5,
+                        confidence=0.75,
+                        reason="Insider buying activity",
+                        raw=data,
+                    )
                 )
-            )
-        elif insider == "selling":
-            signals.append(
-                Signal(
-                    source="trading",
-                    type="sentiment_bear",
-                    score=-1.5,
-                    confidence=0.75,
-                    reason="Insider selling activity",
-                    raw=data,
+            elif insider_lower in ("selling", "sale", "disposition", "sell"):
+                signals.append(
+                    Signal(
+                        source="trading",
+                        type="sentiment_bear",
+                        score=-1.5,
+                        confidence=0.75,
+                        reason="Insider selling activity",
+                        raw=data,
+                    )
                 )
-            )
 
         if signals:
             snapshots.append(

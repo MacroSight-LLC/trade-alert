@@ -282,8 +282,15 @@ class TestGetSymbolPerformance:
     def test_returns_symbols(self, mock_conn_fn: MagicMock) -> None:
         mock_cur = MagicMock()
         mock_cur.fetchall.return_value = [
-            {"symbol": "AAPL", "total": 25, "wins": 15, "losses": 8,
-             "winrate": 0.65, "avg_edge": 0.78, "avg_pnl": 0.02},
+            {
+                "symbol": "AAPL",
+                "total": 25,
+                "wins": 15,
+                "losses": 8,
+                "winrate": 0.65,
+                "avg_edge": 0.78,
+                "avg_pnl": 0.02,
+            },
         ]
         mock_conn = _mock_conn_with_cursor(mock_cur)
         mock_conn_fn.return_value = mock_conn
@@ -319,9 +326,17 @@ class TestGetSummaryStats:
         mock_cur = MagicMock()
         # Two queries: summary + kpi
         mock_cur.fetchone.side_effect = [
-            {"total_alerts": 100, "resolved": 80, "wins": 50, "losses": 25,
-             "scratches": 5, "overall_winrate": 0.625, "avg_edge": 0.78,
-             "avg_pnl": 0.01, "alerts_today": 8},
+            {
+                "total_alerts": 100,
+                "resolved": 80,
+                "wins": 50,
+                "losses": 25,
+                "scratches": 5,
+                "overall_winrate": 0.625,
+                "avg_edge": 0.78,
+                "avg_pnl": 0.01,
+                "alerts_today": 8,
+            },
             {"kpi_winrate_70": 0.70},
         ]
         mock_conn = _mock_conn_with_cursor(mock_cur)

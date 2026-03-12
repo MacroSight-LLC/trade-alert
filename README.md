@@ -21,22 +21,29 @@
 ```bash
 cp .env.example .env
 # Fill in all required values (ANTHROPIC_API_KEY, DISCORD_BOT_TOKEN, etc.)
+cp .env .env.secrets        # backup with real keys (git-ignored)
 ```
 
-### 3. Run unit tests (no infrastructure needed)
+### 3. Seed secrets into Vault
+```bash
+docker compose up -d vault
+./scripts/vault-init.sh     # reads .env.secrets → writes to Vault KV v2
+```
+
+### 4. Run unit tests (no infrastructure needed)
 ```bash
 pip install pydantic httpx psycopg2-binary redis pytest pytest-cov
 pytest tests/unit/ -v
 ```
 
-### 4. Launch infrastructure
+### 5. Launch infrastructure
 ```bash
 docker compose up -d redis postgres
 # Wait for Postgres to initialize, then apply the schema:
 docker compose exec postgres psql -U trade_alert -d trade_alert -f /docker-entrypoint-initdb.d/schema.sql
 ```
 
-### 5. Run the alert engine
+### 6. Run the alert engine
 ```bash
 # Start all MCP servers + CUGA orchestrator
 docker compose up -d

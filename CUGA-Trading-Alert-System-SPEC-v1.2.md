@@ -6,18 +6,19 @@
 
 ## Implementation Status
 
-| Phase   | Description                             | Status    | Tag    |
-| ------- | --------------------------------------- | --------- | ------ |
-| Phase 1 | Models, Redis collectors                | ✅ Done    | v0.1.0 |
-| Phase 2 | TA collector                            | ✅ Done    | v0.2.0 |
-| Phase 3 | Sentiment, orderbook, macro collectors  | ✅ Done    | v0.3.0 |
-| Phase 4 | Merger, Postgres DB layer               | ✅ Done    | v0.4.0 |
-| Phase 5 | Decision engine workflows               | ✅ Done    | v0.5.0 |
-| Phase 6 | Notifier, Discord embeds, Postgres log  | ✅ Done    | v0.6.0 |
-| Phase 7 | Orchestration, healthcheck, Docker      | ✅ Done    | v0.7.0 |
-| Phase 8 | Outcome tracker, winrate reporting      | ✅ Done    | v0.8.0 |
-| Polish  | Docker fixes, CI, tests, env extraction | ✅ Done    | v0.8.1 |
-| Phase 9 | Dashboard — analytics web UI             | ✅ Done    | v0.9.0 |
+| Phase    | Description                                         | Status        | Tag     |
+| -------- | --------------------------------------------------- | ------------- | ------- |
+| Phase 1  | Models, Redis collectors                            | ✅ Done        | v0.1.0  |
+| Phase 2  | TA collector                                        | ✅ Done        | v0.2.0  |
+| Phase 3  | Sentiment, orderbook, macro collectors              | ✅ Done        | v0.3.0  |
+| Phase 4  | Merger, Postgres DB layer                           | ✅ Done        | v0.4.0  |
+| Phase 5  | Decision engine workflows                           | ✅ Done        | v0.5.0  |
+| Phase 6  | Notifier, Discord embeds, Postgres log              | ✅ Done        | v0.6.0  |
+| Phase 7  | Orchestration, healthcheck, Docker                  | ✅ Done        | v0.7.0  |
+| Phase 8  | Outcome tracker, winrate reporting                  | ✅ Done        | v0.8.0  |
+| Polish   | Docker fixes, CI, tests, env extraction             | ✅ Done        | v0.8.1  |
+| Phase 9  | Dashboard — analytics web UI                        | ✅ Done        | v0.9.0  |
+| Phase 10 | Pipeline hardening: Vault, data quality, gate fixes | 🔧 In Progress | v0.10.0 |
 
 ### Architecture Notes
 
@@ -51,7 +52,13 @@ as the Python-importable boundary — not the collectors themselves.
    - Collector and decision workflows must be idempotent within their respective cron windows (15 min or 1 hour).
 
 6. **Secrets and keys.**
-   All sensitive values live in `.env` (config) and `.env.secrets` (credentials), loaded via Docker Compose `env_file:` and optionally from HashiCorp Vault. No keys in code or YAML.
+   All sensitive values (API keys, passwords, tokens) MUST live in HashiCorp Vault
+   at `secret/trade-alert`. The vault_env_loader.py module auto-injects them
+   into os.environ at import time with retry + exponential backoff.
+   .env contains **only non-secret tunables** (thresholds, URLs, feature flags).
+   .env.secrets is the bootstrap input for vault-init.sh and MUST NOT
+   be committed. No keys in code or YAML. The Vault dev token MUST match
+   `VAULT_DEV_ROOT_TOKEN_ID` in docker-compose.yml.
 
 ### 0.2 AI‑Development Guardrails
 
@@ -119,18 +126,18 @@ Use the existing architecture diagram as the canonical visual reference. It MUST
 
 All MCP services run in Docker, expose `/health`, and are wired into CUGA via its MCP client tooling.[web:81]
 
-| Port | Service Name         | Key Tools (examples)               | Role & Integration Notes                                                                                                                          |
-| ---- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8001 | TradingView MCP      | `bollinger_scan`, `rsi_scan`       | Primary TA: use for BB squeezes, overbought/oversold, and multi‑timeframe trends. Batch symbols/timeframes to respect rate limits.                |
-| 8002 | Polygon MCP          | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                          |
-| 8003 | Discord MCP          | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                              |
-| 8004 | Finnhub MCP          | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                       |
-| 8005 | ROT MCP              | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.          |
-| 8006 | crypto‑orderbook MCP | `imbalance`, `depth`               | Order book structure: bid/ask imbalance near current price. Use this only for symbols marked as crypto.                                           |
-| 8007 | CoinGecko MCP        | `top_gainers`, `dominance`         | Crypto universe and broad market state. Use to build the crypto symbol list and detect sector rotations.                                          |
-| 8008 | trading‑mcp server   | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal. |
-| 8009 | FRED bundle MCP      | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                           |
-| 8010 | SpamShieldpro MCP    | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                         |
+| Port | Service Name         | Key Tools (examples)               | Role & Integration Notes                                                                                                                                                                   |
+| ---- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 8001 | TradingView MCP      | `bollinger_scan`, `rsi_scan`       | Primary TA: uses tradingview-ta (scraping, no API key). Rate-limited to ~10 req/min; use 8–10s inter-symbol delay, max 8 symbols per batch, 15 min cache TTL. Stagger equity/crypto scans. |
+| 8002 | Polygon MCP          | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                                                                   |
+| 8003 | Discord MCP          | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                                                                       |
+| 8004 | Finnhub MCP          | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                                                                |
+| 8005 | ROT MCP              | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.                                                   |
+| 8006 | crypto‑orderbook MCP | `imbalance`, `depth`               | Order book structure: bid/ask imbalance near current price. Use this only for symbols marked as crypto.                                                                                    |
+| 8007 | CoinGecko MCP        | `top_gainers`, `dominance`         | Crypto universe and broad market state. Use to build the crypto symbol list and detect sector rotations.                                                                                   |
+| 8008 | trading‑mcp server   | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal.                                          |
+| 8009 | FRED bundle MCP      | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                                                                    |
+| 8010 | SpamShieldpro MCP    | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                                                                  |
 
 **Integration Best Practices (all MCPs)**
 
@@ -229,6 +236,10 @@ Cron schedule:
 - Every hour: run the 1h orchestrator and `healthcheck.py`.
 - Every 15 minutes: run the outcome tracker.
 
+- Every orchestrator MUST end with a `pipeline-summary` step that logs a
+  structured JSON object containing: timeframe, per-collector status,
+  merger candidate count, alerts fired count, and trace health.
+
 ---
 
 ## 6. Directory Layout for `/trade-alert`
@@ -293,6 +304,16 @@ Each normalizer MUST:
         - `1.5 ≤ multiple < 3` → `score = 1.0`
         - `3 ≤ multiple < 5` → `score = 2.5`
         - `multiple ≥ 5` → `score = 3.0`
+    - **Important:** The `grouped_daily` endpoint returns only one day of data.
+      `avg_volume` MUST be computed as the median volume across all tickers
+      returned that day (relative volume rank), NOT set equal to the symbol's
+      own volume. Alternatively, use the `aggs` tool for a 20-day lookback
+      on the top N candidates.
+- **trading-mcp (Market) → `technical_trend` signals:**
+    - 24h price change thresholds: `|change| >= 2%` → score ±1.5 (conf 0.65);
+      `|change| >= 5%` → score ±2.5 (conf 0.8).
+    - Insider activity matching MUST be case-insensitive with aliases:
+      "buying"/"purchase" → bull; "selling"/"sale"/"disposition" → bear.
 - **crypto‑orderbook → `order_imbalance_long` / `order_imbalance_short`:**
     - Compute bid vs ask depth near top levels.
     - Positive imbalance (bids dominate) → long signal; negative → short signal.
@@ -384,7 +405,8 @@ Key logic to preserve:
 - **Alignment**: count of independent signal groups (trend, volume, sentiment, flow, macro) whose weighted mean score points in the same direction.
 - **Gate**:
     - `edge_probability ≥ 0.70`
-    - `alignment_score ≥ 3`
+    - `sources_agree ≥ 3` (requires at least 3 independent signal sources
+      producing data for the symbol — e.g., ta + sentiment + flow)
     - `average confidence ≥ 0.75`
 
 ### 10.3 decision‑1h.yaml

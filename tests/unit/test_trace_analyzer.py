@@ -7,12 +7,16 @@ from unittest.mock import MagicMock, patch
 
 from models import TraceAnalysis
 from trace_analyzer import (
+    _health_bar,
+    _recommendation,
+    _severity_emoji,
     _sum_tokens,
     analyze_pipeline_trace,
     check_cost,
     check_latency,
     check_output_validity,
     fetch_latest_trace,
+    format_ops_embed,
 )
 
 # ── Fixtures ─────────────────────────────────────────────────────
@@ -200,10 +204,13 @@ class TestAnalyzePipelineTrace:
         assert result.is_healthy is True
         assert "no_trace_available" in result.issues
 
+    @patch("notifier_and_logger.send_ops_embed", return_value=True)
     @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_healthy_trace(self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock) -> None:
+    def test_healthy_trace(
+        self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock, mock_ops: MagicMock
+    ) -> None:
         mock_fetch.return_value = {
             "id": "trace-123",
             "output": {**_valid_alert_dict(), "merger_candidates": 10},
@@ -223,17 +230,22 @@ class TestAnalyzePipelineTrace:
         mock_score.assert_called_once()
         # Score should be 1.0 for healthy
         assert mock_score.call_args[0][1] == 1.0
+        # Ops embed is sent for both healthy and unhealthy traces
+        mock_ops.assert_called_once()
+        embed = mock_ops.call_args[0][0]
+        assert "embeds" in embed
+        assert "HEALTHY" in embed["embeds"][0]["description"]
 
+    @patch("notifier_and_logger.send_ops_embed", return_value=True)
     @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
-    @patch("trace_analyzer.send_ops_message", create=True)
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
     def test_unhealthy_cost(
         self,
         mock_fetch: MagicMock,
         mock_score: MagicMock,
-        mock_ops: MagicMock,
         _mock_pv: MagicMock,
+        mock_ops: MagicMock,
     ) -> None:
         mock_fetch.return_value = {
             "id": "trace-456",
@@ -247,12 +259,17 @@ class TestAnalyzePipelineTrace:
         assert any("exceeds budget" in i for i in result.issues)
         # Score should be < 1.0 since there's an issue
         assert mock_score.call_args[0][1] < 1.0
+        # Ops embed sent with issue details
+        mock_ops.assert_called_once()
+        embed = mock_ops.call_args[0][0]
+        assert embed["embeds"][0]["color"] != 0x2ECC71  # not green
 
+    @patch("notifier_and_logger.send_ops_embed", return_value=True)
     @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
     def test_unhealthy_latency(
-        self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock
+        self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock, mock_ops: MagicMock
     ) -> None:
         mock_fetch.return_value = {
             "id": "trace-789",
@@ -265,10 +282,13 @@ class TestAnalyzePipelineTrace:
         assert result.is_healthy is False
         assert any("exceeds max" in i for i in result.issues)
 
+    @patch("notifier_and_logger.send_ops_embed", return_value=True)
     @patch("trace_analyzer.get_prompt_version", return_value="local-fallback")
     @patch("trace_analyzer.score_trace")
     @patch("trace_analyzer.fetch_latest_trace")
-    def test_invalid_output(self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock) -> None:
+    def test_invalid_output(
+        self, mock_fetch: MagicMock, mock_score: MagicMock, _mock_pv: MagicMock, mock_ops: MagicMock
+    ) -> None:
         mock_fetch.return_value = {
             "id": "trace-bad",
             "output": '{"symbol": "AAPL"}',
@@ -357,3 +377,200 @@ class TestFetchLatestTrace:
         lf.fetch_traces.side_effect = RuntimeError("network")
         mock_get.return_value = lf
         assert fetch_latest_trace("orchestrator-15m") is None
+
+
+# ── Ops Embed Helpers ────────────────────────────────────────────
+
+
+class TestHealthBar:
+    """Tests for _health_bar visual gauge."""
+
+    def test_full_bar(self) -> None:
+        bar = _health_bar(1.0)
+        assert bar == "▓▓▓▓▓▓▓▓▓▓ 100%"
+
+    def test_empty_bar(self) -> None:
+        bar = _health_bar(0.0)
+        assert bar == "░░░░░░░░░░ 0%"
+
+    def test_partial_bar(self) -> None:
+        bar = _health_bar(0.6)
+        assert bar.startswith("▓▓▓▓▓▓░░░░")
+        assert "60%" in bar
+
+    def test_custom_segments(self) -> None:
+        bar = _health_bar(0.5, segments=4)
+        assert bar == "▓▓░░ 50%"
+
+
+class TestSeverityEmoji:
+    """Tests for _severity_emoji mapping."""
+
+    def test_cost_issue(self) -> None:
+        assert _severity_emoji("Cost $1.50 exceeds budget $0.50") == "\U0001f4b8"
+
+    def test_latency_issue(self) -> None:
+        assert _severity_emoji("Latency 200.0s exceeds max 180s") == "\u23f1\ufe0f"
+
+    def test_validation_issue(self) -> None:
+        assert _severity_emoji("PlaybookAlert validation failed: missing field") == "\u274c"
+
+    def test_collector_issue(self) -> None:
+        assert _severity_emoji("Low merger candidates (0)") == "\U0001f4e1"
+
+    def test_quality_issue(self) -> None:
+        assert _severity_emoji("Low batch alert quality (0.30) — prompt may need tuning") == "\U0001f9ea"
+
+    def test_unknown_issue(self) -> None:
+        assert _severity_emoji("Something unexpected") == "\u26a0\ufe0f"
+
+
+class TestRecommendation:
+    """Tests for _recommendation actionable suggestions."""
+
+    def test_cost_recommendation(self) -> None:
+        rec = _recommendation("Cost $1.50 exceeds budget $0.50")
+        assert "token" in rec.lower()
+
+    def test_latency_recommendation(self) -> None:
+        rec = _recommendation("Latency 200.0s exceeds max 180s")
+        assert "TRACE_LATENCY_MAX" in rec or "MCP" in rec
+
+    def test_collector_recommendation(self) -> None:
+        rec = _recommendation("Low merger candidates (0) — collectors may have failed")
+        assert "MCP" in rec or "Collector" in rec
+
+    def test_unknown_recommendation(self) -> None:
+        rec = _recommendation("Something unexpected happened")
+        assert "Langfuse" in rec
+
+
+# ── format_ops_embed ─────────────────────────────────────────────
+
+
+class TestFormatOpsEmbed:
+    """Tests for rich ops embed formatting."""
+
+    def _default_kwargs(self) -> dict:
+        return {
+            "session_id": "orchestrator-15m",
+            "trace_id": "trace-abc-123",
+            "health_score": 1.0,
+            "is_healthy": True,
+            "issues": [],
+            "cost_usd": 0.10,
+            "latency_s": 30.0,
+            "llm_calls": 2,
+            "total_tokens": 5000,
+            "n_candidates": 10,
+            "prompt_version": "v2.1",
+        }
+
+    def test_healthy_embed_structure(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        assert "embeds" in embed
+        assert len(embed["embeds"]) == 1
+        e = embed["embeds"][0]
+        assert "title" in e
+        assert "fields" in e
+        assert "timestamp" in e
+        assert "footer" in e
+
+    def test_healthy_color_green(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        assert embed["embeds"][0]["color"] == 0x2ECC71
+
+    def test_healthy_description_label(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        assert "HEALTHY" in embed["embeds"][0]["description"]
+
+    def test_unhealthy_color_red(self) -> None:
+        kwargs = self._default_kwargs()
+        kwargs["health_score"] = 0.20
+        kwargs["is_healthy"] = False
+        kwargs["issues"] = ["Cost exceeded", "Latency exceeded", "Validation failed", "Low candidates"]
+        embed = format_ops_embed(**kwargs)
+        assert embed["embeds"][0]["color"] == 0xE74C3C
+
+    def test_degraded_color_yellow(self) -> None:
+        kwargs = self._default_kwargs()
+        kwargs["health_score"] = 0.60
+        kwargs["is_healthy"] = False
+        kwargs["issues"] = ["Latency 200.0s exceeds max 180s", "Low merger candidates (0)"]
+        embed = format_ops_embed(**kwargs)
+        assert embed["embeds"][0]["color"] == 0xF1C40F
+
+    def test_issues_field_present_when_unhealthy(self) -> None:
+        kwargs = self._default_kwargs()
+        kwargs["health_score"] = 0.60
+        kwargs["is_healthy"] = False
+        kwargs["issues"] = ["Latency 200.0s exceeds max 180s"]
+        embed = format_ops_embed(**kwargs)
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("Issues" in n for n in field_names)
+
+    def test_no_issues_field_when_healthy(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("No Issues" in n for n in field_names)
+
+    def test_contains_cost_field(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("Cost" in n for n in field_names)
+
+    def test_contains_latency_field(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("Latency" in n for n in field_names)
+
+    def test_contains_llm_usage_field(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("LLM" in n for n in field_names)
+
+    def test_contains_pipeline_details(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        field_names = [f["name"] for f in embed["embeds"][0]["fields"]]
+        assert any("Pipeline" in n for n in field_names)
+
+    def test_trace_link_in_details(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        detail_field = next(f for f in embed["embeds"][0]["fields"] if "Pipeline Details" in f["name"])
+        assert "trace-abc-123" in detail_field["value"]
+
+    def test_tokens_per_candidate_shown(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        llm_field = next(f for f in embed["embeds"][0]["fields"] if "LLM" in f["name"])
+        assert "500" in llm_field["value"]  # 5000 / 10 = 500
+
+    def test_zero_candidates_shows_na(self) -> None:
+        kwargs = self._default_kwargs()
+        kwargs["n_candidates"] = 0
+        embed = format_ops_embed(**kwargs)
+        llm_field = next(f for f in embed["embeds"][0]["fields"] if "LLM" in f["name"])
+        assert "N/A" in llm_field["value"]
+
+    def test_prompt_version_in_details(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        detail_field = next(f for f in embed["embeds"][0]["fields"] if "Pipeline Details" in f["name"])
+        assert "v2.1" in detail_field["value"]
+
+    def test_session_id_in_title(self) -> None:
+        embed = format_ops_embed(**self._default_kwargs())
+        assert "orchestrator-15m" in embed["embeds"][0]["title"]
+
+    def test_multiple_issues_all_shown(self) -> None:
+        kwargs = self._default_kwargs()
+        kwargs["health_score"] = 0.40
+        kwargs["is_healthy"] = False
+        kwargs["issues"] = [
+            "Cost $1.50 exceeds budget $0.50",
+            "Latency 200.0s exceeds max 180s",
+            "Low merger candidates (0) — collectors may have failed",
+        ]
+        embed = format_ops_embed(**kwargs)
+        issues_field = next(f for f in embed["embeds"][0]["fields"] if "Issues" in f["name"])
+        assert "3" in issues_field["name"]
+        for issue_text in kwargs["issues"]:
+            assert issue_text in issues_field["value"]

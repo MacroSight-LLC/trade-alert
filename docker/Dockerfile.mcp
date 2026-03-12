@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir \
     "uvicorn[standard]" \
     httpx \
     hvac \
+    redis \
     tradingview-ta
 
 COPY scripts/mcp_server.py /app/mcp_server.py

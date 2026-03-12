@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 TRACE_COST_BUDGET: float = float(os.getenv("TRACE_COST_BUDGET", "0.50"))
 TRACE_LATENCY_MAX: float = float(os.getenv("TRACE_LATENCY_MAX", "180"))
 
+# ── Embed colour thresholds ──────────────────────────────────────────────────
+_COLOR_HEALTHY: int = 0x2ECC71  # green
+_COLOR_DEGRADED: int = 0xF1C40F  # yellow
+_COLOR_UNHEALTHY: int = 0xE74C3C  # red
+
 
 # ── Trace Fetching ───────────────────────────────────────────────────────────
 
@@ -276,6 +281,199 @@ def _check_alert_quality_scores(trace_id: str) -> list[str]:
     return issues
 
 
+# ── Ops Embed Formatter ──────────────────────────────────────────────────────
+
+
+def _health_bar(score: float, segments: int = 10) -> str:
+    """Build a visual Unicode bar for a 0-1 health score.
+
+    Args:
+        score: Float between 0.0 and 1.0.
+        segments: Number of bar segments.
+
+    Returns:
+        Unicode bar string like ``▓▓▓▓▓▓▓░░░ 70%``.
+    """
+    filled = round(score * segments)
+    return "▓" * filled + "░" * (segments - filled) + f" {score * 100:.0f}%"
+
+
+def _severity_emoji(issue: str) -> str:
+    """Map an issue string to a severity emoji for the ops embed."""
+    lower = issue.lower()
+    if "cost" in lower or "budget" in lower:
+        return "\U0001f4b8"  # 💸
+    if "latency" in lower or "exceeds max" in lower:
+        return "\u23f1\ufe0f"  # ⏱️
+    if "validation failed" in lower or "invalid json" in lower:
+        return "\u274c"  # ❌
+    if "collector" in lower or "merger" in lower or "candidates" in lower:
+        return "\U0001f4e1"  # 📡
+    if "quality" in lower or "prompt" in lower:
+        return "\U0001f9ea"  # 🧪
+    return "\u26a0\ufe0f"  # ⚠️
+
+
+def _recommendation(issue: str) -> str:
+    """Generate an actionable recommendation for an issue."""
+    lower = issue.lower()
+    if "cost" in lower or "budget" in lower:
+        return "Review prompt token usage; consider shorter system prompts or fewer tool calls"
+    if "latency" in lower:
+        return "Check MCP server response times; consider increasing TRACE_LATENCY_MAX or parallelising collectors"
+    if "validation failed" in lower:
+        return "LLM output schema drift — review decision prompt for PlaybookAlert compliance"
+    if "invalid json" in lower:
+        return "JSON parse failure — add stricter output format instructions to prompt"
+    if "collector" in lower or "merger" in lower or "candidates" in lower:
+        return "Collectors returned thin data — check MCP server health and API rate limits"
+    if "quality" in lower:
+        return "Alert quality below threshold — review and iterate on decision prompt"
+    return "Investigate in Langfuse trace details"
+
+
+def format_ops_embed(
+    *,
+    session_id: str,
+    trace_id: str,
+    health_score: float,
+    is_healthy: bool,
+    issues: list[str],
+    cost_usd: float,
+    latency_s: float,
+    llm_calls: int,
+    total_tokens: int,
+    n_candidates: int,
+    prompt_version: str,
+) -> dict:
+    """Build a rich Discord embed for the #trade-ops channel.
+
+    Produces a color-coded, multi-section embed with health gauge,
+    metric cards, issue breakdown with recommendations, and a
+    Langfuse trace link.
+
+    Args:
+        session_id: Pipeline session identifier.
+        trace_id: Langfuse trace ID.
+        health_score: Computed health score (0.0-1.0).
+        is_healthy: Whether all checks passed.
+        issues: List of detected issues.
+        cost_usd: Total LLM cost for this trace.
+        latency_s: Pipeline duration in seconds.
+        llm_calls: Number of LLM observations.
+        total_tokens: Total tokens consumed.
+        n_candidates: Number of merger candidates evaluated.
+        prompt_version: Active prompt version tag.
+
+    Returns:
+        Dict with ``embeds`` key matching Discord embed structure.
+    """
+    now = datetime.now(tz=timezone.utc)
+
+    # Color by health tier
+    if health_score >= 0.80:
+        color = _COLOR_HEALTHY
+        status_emoji = "\u2705"  # ✅
+        status_label = "HEALTHY"
+    elif health_score >= 0.50:
+        color = _COLOR_DEGRADED
+        status_emoji = "\u26a0\ufe0f"  # ⚠️
+        status_label = "DEGRADED"
+    else:
+        color = _COLOR_UNHEALTHY
+        status_emoji = "\U0001f6a8"  # 🚨
+        status_label = "UNHEALTHY"
+
+    # Cost utilisation
+    cost_pct = (cost_usd / TRACE_COST_BUDGET * 100) if TRACE_COST_BUDGET else 0
+    cost_indicator = "\u2705" if cost_pct <= 80 else ("\u26a0\ufe0f" if cost_pct <= 100 else "\U0001f6a8")
+
+    # Latency utilisation
+    latency_pct = (latency_s / TRACE_LATENCY_MAX * 100) if TRACE_LATENCY_MAX else 0
+    latency_indicator = (
+        "\u2705" if latency_pct <= 80 else ("\u26a0\ufe0f" if latency_pct <= 100 else "\U0001f6a8")
+    )
+
+    # Tokens per candidate
+    tpc = f"{total_tokens / n_candidates:,.0f}" if n_candidates else "N/A"
+
+    # Langfuse trace link
+    langfuse_host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    trace_url = f"{langfuse_host}/trace/{trace_id}"
+
+    fields: list[dict] = [
+        # ── Health gauge ──
+        {
+            "name": f"{status_emoji} Pipeline Health",
+            "value": f"```{_health_bar(health_score)}```",
+            "inline": False,
+        },
+        # ── Resource metrics row ──
+        {
+            "name": f"{cost_indicator} Cost",
+            "value": f"```${cost_usd:.4f} / ${TRACE_COST_BUDGET:.2f}```{cost_pct:.0f}% of budget",
+            "inline": True,
+        },
+        {
+            "name": f"{latency_indicator} Latency",
+            "value": f"```{latency_s:.1f}s / {TRACE_LATENCY_MAX:.0f}s```{latency_pct:.0f}% of max",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f916 LLM Usage",
+            "value": f"```{llm_calls} calls \u2022 {total_tokens:,} tokens```Tokens/candidate: {tpc}",
+            "inline": True,
+        },
+        # ── Pipeline details ──
+        {
+            "name": "\U0001f4e6 Pipeline Details",
+            "value": (
+                f"**Candidates:** {n_candidates}\n"
+                f"**Prompt:** `{prompt_version}`\n"
+                f"**Trace:** [{trace_id[:12]}...]({trace_url})"
+            ),
+            "inline": False,
+        },
+    ]
+
+    # ── Issues breakdown ──
+    if issues:
+        issue_lines: list[str] = []
+        for issue in issues:
+            emoji = _severity_emoji(issue)
+            rec = _recommendation(issue)
+            issue_lines.append(f"{emoji} **{issue}**\n\u2514\u2500 _{rec}_")
+
+        fields.append(
+            {
+                "name": f"\U0001f6a8 Issues ({len(issues)})",
+                "value": "\n\n".join(issue_lines),
+                "inline": False,
+            }
+        )
+    else:
+        fields.append(
+            {
+                "name": "\u2705 No Issues Detected",
+                "value": "_All checks passed — pipeline operating normally._",
+                "inline": False,
+            }
+        )
+
+    return {
+        "embeds": [
+            {
+                "title": f"\U0001f50d Trace Analysis \u2014 **{session_id}**",
+                "description": f"**Status: {status_label}** \u2022 Score {health_score:.2f}/1.00",
+                "color": color,
+                "fields": fields,
+                "footer": {"text": "trade-alert ops \u2022 MacroSight LLC"},
+                "timestamp": now.isoformat(),
+            }
+        ]
+    }
+
+
 def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
     """Analyze the most recent pipeline trace and trigger self-healing alerts.
 
@@ -363,17 +561,26 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
         except Exception:  # noqa: BLE001
             pass
 
-    # Alert ops on Discord if unhealthy
-    if not is_healthy:
-        try:
-            from notifier_and_logger import send_ops_message
+    # Send rich embed to ops channel (both healthy and unhealthy)
+    try:
+        from notifier_and_logger import send_ops_embed
 
-            msg = f"🔍 Trace analysis for **{session_id}** — score {health_score:.2f}\n" + "\n".join(
-                f"  • {issue}" for issue in all_issues
-            )
-            send_ops_message(msg)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not send ops alert: %s", exc)
+        embed = format_ops_embed(
+            session_id=session_id,
+            trace_id=trace_id,
+            health_score=health_score,
+            is_healthy=is_healthy,
+            issues=all_issues,
+            cost_usd=cost,
+            latency_s=latency,
+            llm_calls=llm_calls,
+            total_tokens=total_tokens,
+            n_candidates=n_candidates,
+            prompt_version=prompt_version,
+        )
+        send_ops_embed(embed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not send ops embed: %s", exc)
 
     result = TraceAnalysis(
         trace_id=trace_id,

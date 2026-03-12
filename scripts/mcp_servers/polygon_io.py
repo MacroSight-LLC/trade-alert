@@ -240,8 +240,6 @@ async def grouped_daily(params: dict[str, Any]) -> dict:
 
     all_bars = data.get("results", [])
 
-    # Build a volume lookup for avg estimation (we only have 1 day here;
-    # the caller can divide by a separately-fetched 20-day avg if needed).
     results: list[dict] = []
     for bar in all_bars:
         sym = bar.get("T", "")
@@ -251,14 +249,30 @@ async def grouped_daily(params: dict[str, Any]) -> dict:
             {
                 "symbol": sym,
                 "volume": int(bar.get("v", 0)),
-                "avg_volume": int(bar.get("v", 0)),  # single-day proxy
-                "avg_20d_volume": int(bar.get("v", 0)),
                 "close": bar.get("c", 0.0),
                 "open": bar.get("o", 0.0),
                 "high": bar.get("h", 0.0),
                 "low": bar.get("l", 0.0),
             }
         )
+
+    # Compute median volume across all returned tickers as the baseline.
+    # Symbols trading well above median get volume_multiple > 1.0.
+    if results:
+        all_volumes = sorted(r["volume"] for r in results if r["volume"] > 0)
+        if all_volumes:
+            mid = len(all_volumes) // 2
+            median_vol = (
+                all_volumes[mid] if len(all_volumes) % 2 else (all_volumes[mid - 1] + all_volumes[mid]) // 2
+            )
+            median_vol = max(median_vol, 1)  # prevent division by zero
+        else:
+            median_vol = 1
+        for r in results:
+            r["avg_volume"] = median_vol
+            r["avg_20d_volume"] = median_vol
+    else:
+        median_vol = 1
 
     # If no filter, return top 100 by volume
     if not wanted:

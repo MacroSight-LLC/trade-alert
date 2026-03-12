@@ -265,6 +265,33 @@ steps:
           except Exception as exc:
               logger.debug("Trace finalisation failed (non-blocking): %s", exc)
 
+    - name: pipeline-summary
+      type: code
+      code: |
+          import json, logging
+          logger = logging.getLogger("pipeline_summary")
+          collector_results = steps.get("run-collectors", {})
+          merger_data = steps.get("run-merger", {})
+          decision_data = steps.get("run-decision", {})
+          alerts_count = 0
+          if isinstance(decision_data, dict):
+              vf = decision_data.get("validate-and-filter", {})
+              if isinstance(vf, dict):
+                  alerts_count = vf.get("count", 0)
+          summary = {
+              "timeframe": "1h",
+              "collectors": {
+                  k: ("ok" if v is not None else "fail")
+                  for k, v in collector_results.items()
+              },
+              "merger_candidates": merger_data.get("n", 0) if isinstance(merger_data, dict) else 0,
+              "alerts_fired": alerts_count,
+              "trace_id": steps.get("init-trace", {}).get("trace_id"),
+          }
+          logger.info("\u2550\u2550\u2550 PIPELINE SUMMARY \u2550\u2550\u2550")
+          logger.info(json.dumps(summary, indent=2))
+          result = summary
+
     # On total pipeline failure, notify ops channel
     - name: on-failure-notify
       type: code

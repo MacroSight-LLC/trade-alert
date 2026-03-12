@@ -75,46 +75,63 @@ def load_vault_secrets() -> int:
         _loaded = True
         return 0
 
-    try:
-        client = hvac.Client(url=vault_addr, token=vault_token)
-        if not client.is_authenticated():
-            logger.debug("Vault authentication failed — falling back to env vars")
+    for attempt in range(3):
+        try:
+            client = hvac.Client(url=vault_addr, token=vault_token)
+            if not client.is_authenticated():
+                logger.debug("Vault authentication failed — falling back to env vars")
+                _loaded = True
+                return 0
+
+            resp = client.secrets.kv.v2.read_secret_version(
+                path=VAULT_SECRET_PATH,
+                mount_point=VAULT_MOUNT,
+            )
+            data: dict[str, str] = (resp or {}).get("data", {}).get("data", {})
+
+            if not data:
+                logger.warning("Vault path %s/%s is empty", VAULT_MOUNT, VAULT_SECRET_PATH)
+                _loaded = True
+                return 0
+
+            count = 0
+            for key, value in data.items():
+                # Vault field names are UPPER_CASE env var names by convention.
+                env_key = key.upper()
+                if value is not None:
+                    os.environ[env_key] = str(value)
+                    count += 1
+                    logger.debug("Vault → os.environ[%s]", env_key)
+
+            logger.info(
+                "Vault loader: injected %d secret(s) from %s/%s",
+                count,
+                VAULT_MOUNT,
+                VAULT_SECRET_PATH,
+            )
+            _loaded = True
+            return count
+
+        except Exception as exc:
+            if attempt < 2:
+                import time as _time
+
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "Vault read failed (attempt %d/3, retry in %ds): %s",
+                    attempt + 1,
+                    wait,
+                    exc,
+                )
+                _time.sleep(wait)
+                continue
+            logger.error(
+                "Vault read failed after 3 attempts (%s) — falling back to env vars. "
+                "Secrets may be missing; check VAULT_ADDR and VAULT_TOKEN.",
+                exc,
+            )
             _loaded = True
             return 0
-
-        resp = client.secrets.kv.v2.read_secret_version(
-            path=VAULT_SECRET_PATH,
-            mount_point=VAULT_MOUNT,
-        )
-        data: dict[str, str] = (resp or {}).get("data", {}).get("data", {})
-
-        if not data:
-            logger.warning("Vault path %s/%s is empty", VAULT_MOUNT, VAULT_SECRET_PATH)
-            _loaded = True
-            return 0
-
-        count = 0
-        for key, value in data.items():
-            # Vault field names are UPPER_CASE env var names by convention.
-            env_key = key.upper()
-            if value is not None:
-                os.environ[env_key] = str(value)
-                count += 1
-                logger.debug("Vault → os.environ[%s]", env_key)
-
-        logger.info(
-            "Vault loader: injected %d secret(s) from %s/%s",
-            count,
-            VAULT_MOUNT,
-            VAULT_SECRET_PATH,
-        )
-        _loaded = True
-        return count
-
-    except Exception as exc:
-        logger.warning("Vault read failed (%s) — falling back to env vars", exc)
-        _loaded = True
-        return 0
 
 
 # ---------------------------------------------------------------------------

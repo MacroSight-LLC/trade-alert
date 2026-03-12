@@ -6,12 +6,10 @@ model validation, query parameter handling, and edge cases.
 
 from __future__ import annotations
 
-import json
-from decimal import Decimal
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from dashboard_api import _clean_dict, _clean_rows, _serialize, app
@@ -93,11 +91,21 @@ class TestSummaryEndpoint:
         assert data["wins"] == 65
         assert data["kpi_winrate_70"] == 0.70
 
-    @patch("dashboard_api.get_summary_stats", return_value={
-        "total_alerts": 0, "resolved": 0, "wins": 0, "losses": 0,
-        "scratches": 0, "overall_winrate": None, "avg_edge": None,
-        "avg_pnl": None, "alerts_today": 0, "kpi_winrate_70": None,
-    })
+    @patch(
+        "dashboard_api.get_summary_stats",
+        return_value={
+            "total_alerts": 0,
+            "resolved": 0,
+            "wins": 0,
+            "losses": 0,
+            "scratches": 0,
+            "overall_winrate": None,
+            "avg_edge": None,
+            "avg_pnl": None,
+            "alerts_today": 0,
+            "kpi_winrate_70": None,
+        },
+    )
     def test_empty_db(self, _mock: MagicMock) -> None:
         resp = client.get("/api/summary")
         assert resp.status_code == 200
@@ -112,11 +120,14 @@ class TestSummaryEndpoint:
 class TestWinrateEndpoint:
     """Tests for GET /api/winrate."""
 
-    @patch("dashboard_api.get_winrate_by_bucket", return_value=[
-        {"bucket": Decimal("0.9"), "total": 10, "wins": 8, "avg_pnl": Decimal("0.05")},
-        {"bucket": Decimal("0.8"), "total": 20, "wins": 14, "avg_pnl": Decimal("0.03")},
-        {"bucket": Decimal("0.7"), "total": 30, "wins": 18, "avg_pnl": Decimal("0.01")},
-    ])
+    @patch(
+        "dashboard_api.get_winrate_by_bucket",
+        return_value=[
+            {"bucket": Decimal("0.9"), "total": 10, "wins": 8, "avg_pnl": Decimal("0.05")},
+            {"bucket": Decimal("0.8"), "total": 20, "wins": 14, "avg_pnl": Decimal("0.03")},
+            {"bucket": Decimal("0.7"), "total": 30, "wins": 18, "avg_pnl": Decimal("0.01")},
+        ],
+    )
     def test_returns_buckets(self, _mock: MagicMock) -> None:
         resp = client.get("/api/winrate")
         assert resp.status_code == 200
@@ -138,10 +149,13 @@ class TestWinrateEndpoint:
 class TestFrequencyEndpoint:
     """Tests for GET /api/frequency."""
 
-    @patch("dashboard_api.get_alert_frequency", return_value=[
-        {"date": date(2026, 3, 10), "total": 15, "longs": 8, "shorts": 5, "watches": 2},
-        {"date": date(2026, 3, 11), "total": 12, "longs": 6, "shorts": 4, "watches": 2},
-    ])
+    @patch(
+        "dashboard_api.get_alert_frequency",
+        return_value=[
+            {"date": date(2026, 3, 10), "total": 15, "longs": 8, "shorts": 5, "watches": 2},
+            {"date": date(2026, 3, 11), "total": 12, "longs": 6, "shorts": 4, "watches": 2},
+        ],
+    )
     def test_returns_days(self, _mock: MagicMock) -> None:
         resp = client.get("/api/frequency?days=7")
         assert resp.status_code == 200
@@ -171,12 +185,29 @@ class TestFrequencyEndpoint:
 class TestSymbolsEndpoint:
     """Tests for GET /api/symbols."""
 
-    @patch("dashboard_api.get_symbol_performance", return_value=[
-        {"symbol": "AAPL", "total": 25, "wins": 15, "losses": 8,
-         "winrate": Decimal("0.6522"), "avg_edge": Decimal("0.78"), "avg_pnl": Decimal("0.02")},
-        {"symbol": "NVDA", "total": 20, "wins": 14, "losses": 5,
-         "winrate": Decimal("0.7368"), "avg_edge": Decimal("0.82"), "avg_pnl": Decimal("0.04")},
-    ])
+    @patch(
+        "dashboard_api.get_symbol_performance",
+        return_value=[
+            {
+                "symbol": "AAPL",
+                "total": 25,
+                "wins": 15,
+                "losses": 8,
+                "winrate": Decimal("0.6522"),
+                "avg_edge": Decimal("0.78"),
+                "avg_pnl": Decimal("0.02"),
+            },
+            {
+                "symbol": "NVDA",
+                "total": 20,
+                "wins": 14,
+                "losses": 5,
+                "winrate": Decimal("0.7368"),
+                "avg_edge": Decimal("0.82"),
+                "avg_pnl": Decimal("0.04"),
+            },
+        ],
+    )
     def test_returns_symbols(self, _mock: MagicMock) -> None:
         resp = client.get("/api/symbols")
         assert resp.status_code == 200
@@ -198,20 +229,31 @@ class TestSymbolsEndpoint:
 class TestAlertsEndpoint:
     """Tests for GET /api/alerts."""
 
-    @patch("dashboard_api.get_recent_alerts", return_value=[
-        {
-            "id": 1, "symbol": "AAPL", "direction": "LONG",
-            "edge_probability": Decimal("0.75"), "confidence": Decimal("0.80"),
-            "timeframe": "15m", "thesis": "BB squeeze.",
-            "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-            "created_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
-            "updated_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
-            "outcome": "WIN", "outcome_pnl": Decimal("0.0378"),
-            "timeframe_rationale": "15m trend.", "sentiment_context": "Bullish.",
-            "unusual_activity": ["IV spike"], "macro_regime": "Risk-on.",
-            "sources_agree": 4, "raw_snapshots": None,
-        },
-    ])
+    @patch(
+        "dashboard_api.get_recent_alerts",
+        return_value=[
+            {
+                "id": 1,
+                "symbol": "AAPL",
+                "direction": "LONG",
+                "edge_probability": Decimal("0.75"),
+                "confidence": Decimal("0.80"),
+                "timeframe": "15m",
+                "thesis": "BB squeeze.",
+                "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
+                "created_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
+                "updated_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
+                "outcome": "WIN",
+                "outcome_pnl": Decimal("0.0378"),
+                "timeframe_rationale": "15m trend.",
+                "sentiment_context": "Bullish.",
+                "unusual_activity": ["IV spike"],
+                "macro_regime": "Risk-on.",
+                "sources_agree": 4,
+                "raw_snapshots": None,
+            },
+        ],
+    )
     def test_returns_alerts(self, _mock: MagicMock) -> None:
         resp = client.get("/api/alerts")
         assert resp.status_code == 200

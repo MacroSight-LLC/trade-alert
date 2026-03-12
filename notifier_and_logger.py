@@ -17,6 +17,7 @@ import httpx
 import redis as _redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from chart_gen import generate_chart
 from db import insert_alert
 from models import PlaybookAlert
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
 DEDUP_WINDOW_SECONDS: int = int(os.getenv("DEDUP_WINDOW_SECONDS", "900"))  # 15 min default
+MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
 
 _discord_client: httpx.Client | None = None
 
@@ -57,10 +59,30 @@ def _discord_ops_channel_id() -> str | None:
 
 
 _COLOR_MAP: dict[str, int] = {
-    "LONG": 3066993,
-    "SHORT": 15158332,
-    "WATCH": 3447003,
+    "LONG": 3066993,  # #2ECC71 green
+    "SHORT": 15158332,  # #E74C3C red
+    "WATCH": 3447003,  # #3498DB blue
 }
+
+_DIRECTION_EMOJI: dict[str, str] = {
+    "LONG": "\U0001f7e2",  # 🟢
+    "SHORT": "\U0001f534",  # 🔴
+    "WATCH": "\U0001f535",  # 🔵
+}
+
+
+def _score_bar(value: float, segments: int = 10) -> str:
+    """Build a visual Unicode progress bar for a 0-1 value.
+
+    Args:
+        value: Float between 0.0 and 1.0.
+        segments: Number of bar segments.
+
+    Returns:
+        Unicode bar string like ``▓▓▓▓▓▓▓░░░ 70%``.
+    """
+    filled = round(value * segments)
+    return "▓" * filled + "░" * (segments - filled) + f" {value * 100:.0f}%"
 
 
 def compute_rr(entry: dict[str, float]) -> str:
@@ -82,8 +104,25 @@ def compute_rr(entry: dict[str, float]) -> str:
         return "N/A"
 
 
+def _edge_label(ep: float) -> str:
+    """Map edge probability to a human urgency label."""
+    if ep >= 0.80:
+        return "\u26a1 HIGH EDGE"
+    if ep >= 0.65:
+        return "\u2705 SOLID EDGE"
+    return "\u26a0\ufe0f MODERATE"
+
+
 def format_embed(alert: PlaybookAlert) -> dict:
-    """Format a PlaybookAlert as a Discord embed payload.
+    """Format a PlaybookAlert as a rich Discord embed payload.
+
+    Produces a visually dense, multi-section embed with:
+    - Color-coded direction header with emoji and urgency label
+    - Visual score bars for edge probability and confidence
+    - Full trade playbook with R:R, entry/stop/target
+    - Market context section with sentiment, macro, unusual activity
+    - Source alignment gauge
+    - Footer with timestamp and branding
 
     Args:
         alert: Validated PlaybookAlert instance.
@@ -91,55 +130,125 @@ def format_embed(alert: PlaybookAlert) -> dict:
     Returns:
         Dict matching Discord webhook/bot embed structure per SSOT §11.
     """
-    ep_pct = f"{alert.edge_probability * 100:.1f}%"
-    conf_pct = f"{alert.confidence * 100:.1f}%"
     rr = compute_rr(alert.entry)
-    unusual = " \u00b7 ".join(alert.unusual_activity) if alert.unusual_activity else "None"
+    unusual = (
+        "\n".join(f"  \u2022 {a}" for a in alert.unusual_activity)
+        if alert.unusual_activity
+        else "_None detected_"
+    )
+    direction_emoji = _DIRECTION_EMOJI.get(alert.direction, "\u26aa")
+    edge_label = _edge_label(alert.edge_probability)
+
+    # Risk dollar amounts
+    entry_price = alert.entry.get("level", 0)
+    stop_price = alert.entry.get("stop", 0)
+    target_price = alert.entry.get("target", 0)
+    risk_per_share = abs(entry_price - stop_price)
+    reward_per_share = abs(target_price - entry_price)
 
     return {
         "embeds": [
             {
-                "title": (f"\U0001f6a8 {alert.symbol} {alert.direction} | Edge: {ep_pct} | Conf: {conf_pct}"),
+                "title": (f"{direction_emoji} {alert.symbol} {alert.direction} | {edge_label}"),
+                "description": f"**{alert.thesis}**",
                 "color": _COLOR_MAP.get(alert.direction, 3447003),
                 "fields": [
                     {
-                        "name": "\U0001f3af Trade Playbook",
+                        "name": "\u2500" * 25,
+                        "value": "**SIGNAL STRENGTH**",
+                        "inline": False,
+                    },
+                    {
+                        "name": "\U0001f3af Edge Probability",
+                        "value": f"```{_score_bar(alert.edge_probability)}```",
+                        "inline": True,
+                    },
+                    {
+                        "name": "\U0001f4aa Confidence",
+                        "value": f"```{_score_bar(alert.confidence)}```",
+                        "inline": True,
+                    },
+                    {
+                        "name": "\u2500" * 25,
+                        "value": "**TRADE PLAYBOOK**",
+                        "inline": False,
+                    },
+                    {
+                        "name": "\U0001f4b0 Entry",
+                        "value": f"```${entry_price:,.2f}```",
+                        "inline": True,
+                    },
+                    {
+                        "name": "\U0001f6d1 Stop Loss",
+                        "value": f"```${stop_price:,.2f}```",
+                        "inline": True,
+                    },
+                    {
+                        "name": "\U0001f3c6 Target",
+                        "value": f"```${target_price:,.2f}```",
+                        "inline": True,
+                    },
+                    {
+                        "name": "\u2696\ufe0f Risk / Reward",
                         "value": (
-                            f"**Thesis:** {alert.thesis}\n"
-                            f"**Entry:** ${alert.entry['level']}"
-                            f" | **Stop:** ${alert.entry['stop']}"
-                            f" | **Target:** ${alert.entry['target']}"
-                            f" (R:R {rr})"
+                            f"**R:R {rr}**\n"
+                            f"Risk: ${risk_per_share:,.2f}/share  \u2192  "
+                            f"Reward: ${reward_per_share:,.2f}/share"
                         ),
                         "inline": False,
                     },
                     {
-                        "name": "\U0001f4ca Context",
-                        "value": (
-                            f"**Timeframe:** {alert.timeframe}"
-                            f" \u2013 {alert.timeframe_rationale}\n"
-                            f"**Sentiment:** {alert.sentiment_context}\n"
-                            f"**Unusual:** {unusual}\n"
-                            f"**Macro:** {alert.macro_regime}\n"
-                            f"**Sources:** {alert.sources_agree}/10 aligned"
-                        ),
+                        "name": "\u2500" * 25,
+                        "value": "**MARKET CONTEXT**",
+                        "inline": False,
+                    },
+                    {
+                        "name": "\u23f0 Timeframe",
+                        "value": f"**{alert.timeframe}** \u2014 {alert.timeframe_rationale}",
+                        "inline": False,
+                    },
+                    {
+                        "name": "\U0001f4e3 Sentiment",
+                        "value": alert.sentiment_context,
+                        "inline": True,
+                    },
+                    {
+                        "name": "\U0001f30d Macro Regime",
+                        "value": alert.macro_regime,
+                        "inline": True,
+                    },
+                    {
+                        "name": "\U0001f50d Unusual Activity",
+                        "value": unusual,
+                        "inline": False,
+                    },
+                    {
+                        "name": "\U0001f4ca Source Alignment",
+                        "value": f"```{_score_bar(alert.sources_agree / 10, segments=10)}```"
+                        f"**{alert.sources_agree}/10** independent sources aligned",
                         "inline": False,
                     },
                 ],
-                "footer": {"text": "trade-alert | MacroSight LLC"},
+                "footer": {"text": "trade-alert \u2022 MacroSight LLC"},
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         ]
     }
 
 
-def send_discord_embed(embed_payload: dict) -> bool:
+def send_discord_embed(
+    embed_payload: dict,
+    chart_png: bytes | None = None,
+) -> bool:
     """Send embed to Discord alert channel.
 
     Tries webhook first; falls back to bot API if webhook is not set.
+    When *chart_png* is provided the request is sent as multipart/form-data
+    so the PNG is uploaded as a Discord file attachment.
 
     Args:
         embed_payload: Dict with ``embeds`` key matching Discord format.
+        chart_png: Optional PNG bytes for the candlestick chart image.
 
     Returns:
         ``True`` on success (2xx), ``False`` on failure.
@@ -147,7 +256,14 @@ def send_discord_embed(embed_payload: dict) -> bool:
     try:
         webhook = _discord_webhook()
         if webhook:
-            resp = _get_discord_client().post(webhook, json=embed_payload)
+            if chart_png:
+                resp = _get_discord_client().post(
+                    webhook,
+                    data={"payload_json": json.dumps(embed_payload)},
+                    files={"files[0]": ("chart.png", chart_png, "image/png")},
+                )
+            else:
+                resp = _get_discord_client().post(webhook, json=embed_payload)
             resp.raise_for_status()
             return True
 
@@ -156,11 +272,19 @@ def send_discord_embed(embed_payload: dict) -> bool:
         if bot_token and alert_channel:
             url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
             headers = {"Authorization": f"Bot {bot_token}"}
-            resp = _get_discord_client().post(
-                url,
-                json=embed_payload,
-                headers=headers,
-            )
+            if chart_png:
+                resp = _get_discord_client().post(
+                    url,
+                    headers=headers,
+                    data={"payload_json": json.dumps(embed_payload)},
+                    files={"files[0]": ("chart.png", chart_png, "image/png")},
+                )
+            else:
+                resp = _get_discord_client().post(
+                    url,
+                    json=embed_payload,
+                    headers=headers,
+                )
             resp.raise_for_status()
             return True
 
@@ -196,6 +320,34 @@ def send_ops_message(message: str) -> None:
         logger.error("Ops message API error %s: %s", exc.response.status_code, exc)
     except httpx.RequestError as exc:
         logger.error("Ops message request failed: %s", exc)
+
+
+def send_ops_embed(embed_payload: dict) -> bool:
+    """Send a rich embed to the ops/health Discord channel.
+
+    Args:
+        embed_payload: Dict with ``embeds`` key matching Discord format.
+
+    Returns:
+        ``True`` on success (2xx), ``False`` on failure.
+    """
+    bot_token = _discord_bot_token()
+    ops_channel = _discord_ops_channel_id()
+    if not bot_token or not ops_channel:
+        logger.warning("Ops channel not configured — skipping ops embed")
+        return False
+    try:
+        url = f"https://discord.com/api/v10/channels/{ops_channel}/messages"
+        headers = {"Authorization": f"Bot {bot_token}"}
+        resp = _get_discord_client().post(url, json=embed_payload, headers=headers)
+        resp.raise_for_status()
+        return True
+    except httpx.HTTPStatusError as exc:
+        logger.error("Ops embed API error %s: %s", exc.response.status_code, exc)
+        return False
+    except httpx.RequestError as exc:
+        logger.error("Ops embed request failed: %s", exc)
+        return False
 
 
 def _is_duplicate_alert(symbol: str, direction: str, timeframe: str) -> bool:
@@ -252,6 +404,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         logger.error("Notifier expected list, got %s", type(items).__name__)
         return 0
 
+    valid_alerts: list[PlaybookAlert] = []
     for item in items:
         try:
             if not isinstance(item, dict):
@@ -261,8 +414,32 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             # Dedup: suppress duplicate alerts within the window
             if _is_duplicate_alert(alert.symbol, alert.direction, alert.timeframe):
                 continue
+            valid_alerts.append(alert)
+        except Exception as exc:
+            logger.error("Notifier alert processing failed: %s", exc)
+
+    # Cap alerts per cycle to prevent Discord spam (sort by quality)
+    if len(valid_alerts) > MAX_ALERTS_PER_CYCLE:
+        valid_alerts.sort(
+            key=lambda a: a.edge_probability * a.confidence,
+            reverse=True,
+        )
+        dropped = len(valid_alerts) - MAX_ALERTS_PER_CYCLE
+        valid_alerts = valid_alerts[:MAX_ALERTS_PER_CYCLE]
+        logger.warning(
+            "Capped alerts: dropped %d of %d (kept top %d by EP*conf)",
+            dropped,
+            dropped + MAX_ALERTS_PER_CYCLE,
+            MAX_ALERTS_PER_CYCLE,
+        )
+
+    for alert in valid_alerts:
+        try:
             embed = format_embed(alert)
-            sent = send_discord_embed(embed)
+            chart_png = generate_chart(alert.symbol, alert.timeframe, alert.entry)
+            if chart_png:
+                embed["embeds"][0]["image"] = {"url": "attachment://chart.png"}
+            sent = send_discord_embed(embed, chart_png=chart_png)
             if sent:
                 n_sent += 1
             try:
@@ -270,7 +447,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             except Exception as exc:
                 logger.error("Postgres insert failed for %s: %s", alert.symbol, exc)
         except Exception as exc:
-            logger.error("Notifier alert processing failed: %s", exc)
+            logger.error("Notifier alert send failed: %s", exc)
 
     logger.info("Notifier: sent %d/%d alerts to Discord", n_sent, len(items))
     return n_sent

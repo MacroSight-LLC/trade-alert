@@ -112,7 +112,7 @@ def _resolve_screener_exchange(symbol: str) -> tuple[str, str]:
 # In-memory TTL cache — avoids re-fetching the same symbol/interval within _CACHE_TTL seconds.
 # Key: (symbol, screener, exchange, interval) → (timestamp, result_dict)
 _CACHE: dict[tuple[str, str, str, str], tuple[float, dict | None]] = {}
-_CACHE_TTL = 300.0  # 5 minutes
+_CACHE_TTL = 900.0  # 15 min — matches cron interval, avoids re-fetching within same cycle
 
 
 def _get_analysis(
@@ -185,11 +185,11 @@ async def ta_scan(params: dict[str, Any]) -> dict:
     timeframe: str = params.get("timeframe", "15m")
 
     results: list[dict] = []
-    for i, sym in enumerate(symbols[:20]):
+    for i, sym in enumerate(symbols[:8]):
         screener, exchange = _resolve_screener_exchange(sym)
         cache_key = (sym, screener, exchange, timeframe)
         if i > 0 and cache_key not in _CACHE:
-            await asyncio.sleep(6.0)  # Rate limit: TradingView aggressively 429s
+            await asyncio.sleep(9.0)  # Rate limit: ~10 req/min, 9s provides margin
         analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
         if analysis is None:
             continue

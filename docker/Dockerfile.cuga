@@ -28,7 +28,9 @@ RUN pip install --no-cache-dir -e ".[all]" 2>/dev/null || \
     "httpx[http2]" \
     pyyaml \
     "hvac>=2.0.0" \
-    "langfuse>=2.0,<3.0"
+    "langfuse>=2.0,<3.0" \
+    "litellm>=1.0.0" \
+    "mplfinance>=0.12.9b7"
 
 # Application code — all trade-alert Python modules
 COPY workflows/ /app/workflows/
@@ -45,6 +47,7 @@ COPY prompt_manager.py /app/prompt_manager.py
 COPY pipeline_tracing.py /app/pipeline_tracing.py
 COPY pipeline_runner.py /app/pipeline_runner.py
 COPY alert_quality.py /app/alert_quality.py
+COPY chart_gen.py /app/chart_gen.py
 COPY langfuse_datasets.py /app/langfuse_datasets.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh

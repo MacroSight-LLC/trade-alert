@@ -32,6 +32,8 @@ from typing import Any
 import httpx
 import yaml
 
+import vault_env_loader  # noqa: F401  — seeds os.environ from Vault
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

@@ -1,15 +1,18 @@
 # trade-alert cron schedule (SSOT §5)
 # Executed by supercronic inside the cron container.
 # Uses pipeline_runner.py to interpret YAML workflow DSL.
+# Container TZ=America/New_York — all times are ET (DST-aware).
 
-# Every 15 minutes — orchestrators sequence collectors → merger → decision → notifier
-*/15 * * * * cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
+# ── 15m pipeline — US market hours Mon-Fri 9:30-16:00 ET ────────────────────
+30,45 9 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
+*/15 10-15 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
+0 16 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
 
-# Every hour — 1h pipeline orchestrator
-0 * * * * cd /app && python pipeline_runner.py workflows/orchestrator-1h.yaml >> /app/logs/cron.log 2>&1
+# ── 1h pipeline — market hours Mon-Fri 10:00-16:00 ET ───────────────────────
+0 10-16 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-1h.yaml >> /app/logs/cron.log 2>&1
 
-# Every 15 minutes — outcome tracker (flock prevents overlapping runs)
-*/15 * * * * flock -n /tmp/outcome-tracker.lock -c 'cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1'
+# ── Outcome tracker — extended hours for position resolution ─────────────────
+*/15 9-18 * * 1-5 flock -n /tmp/outcome-tracker.lock -c 'cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1'
 
-# Every hour — healthcheck
+# ── Healthcheck — 24/7 ──────────────────────────────────────────────────────
 0 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1

@@ -168,10 +168,31 @@ steps:
             if add_score and tid:
                 add_score(tid, "llm_json_valid", 1.0, comment="valid JSON array")
 
+            # Build per-symbol signal-type index from snapshots for server-side
+            # sources_agree verification (belt-and-suspenders for the ≥3 gate).
+            _snap_types = {}  # {symbol: {type, ...}}
+            try:
+                _snaps = json.loads(steps["merge-snapshots"]["snapshots_json"])
+                for _s in _snaps:
+                    sym = _s.get("symbol", "")
+                    for sig in _s.get("signals", []):
+                        _snap_types.setdefault(sym, set()).add(sig.get("type", ""))
+            except Exception:
+                pass  # degrade gracefully — skip cross-check if parsing fails
+
             alerts = []
             for item in raw:
                 try:
                     alert = PlaybookAlert(**item)
+                    # Cross-check sources_agree against actual snapshot signals
+                    if alert.symbol in _snap_types:
+                        server_count = len(_snap_types[alert.symbol])
+                        if server_count < alert.sources_agree:
+                            logger.warning(
+                                "sources_agree override: %s LLM=%d actual=%d",
+                                alert.symbol, alert.sources_agree, server_count,
+                            )
+                            alert.sources_agree = server_count
                     # Re-enforce gates (belt and suspenders)
                     if (alert.edge_probability >= 0.70
                             and alert.sources_agree >= 3

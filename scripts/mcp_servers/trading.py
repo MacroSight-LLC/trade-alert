@@ -84,6 +84,10 @@ async def screen(params: dict[str, Any]) -> dict:
         defaults = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD", "SPY", "QQQ"]
         results = [{"symbol": s, "market_cap": 0, "pe_ratio": 0.0} for s in defaults[:limit]]
 
+    # Post-processing: flag symbols with large price moves as volume anomaly candidates
+    for r in results:
+        r["volume_anomaly"] = abs(r.get("change_pct", 0.0)) > 3.0
+
     return {"results": results}
 
 

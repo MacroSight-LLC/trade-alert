@@ -153,7 +153,7 @@ def test_notifier_dry_run() -> None:
     embed = format_embed(mock)
     title = embed["embeds"][0]["title"]
     assert "NVDA" in title
-    assert "82.0" in title
+    assert "HIGH EDGE" in title
     rr = compute_rr(mock.entry)
     assert rr != "N/A"
     log.info("  Title: %s", title)
