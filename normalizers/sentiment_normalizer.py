@@ -7,11 +7,9 @@ Respects SpamShield filtering: skips symbols flagged as spam.
 from __future__ import annotations
 
 import logging
-import sys
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-sys.path.insert(0, ".")
 from models import Signal, Snapshot
 from normalizers import clamp as _clamp
 

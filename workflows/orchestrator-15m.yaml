@@ -5,192 +5,199 @@
 
 name: orchestrator-15m
 description: >
-  Cron orchestrator — 15m pipeline. Runs every 15 minutes.
-  Sequences: collectors → merger → decision → notifier.
+    Cron orchestrator — 15m pipeline. Runs every 15 minutes.
+    Sequences: collectors → merger → decision → notifier.
 schedule: "*/15 * * * *"
 llm_model: claude-sonnet-4-20250514
 
 error_handling:
-  abort_on_failure: false
-  retry:
-    max_attempts: 2
-    backoff_seconds: 10
+    abort_on_failure: false
+    retry:
+        max_attempts: 2
+        backoff_seconds: 10
 
 steps:
-  # Step 0 — Create Langfuse pipeline trace (session_id linkage for trace_analyzer)
-  # This makes the full pipeline visible in the Langfuse timeline.
-  - name: init-trace
-    type: code
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from pipeline_tracing import create_pipeline_trace
-          trace_id = create_pipeline_trace("15m", metadata={"schedule": "*/15 * * * *"})
-          result = {"trace_id": trace_id}
-      except Exception as exc:
-          logger.warning("Pipeline trace init failed (non-blocking): %s", exc)
-          result = {"trace_id": None}
+    # Step 0 — Create Langfuse pipeline trace (session_id linkage for trace_analyzer)
+    # This makes the full pipeline visible in the Langfuse timeline.
+    - name: init-trace
+      type: code
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from pipeline_tracing import create_pipeline_trace
+              trace_id = create_pipeline_trace("15m", metadata={"schedule": "*/15 * * * *"})
+              result = {"trace_id": trace_id}
+          except Exception as exc:
+              logger.warning("Pipeline trace init failed (non-blocking): %s", exc)
+              result = {"trace_id": None}
 
-  # Step 1 — Run all 5 collector workflows in parallel
-  # SSOT §8: collectors must handle partial failures without aborting
-  - name: run-collectors
-    type: parallel
-    abort_on_failure: false
-    workflows:
-      - collector-market.yaml
-      - collector-ta.yaml
-      - collector-flow.yaml
-      - collector-sentiment.yaml
-      - collector-macro.yaml
+    # Step 1 — Run all 5 collector workflows in parallel
+    # SSOT §8: collectors must handle partial failures without aborting
+    - name: run-collectors
+      type: parallel
+      abort_on_failure: false
+      workflows:
+          - collector-market.yaml
+          - collector-ta.yaml
+          - collector-flow.yaml
+          - collector-sentiment.yaml
+          - collector-macro.yaml
 
-  # Step 1b — Record collector span in Langfuse + score collector health
-  - name: span-collectors
-    type: code
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from pipeline_tracing import span_step, add_score
-          tid = steps["init-trace"]["trace_id"]
-          with span_step(tid, "run-collectors", input_data={"workflows": 5}) as ctx:
-              ctx["output"] = {"status": "completed"}
-              ctx["status_message"] = "5 collectors executed"
-          # Score collector completeness (1.0 = all 5 ran without abort)
-          add_score(tid, "collector_health", 1.0, comment="all 5 collectors completed")
-      except Exception as exc:
-          logger.debug("Collector span failed (non-blocking): %s", exc)
+    # Step 1b — Record collector span in Langfuse + score collector health
+    - name: span-collectors
+      type: code
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from pipeline_tracing import span_step, add_score
+              tid = steps["init-trace"]["trace_id"]
+              collector_results = steps.get("run-collectors", {})
+              total = len(collector_results)
+              succeeded = sum(1 for v in collector_results.values() if v is not None)
+              failed_names = [k for k, v in collector_results.items() if v is None]
+              health = succeeded / max(total, 1)
+              with span_step(tid, "run-collectors", input_data={"workflows": total}) as ctx:
+                  ctx["output"] = {"status": "completed", "succeeded": succeeded, "failed": failed_names}
+                  ctx["status_message"] = f"{succeeded}/{total} collectors succeeded"
+                  if failed_names:
+                      ctx["level"] = "WARNING"
+              add_score(tid, "collector_health", health,
+                        comment=f"{succeeded}/{total} collectors completed" + (f" (failed: {', '.join(failed_names)})" if failed_names else ""))
+          except Exception as exc:
+              logger.debug("Collector span failed (non-blocking): %s", exc)
 
-  # Step 2 — Merge snapshots from Redis and get macro regime
-  # SSOT §9: merger.merge returns top N symbols by aggregate strength
-  - name: run-merger
-    type: code
-    code: |
-      import json
-      import logging
-      from merger import merge, get_macro_regime
+    # Step 2 — Merge snapshots from Redis and get macro regime
+    # SSOT §9: merger.merge returns top N symbols by aggregate strength
+    - name: run-merger
+      type: code
+      code: |
+          import json
+          import logging
+          from merger import merge, get_macro_regime
 
-      logger = logging.getLogger(__name__)
+          logger = logging.getLogger(__name__)
 
-      try:
-          from pipeline_tracing import span_step
-          tid = steps["init-trace"]["trace_id"]
-      except Exception:
-          tid = None
+          try:
+              from pipeline_tracing import span_step
+              tid = steps["init-trace"]["trace_id"]
+          except Exception:
+              tid = None
 
-      try:
-          from pipeline_tracing import add_score, tag_trace
-      except ImportError:
-          add_score = tag_trace = None
+          try:
+              from pipeline_tracing import add_score, tag_trace
+          except ImportError:
+              add_score = tag_trace = None
 
-      try:
-          with span_step(tid, "run-merger") as ctx:
-              snapshots = merge("15m", limit=20)
-              macro = get_macro_regime()
+          try:
+              with span_step(tid, "run-merger") as ctx:
+                  snapshots = merge("15m", limit=20)
+                  macro = get_macro_regime()
 
-              snapshots_json = json.dumps(
-                  [snap.model_dump() for snap in snapshots], indent=2
-              )
-              n = len(snapshots)
-              logger.info(
-                  "Orchestrator-15m merger: %d candidates, macro risk_on=%s",
-                  n,
-                  macro.get("risk_on", "unknown"),
-              )
-              result = {
-                  "snapshots_json": snapshots_json,
-                  "macro": macro,
-                  "n": n,
-              }
-              ctx["output"] = {"symbols": n, "risk_on": macro.get("risk_on")}
+                  snapshots_json = json.dumps(
+                      [snap.model_dump() for snap in snapshots], indent=2
+                  )
+                  n = len(snapshots)
+                  logger.info(
+                      "Orchestrator-15m merger: %d candidates, macro risk_on=%s",
+                      n,
+                      macro.get("risk_on", "unknown"),
+                  )
+                  result = {
+                      "snapshots_json": snapshots_json,
+                      "macro": macro,
+                      "n": n,
+                  }
+                  ctx["output"] = {"symbols": n, "risk_on": macro.get("risk_on")}
 
-              # Score merger — normalize candidate count (20 = 1.0)
+                  # Score merger — normalize candidate count (20 = 1.0)
+                  if add_score and tid:
+                      add_score(tid, "merger_candidates", min(n / 20.0, 1.0),
+                                comment=f"{n} symbols merged")
+                  # Tag trace with macro regime
+                  if tag_trace and tid:
+                      regime = "risk-on" if macro.get("risk_on") else "risk-off"
+                      tag_trace(tid, [f"macro:{regime}", f"candidates:{n}"])
+          except Exception as exc:
+              logger.error("Orchestrator-15m merger failed: %s", exc)
+              result = {"snapshots_json": "[]", "macro": {}, "n": 0}
               if add_score and tid:
-                  add_score(tid, "merger_candidates", min(n / 20.0, 1.0),
-                            comment=f"{n} symbols merged")
-              # Tag trace with macro regime
-              if tag_trace and tid:
-                  regime = "risk-on" if macro.get("risk_on") else "risk-off"
-                  tag_trace(tid, [f"macro:{regime}", f"candidates:{n}"])
-      except Exception as exc:
-          logger.error("Orchestrator-15m merger failed: %s", exc)
-          result = {"snapshots_json": "[]", "macro": {}, "n": 0}
-          if add_score and tid:
-              add_score(tid, "merger_candidates", 0.0, comment="merger failed")
+                  add_score(tid, "merger_candidates", 0.0, comment="merger failed")
 
-  # Step 3 — Run decision engine for 15m timeframe
-  # SSOT §10.2: ensemble reasoning via Claude Sonnet
-  - name: run-decision
-    type: workflow
-    workflow: decision-15m.yaml
+    # Step 3 — Run decision engine for 15m timeframe
+    # SSOT §10.2: ensemble reasoning via Claude Sonnet
+    - name: run-decision
+      type: workflow
+      workflow: decision-15m.yaml
 
-  # Step 4 — Healthcheck: verify Redis, Postgres, recent alerts
-  # SSOT §13: log results, alert ops channel on failure
-  - name: healthcheck
-    type: code
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from healthcheck import run_healthcheck
-          run_healthcheck(timeframe="15m")
-      except Exception as exc:
-          logger.error("Healthcheck step failed: %s", exc)
+    # Step 4 — Healthcheck: verify Redis, Postgres, recent alerts
+    # SSOT §13: log results, alert ops channel on failure
+    - name: healthcheck
+      type: code
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from healthcheck import run_healthcheck
+              run_healthcheck(timeframe="15m")
+          except Exception as exc:
+              logger.error("Healthcheck step failed: %s", exc)
 
-  # Step 5 — Post-run trace analysis: validate output, check cost/latency
-  # Scores the trace in Langfuse and alerts ops on any issues
-  - name: analyze-pipeline-trace
-    type: code
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from trace_analyzer import analyze_pipeline_trace
-          result = analyze_pipeline_trace("15m")
-          logger.info("Trace analysis: healthy=%s issues=%s", result.is_healthy, result.issues)
-      except Exception as exc:
-          logger.error("Trace analysis failed (non-blocking): %s", exc)
+    # Step 5 — Post-run trace analysis: validate output, check cost/latency
+    # Scores the trace in Langfuse and alerts ops on any issues
+    - name: analyze-pipeline-trace
+      type: code
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from trace_analyzer import analyze_pipeline_trace
+              result = analyze_pipeline_trace("15m")
+              logger.info("Trace analysis: healthy=%s issues=%s", result.is_healthy, result.issues)
+          except Exception as exc:
+              logger.error("Trace analysis failed (non-blocking): %s", exc)
 
-  # Step 6 — Finalise Langfuse pipeline trace with rich output summary
-  - name: finalise-trace
-    type: code
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from pipeline_tracing import end_pipeline_trace, add_score, tag_trace
-          tid = steps["init-trace"]["trace_id"]
+    # Step 6 — Finalise Langfuse pipeline trace with rich output summary
+    - name: finalise-trace
+      type: code
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from pipeline_tracing import end_pipeline_trace, add_score, tag_trace
+              tid = steps["init-trace"]["trace_id"]
 
-          # Gather pipeline-wide summary
-          merger_n = steps.get("run-merger", {}).get("n", 0)
-          output = {
-              "timeframe": "15m",
-              "status": "completed",
-              "merger_candidates": merger_n,
-          }
+              # Gather pipeline-wide summary
+              merger_n = steps.get("run-merger", {}).get("n", 0)
+              output = {
+                  "timeframe": "15m",
+                  "status": "completed",
+                  "merger_candidates": merger_n,
+              }
 
-          # Score overall pipeline completeness (reached finalise = 1.0)
-          add_score(tid, "pipeline_completeness", 1.0,
-                    comment="pipeline reached finalise step")
+              # Score overall pipeline completeness (reached finalise = 1.0)
+              add_score(tid, "pipeline_completeness", 1.0,
+                        comment="pipeline reached finalise step")
 
-          # Tag with timeframe for easy Langfuse filtering
-          tag_trace(tid, ["status:completed"])
+              # Tag with timeframe for easy Langfuse filtering
+              tag_trace(tid, ["status:completed"])
 
-          end_pipeline_trace(tid, output=output, metadata={
-              "merger_candidates": merger_n,
-          })
-      except Exception as exc:
-          logger.debug("Trace finalisation failed (non-blocking): %s", exc)
+              end_pipeline_trace(tid, output=output, metadata={
+                  "merger_candidates": merger_n,
+              })
+          except Exception as exc:
+              logger.debug("Trace finalisation failed (non-blocking): %s", exc)
 
-  # On total pipeline failure, notify ops channel
-  - name: on-failure-notify
-    type: code
-    run_on: failure
-    code: |
-      import logging
-      logger = logging.getLogger(__name__)
-      try:
-          from notifier_and_logger import send_ops_message
-          send_ops_message("⚠️ orchestrator-15m failed")
-      except Exception as exc:
-          logger.error("Failed to send ops failure message: %s", exc)
+    # On total pipeline failure, notify ops channel
+    - name: on-failure-notify
+      type: code
+      run_on: failure
+      code: |
+          import logging
+          logger = logging.getLogger(__name__)
+          try:
+              from notifier_and_logger import send_ops_message
+              send_ops_message("⚠️ orchestrator-15m failed")
+          except Exception as exc:
+              logger.error("Failed to send ops failure message: %s", exc)

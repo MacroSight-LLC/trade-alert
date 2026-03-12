@@ -55,8 +55,7 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
         )
         RETURNING id
     """
-    conn = get_conn()
-    try:
+    with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 sql,
@@ -79,8 +78,6 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
             row = cur.fetchone()
             conn.commit()
             return row[0]
-    finally:
-        conn.close()
 
 
 def update_outcome(alert_id: int, outcome: str, pnl: float) -> None:
@@ -93,16 +90,13 @@ def update_outcome(alert_id: int, outcome: str, pnl: float) -> None:
     """
     sql = """
         UPDATE alerts
-        SET outcome = %s, outcome_pnl = %s
+        SET outcome = %s, outcome_pnl = %s, updated_at = NOW()
         WHERE id = %s
     """
-    conn = get_conn()
-    try:
+    with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (outcome, pnl, alert_id))
             conn.commit()
-    finally:
-        conn.close()
 
 
 def get_recent_alerts(limit: int = 50) -> list[dict]:
@@ -115,13 +109,10 @@ def get_recent_alerts(limit: int = 50) -> list[dict]:
         List of alert dicts (column-name keyed).
     """
     sql = "SELECT * FROM alerts ORDER BY created_at DESC LIMIT %s"
-    conn = get_conn()
-    try:
+    with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, (limit,))
             return [dict(row) for row in cur.fetchall()]
-    finally:
-        conn.close()
 
 
 def get_winrate_by_bucket() -> list[dict]:
@@ -143,21 +134,17 @@ def get_winrate_by_bucket() -> list[dict]:
         GROUP BY bucket
         ORDER BY bucket DESC
     """
-    conn = get_conn()
-    try:
+    with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql)
             return [dict(row) for row in cur.fetchall()]
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":
     # Test connection only — do not insert real data
     try:
-        conn = get_conn()
-        conn.close()
-        print("DB connection successful ✅")
+        with get_conn() as conn:
+            print("DB connection successful ✅")
     except Exception as e:
         print(f"DB not available (expected in dev): {e}")
         print("db.py structure valid ✅")

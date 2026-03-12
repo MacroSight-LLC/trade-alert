@@ -20,9 +20,10 @@ steps:
     type: code
     code: |
       import json
+      import os
       import redis
 
-      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
 
       equities_raw = r.get("universe:equities")
       crypto_raw   = r.get("universe:crypto")
@@ -68,7 +69,7 @@ steps:
       import redis
       from normalizers.flow_normalizer import normalize
 
-      r = redis.Redis(host="redis", port=6379, decode_responses=True)
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       unusual_results   = steps["fetch-flow-signals"][0]
@@ -80,7 +81,7 @@ steps:
           sym = item.get("symbol") or item.get("ticker")
           if sym:
               current_vol = item.get("volume", 0)
-              avg_vol     = item.get("avg_20d_volume", 1) or 1
+              avg_vol     = item.get("avg_20d_volume") or item.get("avg_volume", 1) or 1
               raw[sym] = {
                   "volume_multiple": current_vol / avg_vol,
                   "unusual_options": [],

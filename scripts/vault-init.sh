@@ -2,15 +2,15 @@
 # ──────────────────────────────────────────────────────────────
 # vault-init.sh — Bootstrap HashiCorp Vault for trade-alert
 #
-# Reads secrets from your existing .env file and writes them
+# Reads secrets from your .env.secrets file and writes them
 # into Vault KV v2 at  secret/trade-alert  so the pipeline
 # can fetch them at runtime instead of relying on env files.
 #
 # Usage:
 #   # 1. Start Vault (docker compose up vault -d)
 #   # 2. Run this script:
-#   ./scripts/vault-init.sh              # reads .env from repo root
-#   ./scripts/vault-init.sh /path/.env   # reads a custom env file
+#   ./scripts/vault-init.sh                     # reads .env.secrets from repo root
+#   ./scripts/vault-init.sh /path/.env.secrets   # reads a custom secrets file
 #
 # Prerequisites:
 #   - vault CLI installed (brew install hashicorp/tap/vault)
@@ -20,7 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ENV_FILE="${1:-$REPO_ROOT/.env}"
+ENV_FILE="${1:-$REPO_ROOT/.env.secrets}"
 VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
 VAULT_TOKEN="${VAULT_TOKEN:-dev-root-token}"
 VAULT_PATH="secret/trade-alert"

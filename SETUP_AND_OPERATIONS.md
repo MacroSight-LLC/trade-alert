@@ -117,8 +117,8 @@ docker exec trade-alert-vault-1 vault kv put secret/trade-alert \
 
 **Step 6: Set VAULT_TOKEN in `.env`**
 ```bash
-# Update .env
-echo "VAULT_TOKEN=<INITIAL_ROOT_TOKEN>" >> .env
+# Update .env.secrets
+echo "VAULT_TOKEN=<INITIAL_ROOT_TOKEN>" >> .env.secrets
 ```
 
 ### Option B: Vault-Init Script (Automated, if available)
@@ -126,7 +126,7 @@ echo "VAULT_TOKEN=<INITIAL_ROOT_TOKEN>" >> .env
 # If your project has a vault-init.sh script:
 ./scripts/vault-init.sh
 
-# This automates: init → unseal → load .env secrets → output VAULT_TOKEN
+# This automates: init → unseal → load .env.secrets → output VAULT_TOKEN
 ```
 
 ### Option C: Persistent Unsealing (Production)
@@ -142,7 +142,10 @@ For production, use **Shamir key holders** or **cloud unsealing**:
 
 ### Required Variables (MUST Fill)
 
-Edit `.env` (or use Vault):
+Secrets go in `.env.secrets` (gitignored). Config tunables go in `.env`.
+See `.env.secrets.example` and `.env.example` for templates.
+
+Edit `.env.secrets` (or use Vault):
 
 ```bash
 # Discord notifications

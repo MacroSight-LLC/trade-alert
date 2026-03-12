@@ -81,7 +81,23 @@ def check_output_validity(trace: dict) -> list[str]:
         # No output recorded — not necessarily an error for collector traces
         return issues
 
-    # Output may be a string (JSON) or already a dict
+    # Only validate outputs that look like a PlaybookAlert (must have "symbol").
+    # Orchestrator traces set output to a summary dict like
+    # {"timeframe": "15m", "status": "completed", "merger_candidates": 20}
+    # which would always fail validation and penalise pipeline_health.
+    if isinstance(output, dict) and "symbol" not in output:
+        return issues
+    if isinstance(output, str):
+        try:
+            import json as _json
+
+            parsed = _json.loads(output)
+            if isinstance(parsed, dict) and "symbol" not in parsed:
+                return issues
+        except (ValueError, TypeError):
+            pass
+
+    # Output looks like a PlaybookAlert — validate it
     try:
         if isinstance(output, str):
             PlaybookAlert.model_validate_json(output)

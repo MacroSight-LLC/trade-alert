@@ -1,4 +1,5 @@
 .env
+.env.secrets
 .env.vault
 __pycache__
 output

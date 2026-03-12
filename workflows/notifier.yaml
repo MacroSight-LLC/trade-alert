@@ -9,6 +9,12 @@ description: >
   Receive validated PlaybookAlert JSON from decision engine,
   format and send Discord embeds, log to Postgres.
 llm_model: claude-sonnet-4-20250514
+
+# Required input: alerts_json (JSON string of PlaybookAlert array)
+# Passed via workflow inputs: from calling decision workflow
+inputs:
+  - alerts_json
+
 steps:
   # Step 1 — Receive and validate alerts input
   - name: receive-alerts

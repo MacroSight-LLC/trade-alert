@@ -126,19 +126,19 @@ class TestFormatEmbed:
 class TestSendDiscordEmbed:
     """Tests for Discord embed delivery (webhook + bot fallback)."""
 
-    @patch("notifier_and_logger.DISCORD_WEBHOOK", "https://hooks.example.com/wh")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
     @patch("notifier_and_logger.httpx.post")
-    def test_webhook_success(self, mock_post: MagicMock) -> None:
+    def test_webhook_success(self, mock_post: MagicMock, _wh: MagicMock) -> None:
         mock_post.return_value = MagicMock(status_code=204)
         mock_post.return_value.raise_for_status = MagicMock()
         assert send_discord_embed({"embeds": []}) is True
         mock_post.assert_called_once()
 
-    @patch("notifier_and_logger.DISCORD_WEBHOOK", None)
-    @patch("notifier_and_logger.DISCORD_BOT_TOKEN", "tok123")
-    @patch("notifier_and_logger.DISCORD_ALERT_CHANNEL_ID", "chan456")
+    @patch("notifier_and_logger._discord_webhook", return_value=None)
+    @patch("notifier_and_logger._discord_bot_token", return_value="tok123")
+    @patch("notifier_and_logger._discord_alert_channel_id", return_value="chan456")
     @patch("notifier_and_logger.httpx.post")
-    def test_bot_fallback(self, mock_post: MagicMock) -> None:
+    def test_bot_fallback(self, mock_post: MagicMock, _ch: MagicMock, _bt: MagicMock, _wh: MagicMock) -> None:
         mock_post.return_value = MagicMock(status_code=200)
         mock_post.return_value.raise_for_status = MagicMock()
         assert send_discord_embed({"embeds": []}) is True
@@ -147,14 +147,14 @@ class TestSendDiscordEmbed:
             "Authorization", ""
         )
 
-    @patch("notifier_and_logger.DISCORD_WEBHOOK", None)
-    @patch("notifier_and_logger.DISCORD_BOT_TOKEN", None)
-    def test_no_credentials(self) -> None:
+    @patch("notifier_and_logger._discord_webhook", return_value=None)
+    @patch("notifier_and_logger._discord_bot_token", return_value=None)
+    def test_no_credentials(self, _bt: MagicMock, _wh: MagicMock) -> None:
         assert send_discord_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger.DISCORD_WEBHOOK", "https://hooks.example.com/wh")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
     @patch("notifier_and_logger.httpx.post")
-    def test_http_status_error(self, mock_post: MagicMock) -> None:
+    def test_http_status_error(self, mock_post: MagicMock, _wh: MagicMock) -> None:
         resp = MagicMock()
         resp.status_code = 429
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -165,9 +165,9 @@ class TestSendDiscordEmbed:
         mock_post.return_value = resp
         assert send_discord_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger.DISCORD_WEBHOOK", "https://hooks.example.com/wh")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
     @patch("notifier_and_logger.httpx.post")
-    def test_request_error(self, mock_post: MagicMock) -> None:
+    def test_request_error(self, mock_post: MagicMock, _wh: MagicMock) -> None:
         mock_post.side_effect = httpx.RequestError("timeout")
         assert send_discord_embed({"embeds": []}) is False
 
@@ -178,15 +178,15 @@ class TestSendDiscordEmbed:
 class TestSendOpsMessage:
     """Tests for ops channel messaging."""
 
-    @patch("notifier_and_logger.DISCORD_BOT_TOKEN", None)
-    def test_no_config_skips(self) -> None:
+    @patch("notifier_and_logger._discord_bot_token", return_value=None)
+    def test_no_config_skips(self, _bt: MagicMock) -> None:
         # Should not raise
         send_ops_message("test")
 
-    @patch("notifier_and_logger.DISCORD_BOT_TOKEN", "tok")
-    @patch("notifier_and_logger.DISCORD_OPS_CHANNEL_ID", "ops123")
+    @patch("notifier_and_logger._discord_bot_token", return_value="tok")
+    @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
     @patch("notifier_and_logger.httpx.post")
-    def test_sends_plain_text(self, mock_post: MagicMock) -> None:
+    def test_sends_plain_text(self, mock_post: MagicMock, _ch: MagicMock, _bt: MagicMock) -> None:
         mock_post.return_value = MagicMock(status_code=200)
         mock_post.return_value.raise_for_status = MagicMock()
         send_ops_message("health OK")

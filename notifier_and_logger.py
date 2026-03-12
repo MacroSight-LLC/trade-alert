@@ -19,13 +19,24 @@ import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from db import insert_alert
 from models import PlaybookAlert
 
-DISCORD_WEBHOOK: str | None = os.getenv("DISCORD_WEBHOOK")
-DISCORD_BOT_TOKEN: str | None = os.getenv("DISCORD_BOT_TOKEN")
-DISCORD_ALERT_CHANNEL_ID: str | None = os.getenv("DISCORD_ALERT_CHANNEL_ID")
-DISCORD_OPS_CHANNEL_ID: str | None = os.getenv("DISCORD_OPS_CHANNEL_ID")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _discord_webhook() -> str | None:
+    return os.getenv("DISCORD_WEBHOOK")
+
+
+def _discord_bot_token() -> str | None:
+    return os.getenv("DISCORD_BOT_TOKEN")
+
+
+def _discord_alert_channel_id() -> str | None:
+    return os.getenv("DISCORD_ALERT_CHANNEL_ID")
+
+
+def _discord_ops_channel_id() -> str | None:
+    return os.getenv("DISCORD_OPS_CHANNEL_ID")
 
 _COLOR_MAP: dict[str, int] = {
     "LONG": 3066993,
@@ -116,14 +127,17 @@ def send_discord_embed(embed_payload: dict) -> bool:
         ``True`` on success (2xx), ``False`` on failure.
     """
     try:
-        if DISCORD_WEBHOOK:
-            resp = httpx.post(DISCORD_WEBHOOK, json=embed_payload, timeout=10.0)
+        webhook = _discord_webhook()
+        if webhook:
+            resp = httpx.post(webhook, json=embed_payload, timeout=10.0)
             resp.raise_for_status()
             return True
 
-        if DISCORD_BOT_TOKEN and DISCORD_ALERT_CHANNEL_ID:
-            url = f"https://discord.com/api/v10/channels/{DISCORD_ALERT_CHANNEL_ID}/messages"
-            headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+        bot_token = _discord_bot_token()
+        alert_channel = _discord_alert_channel_id()
+        if bot_token and alert_channel:
+            url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
+            headers = {"Authorization": f"Bot {bot_token}"}
             resp = httpx.post(
                 url,
                 json=embed_payload,
@@ -149,12 +163,12 @@ def send_ops_message(message: str) -> None:
     Args:
         message: Plain text body for the ops channel.
     """
-    if not DISCORD_BOT_TOKEN or not DISCORD_OPS_CHANNEL_ID:
+    if not _discord_bot_token() or not _discord_ops_channel_id():
         logger.warning("Ops channel not configured — skipping ops message")
         return
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_OPS_CHANNEL_ID}/messages"
-        headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+        url = f"https://discord.com/api/v10/channels/{_discord_ops_channel_id()}/messages"
+        headers = {"Authorization": f"Bot {_discord_bot_token()}"}
         resp = httpx.post(
             url,
             json={"content": message},

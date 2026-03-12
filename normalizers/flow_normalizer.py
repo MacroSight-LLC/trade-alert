@@ -6,11 +6,9 @@ bid/ask imbalances into ``order_imbalance_long`` / ``order_imbalance_short``.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-sys.path.insert(0, ".")
 from models import Signal, Snapshot
 from normalizers import clamp as _clamp
 

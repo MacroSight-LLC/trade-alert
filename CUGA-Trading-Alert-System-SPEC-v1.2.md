@@ -1,5 +1,5 @@
 # CUGA‑Trading‑Alert‑System‑SPEC-v1.2.md
-**Single Source of Truth | Version 1.2 | March 5, 2026**
+**Single Source of Truth | Version 1.2 | March 11, 2026**
 
 > This document is the authoritative specification for the `/trade-alert` repository.
 > All AI tools (Claude Opus 4.6 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
@@ -48,10 +48,10 @@ as the Python-importable boundary — not the collectors themselves.
 
 5. **Resilience first.**
    - All external calls (MCPs, Redis, Postgres) MUST be wrapped with timeouts and retries.
-   - Collector and decision workflows must be idempotent in a 5‑minute window.
+   - Collector and decision workflows must be idempotent within their respective cron windows (15 min or 1 hour).
 
 6. **Secrets and keys.**
-   All sensitive values live only in `.env` and Docker environment variables. No keys in code or YAML.
+   All sensitive values live in `.env` (config) and `.env.secrets` (credentials), loaded via Docker Compose `env_file:` and optionally from HashiCorp Vault. No keys in code or YAML.
 
 ### 0.2 AI‑Development Guardrails
 
@@ -72,7 +72,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (5‑minute cron)** → 10 MCP servers → normalized ensemble signals → Claude 3.5 Sonnet decision agent → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 10 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → **Discord trading playbook alerts**.
 
 Output per alert:
 
@@ -103,7 +103,7 @@ Output per alert:
 ```text
 Docker Compose
   → MCP Stack (10)
-  → Cron Trigger (every 5 minutes)
+  → Cron Trigger (every 15 min for 15m pipeline, hourly for 1h pipeline)
   → Parallel CUGA Collector Workflows (5)
   → Redis Snapshot Queues
   → CUGA Decision Workflows (15m & 1h) using Claude Sonnet
@@ -201,7 +201,8 @@ class PlaybookAlert(BaseModel):
 
 **Model Guardrails**
 
-- Every `Snapshot` MUST contain at least one `Signal`.
+- Every `Snapshot` MUST contain at least one `Signal` (enforced by a `@field_validator`).
+- Every `PlaybookAlert.entry` MUST contain keys `level`, `stop`, `target` (enforced by a `@field_validator`).
 - Every alert MUST be a valid `PlaybookAlert` instance before sending to Discord or writing to Postgres.
 - LLM JSON outputs MUST be validated against `PlaybookAlert` and rejected on failure (with logging).
 
@@ -222,10 +223,11 @@ Key points:
     - `./logs` → `/app/logs`
 - `cron` service running `crond` using the `crontab` file.
 
-Cron schedule remains:
+Cron schedule:
 
-- Every 5 minutes: run all collector workflows then decision workflows.
-- Every hour: run `healthcheck.py`.
+- Every 15 minutes: run the 15m orchestrator (collectors → merger → decision → notifier).
+- Every hour: run the 1h orchestrator and `healthcheck.py`.
+- Every 15 minutes: run the outcome tracker.
 
 ---
 
@@ -240,7 +242,6 @@ trade-alert/
     ta_normalizer.py
     flow_normalizer.py
     sentiment_normalizer.py
-    market_normalizer.py
     macro_normalizer.py
   workflows/
     collector-market.yaml
@@ -367,7 +368,7 @@ Candidate selection:
 
 Decision workflows are where the ensemble is evaluated. They MUST:
 
-- Use Claude 3.5 Sonnet as `llm_model`.
+- Use Claude Sonnet 4 (`claude-sonnet-4-20250514`) as `llm_model`.
 - Accept merged snapshots + macro regime context.
 - Produce an array of `PlaybookAlert` JSON objects or an empty array.
 
@@ -430,7 +431,9 @@ Guardrail: Only one embed per alert; no additional commentary.
 
 ## 12. Postgres Schema & Analytics
 
-**File:** `schema.sql` (unchanged from v1.1).
+**File:** `schema.sql`
+
+The `alerts` table includes `id` (SERIAL), `created_at`, `updated_at` (auto-set on outcome resolution), and all `PlaybookAlert` fields stored as native columns or JSONB.
 
 Analytics to plan for later (not required in v1.2 implementation, but guiding):
 
@@ -443,11 +446,11 @@ Analytics to plan for later (not required in v1.2 implementation, but guiding):
 
 ## 13. Health & Monitoring
 
-**File:** `workflows/healthcheck.py`
+**File:** `healthcheck.py` (repo root)
 
 Behavior:
 
-- Check `/health` on every MCP.
+- Check `/health` on every MCP (uses env-var overrides for each MCP URL, same as `pipeline_runner.py`).
 - Check Redis (`PING`) and a minimal Postgres query.
 - Log results to `logs/health.jsonl`.
 - If more than one critical service is unhealthy, send a diagnostic message to a separate Discord channel via Discord MCP or webhook, clearly labeled as a system alert.

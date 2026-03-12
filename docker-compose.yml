@@ -127,6 +127,8 @@ services:
     env_file: &mcp-envfile
       - path: .env
         required: false
+      - path: .env.secrets
+        required: false
     healthcheck: &mcp-health-8001
       test:
         [
@@ -371,6 +373,8 @@ services:
         condition: service_healthy
     env_file:
       - path: .env
+      - path: .env.secrets
+        required: false
       - path: .env.vault
         required: false
     environment:

@@ -31,6 +31,7 @@ class TestCreatePipelineTrace:
             name="pipeline-15m",
             session_id="orchestrator-15m",
             metadata={},
+            tags=["timeframe:15m", "pipeline"],
         )
 
     @patch("pipeline_tracing.get_langfuse_client")
@@ -48,6 +49,7 @@ class TestCreatePipelineTrace:
             name="pipeline-1h",
             session_id="orchestrator-1h",
             metadata={"schedule": "hourly"},
+            tags=["timeframe:1h", "pipeline"],
         )
 
     @patch("pipeline_tracing.get_langfuse_client")

@@ -70,6 +70,14 @@ class Snapshot(BaseModel):
     timestamp: str
     signals: List[Signal]
 
+    @field_validator("signals")
+    @classmethod
+    def validate_signals_non_empty(cls, v: list[Signal]) -> list[Signal]:
+        """SSOT §4: Every Snapshot MUST contain at least one Signal."""
+        if not v:
+            raise ValueError("Snapshot must have at least one Signal")
+        return v
+
 
 class PlaybookAlert(BaseModel):
     """Final structured alert produced by the LLM decision engine.
@@ -104,6 +112,16 @@ class PlaybookAlert(BaseModel):
     unusual_activity: List[str]
     macro_regime: str
     sources_agree: int
+
+    @field_validator("entry")
+    @classmethod
+    def validate_entry_keys(cls, v: dict[str, float]) -> dict[str, float]:
+        """SSOT §4: entry must contain level, stop, target."""
+        required = {"level", "stop", "target"}
+        missing = required - v.keys()
+        if missing:
+            raise ValueError(f"entry missing required keys: {missing}")
+        return v
 
 
 class TraceAnalysis(BaseModel):

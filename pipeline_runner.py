@@ -68,6 +68,14 @@ def _new_http_client() -> httpx.AsyncClient:
 
 _TEMPLATE_RE = re.compile(r"\{\{(.+?)\}\}", re.DOTALL)
 
+_SAFE_BUILTINS: dict[str, Any] = {
+    "len": len, "str": str, "int": int, "float": float, "bool": bool,
+    "list": list, "dict": dict, "tuple": tuple, "set": set,
+    "True": True, "False": False, "None": None,
+    "min": min, "max": max, "abs": abs, "round": round,
+    "isinstance": isinstance, "sorted": sorted, "enumerate": enumerate,
+}
+
 
 def _render_template(template: str, steps: dict[str, Any], extra_vars: dict[str, Any] | None = None) -> Any:
     """Evaluate ``{{ expr }}`` Jinja-style template expressions.
@@ -89,12 +97,12 @@ def _render_template(template: str, steps: dict[str, Any], extra_vars: dict[str,
 
     # Single expression spanning the full string → return raw value
     if len(matches) == 1 and matches[0].start() == 0 and matches[0].end() == len(template.strip()):
-        return eval(matches[0].group(1).strip(), {"__builtins__": {}}, ns)  # noqa: S307
+        return eval(matches[0].group(1).strip(), {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S307
 
     # Multiple/mixed → string interpolation
     result = template
     for m in reversed(matches):
-        val = eval(m.group(1).strip(), {"__builtins__": {}}, ns)  # noqa: S307
+        val = eval(m.group(1).strip(), {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S307
         result = result[: m.start()] + str(val) + result[m.end() :]
     return result
 
@@ -178,15 +186,19 @@ def _llm_call(
     else:
         litellm_model = model
 
-    # Langfuse metadata — links generation to the pipeline trace
+    # Langfuse metadata — links generation to the pipeline trace.
+    # Use existing_trace_id (not trace_id) so LiteLLM's Langfuse callback
+    # links the generation to our trace without overwriting its name.
     lf_metadata: dict[str, Any] = {
         "generation_name": step_name,
     }
     if trace_id:
-        lf_metadata["trace_id"] = trace_id
+        lf_metadata["existing_trace_id"] = trace_id
+        lf_metadata["update_trace_keys"] = []
 
     try:
-        from prompt_manager import get_prompt_version, get_prompt_source
+        from prompt_manager import get_prompt_source, get_prompt_version
+
         lf_metadata["prompt_version"] = get_prompt_version()
         lf_metadata["prompt_source"] = get_prompt_source()
     except Exception:  # noqa: BLE001
@@ -323,11 +335,14 @@ def run_workflow(
     max_attempts = error_cfg.get("retry", {}).get("max_attempts", 1)
     backoff = error_cfg.get("retry", {}).get("backoff_seconds", 0)
 
-    # Register workflow-level MCP endpoint overrides
+    # Register workflow-level MCP endpoint overrides.
+    # Environment variables (e.g. TRADINGVIEW_MCP_URL) take precedence over
+    # YAML-hardcoded Docker hostnames so the pipeline works from the host.
     for srv in wf.get("mcp_servers", []):
         srv_name = srv["name"]
         if "endpoint" in srv:
-            _workflow_mcp_endpoints[srv_name] = srv["endpoint"]
+            env_key = srv_name.upper().replace("-", "_") + "_URL"
+            _workflow_mcp_endpoints[srv_name] = os.getenv(env_key, srv["endpoint"])
 
     wf_steps: list[dict[str, Any]] = wf.get("steps", [])
     step_results: dict[str, Any] = {}
@@ -446,8 +461,12 @@ def _execute_step(
 
     if step_type == "llm":
         return _exec_llm_step(
-            step_def, steps, model, extra_vars,
-            trace_id=trace_id, step_name=step_name,
+            step_def,
+            steps,
+            model,
+            extra_vars,
+            trace_id=trace_id,
+            step_name=step_name,
         )
 
     if step_type == "workflow":
@@ -457,20 +476,30 @@ def _execute_step(
         for k, v in step_def.get("inputs", {}).items():
             sub_inputs[k] = _render_params(v, steps, extra_vars)
         return run_workflow(
-            sub_path, inputs=sub_inputs, parent_steps=steps,
+            sub_path,
+            inputs=sub_inputs,
+            parent_steps=steps,
             trace_id=trace_id,
         )
 
     if step_type == "parallel":
         return _exec_parallel_workflows(
-            step_def, workflows_dir, steps, extra_vars,
+            step_def,
+            workflows_dir,
+            steps,
+            extra_vars,
             trace_id=trace_id,
         )
 
     if step_type == "conditional":
         return _exec_conditional(
-            step_def, steps, model, workflows_dir, extra_vars,
-            trace_id=trace_id, step_name=step_name,
+            step_def,
+            steps,
+            model,
+            workflows_dir,
+            extra_vars,
+            trace_id=trace_id,
+            step_name=step_name,
         )
 
     logger.warning("Unknown step type: %s — skipping", step_type)
@@ -528,7 +557,11 @@ def _exec_conditional(
     if "name" not in branch:
         branch = {**branch, "name": step_name}
     return _execute_step(
-        branch, steps, model, workflows_dir, extra_vars,
+        branch,
+        steps,
+        model,
+        workflows_dir,
+        extra_vars,
         trace_id=trace_id,
     )
 

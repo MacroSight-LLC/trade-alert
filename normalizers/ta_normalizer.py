@@ -5,11 +5,9 @@ Transforms raw TradingView MCP results into ``technical_trend`` Signals.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-sys.path.insert(0, ".")
 from models import Signal, Snapshot
 
 

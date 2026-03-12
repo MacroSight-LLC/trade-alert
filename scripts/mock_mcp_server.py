@@ -64,8 +64,8 @@ MOCK_RESPONSES: dict[int, dict] = {
         },
         "aggs": {
             "results": [
-                {"symbol": "AAPL", "volume": 85000000, "avg_volume": 55000000, "close": 185.50},
-                {"symbol": "NVDA", "volume": 120000000, "avg_volume": 60000000, "close": 875.00},
+                {"symbol": "AAPL", "volume": 85000000, "avg_volume": 55000000, "avg_20d_volume": 55000000, "close": 185.50},
+                {"symbol": "NVDA", "volume": 120000000, "avg_volume": 60000000, "avg_20d_volume": 60000000, "close": 875.00},
             ]
         },
     },
@@ -73,20 +73,26 @@ MOCK_RESPONSES: dict[int, dict] = {
         "send_rich_embed": {"status": "sent", "message_id": "mock-12345"},
     },
     8004: {
-        "sentiment": [
-            {"symbol": "AAPL", "score": 0.45, "articles": 12},
-            {"symbol": "NVDA", "score": 0.72, "articles": 28},
-        ],
+        "sentiment": {
+            "results": [
+                {"symbol": "AAPL", "score": 0.45, "articles": 12},
+                {"symbol": "NVDA", "score": 0.72, "articles": 28},
+            ]
+        },
         "news_symbol": {"articles": [{"headline": "Mock headline", "source": "mock"}]},
     },
     8005: {
-        "trending_tickers": [
-            {"symbol": "NVDA", "mentions": 450, "sentiment": "strong_bullish"},
-            {"symbol": "TSLA", "mentions": 320, "sentiment": "bullish"},
-        ],
-        "options_flow": [
-            {"symbol": "NVDA", "flow_type": "call_sweep", "premium": 1200000},
-        ],
+        "trending_tickers": {
+            "results": [
+                {"symbol": "NVDA", "mentions": 450, "sentiment": "strong_bullish"},
+                {"symbol": "TSLA", "mentions": 320, "sentiment": "bullish"},
+            ]
+        },
+        "options_flow": {
+            "results": [
+                {"symbol": "NVDA", "flow_type": "call_sweep", "premium": 1200000},
+            ]
+        },
     },
     8006: {
         "imbalance": {
@@ -98,11 +104,13 @@ MOCK_RESPONSES: dict[int, dict] = {
         "depth": {"results": [{"symbol": "BTC", "bid_depth": 150.0, "ask_depth": 120.0}]},
     },
     8007: {
-        "top_gainers": [
-            {"symbol": "SOL", "change_24h": 8.5, "market_cap": 65000000000},
-            {"symbol": "AVAX", "change_24h": 5.2, "market_cap": 12000000000},
-        ],
-        "dominance": {"btc": 52.1, "eth": 17.3},
+        "top_gainers": {
+            "results": [
+                {"symbol": "SOL", "change_24h": 8.5, "market_cap": 65000000000},
+                {"symbol": "AVAX", "change_24h": 5.2, "market_cap": 12000000000},
+            ]
+        },
+        "dominance": {"results": [{"btc": 52.1, "eth": 17.3}]},
     },
     8008: {
         "screen": {

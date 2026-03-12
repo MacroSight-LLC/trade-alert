@@ -6,11 +6,9 @@ Transforms VIX, yield-curve, and risk-on/off data into
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-sys.path.insert(0, ".")
 from models import Signal, Snapshot
 
 

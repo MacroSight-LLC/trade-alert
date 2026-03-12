@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     sources_agree       INTEGER,
     raw_snapshots       JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ,
     outcome             VARCHAR(10) CHECK (outcome IN ('WIN','LOSS','SCRATCH')),
     outcome_pnl         DECIMAL(10,4)
 );
