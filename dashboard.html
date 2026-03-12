@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Alert Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d29;
+            --border: #2a2d3a;
+            --text: #e1e4ea;
+            --muted: #8a8f9d;
+            --green: #22c55e;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --purple: #a855f7;
+            --amber: #f59e0b;
+            --cyan: #06b6d4;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 24px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .header h1 span { color: var(--blue); }
+        .header .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        .header .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* KPI cards */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .kpi {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .kpi .label {
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .kpi .value {
+            font-size: 28px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .kpi .sub {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+        .kpi .value.positive { color: var(--green); }
+        .kpi .value.negative { color: var(--red); }
+        .kpi .value.neutral { color: var(--blue); }
+        .kpi .target {
+            font-size: 11px;
+            color: var(--amber);
+            margin-top: 4px;
+        }
+
+        /* Charts grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .chart-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .chart-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text);
+        }
+        .chart-card canvas {
+            max-height: 280px;
+        }
+
+        /* Alerts table */
+        .table-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+        .table-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 8px 12px;
+            color: var(--muted);
+            font-weight: 500;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        tr:hover td { background: rgba(59, 130, 246, 0.05); }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-long { background: rgba(34,197,94,0.15); color: var(--green); }
+        .badge-short { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge-watch { background: rgba(59,130,246,0.15); color: var(--blue); }
+        .badge-win { background: rgba(34,197,94,0.15); color: var(--green); }
+        .badge-loss { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge-scratch { background: rgba(138,143,157,0.15); color: var(--muted); }
+        .badge-open { background: rgba(245,158,11,0.15); color: var(--amber); }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+        }
+        .error-msg {
+            text-align: center;
+            padding: 20px;
+            color: var(--red);
+            background: rgba(239,68,68,0.1);
+            border-radius: 8px;
+        }
+
+        @media (max-width: 900px) {
+            .charts-grid { grid-template-columns: 1fr; }
+            .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 500px) {
+            body { padding: 12px; }
+            .kpi-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 <span>Trade Alert</span> Dashboard</h1>
+        <div class="status">
+            <div class="dot"></div>
+            <span id="last-updated">Loading...</span>
+        </div>
+    </div>
+
+    <div class="kpi-grid" id="kpi-grid">
+        <div class="loading">Loading KPIs...</div>
+    </div>
+
+    <div class="charts-grid">
+        <div class="chart-card">
+            <h3>Winrate by Edge Probability</h3>
+            <canvas id="winrateChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h3>Alert Frequency (30 days)</h3>
+            <canvas id="frequencyChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h3>Top Symbols by Volume</h3>
+            <canvas id="symbolsChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h3>Symbol Winrate</h3>
+            <canvas id="symbolWinrateChart"></canvas>
+        </div>
+    </div>
+
+    <div class="table-card">
+        <h3>Recent Alerts</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Edge</th>
+                    <th>Conf</th>
+                    <th>Entry</th>
+                    <th>Stop</th>
+                    <th>Target</th>
+                    <th>R:R</th>
+                    <th>Sources</th>
+                    <th>Outcome</th>
+                    <th>PnL</th>
+                </tr>
+            </thead>
+            <tbody id="alerts-tbody">
+                <tr><td colspan="12" class="loading">Loading alerts...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+<script>
+const API = window.location.origin + '/api';
+
+Chart.defaults.color = '#8a8f9d';
+Chart.defaults.borderColor = '#2a2d3a';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+Chart.defaults.font.size = 12;
+
+function pct(v) { return v != null ? (v * 100).toFixed(1) + '%' : '—'; }
+function num(v, d) { return v != null ? Number(v).toFixed(d ?? 2) : '—'; }
+function rr(entry) {
+    if (!entry || !entry.level || !entry.stop || !entry.target) return '—';
+    const risk = Math.abs(entry.level - entry.stop);
+    if (risk === 0) return '—';
+    return (Math.abs(entry.target - entry.level) / risk).toFixed(1) + ':1';
+}
+function shortTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month:'short', day:'numeric' })
+         + ' ' + d.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false });
+}
+
+async function fetchJSON(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+}
+
+// ── KPIs ────────────────────────────────────────────────
+async function loadKPIs() {
+    try {
+        const s = await fetchJSON(API + '/summary');
+        const grid = document.getElementById('kpi-grid');
+        const kpiTarget70 = s.kpi_winrate_70 != null ? s.kpi_winrate_70 >= 0.65 : null;
+        grid.innerHTML = `
+            <div class="kpi">
+                <div class="label">Total Alerts</div>
+                <div class="value neutral">${s.total_alerts}</div>
+                <div class="sub">${s.alerts_today} today</div>
+                <div class="target">Target: ≥12/day</div>
+            </div>
+            <div class="kpi">
+                <div class="label">Overall Winrate</div>
+                <div class="value ${s.overall_winrate >= 0.65 ? 'positive' : s.overall_winrate != null ? 'negative' : ''}">${pct(s.overall_winrate)}</div>
+                <div class="sub">${s.wins}W / ${s.losses}L / ${s.scratches}S</div>
+            </div>
+            <div class="kpi">
+                <div class="label">KPI Winrate (Edge≥70%)</div>
+                <div class="value ${kpiTarget70 === true ? 'positive' : kpiTarget70 === false ? 'negative' : ''}">${pct(s.kpi_winrate_70)}</div>
+                <div class="target">Target: ≥65%</div>
+            </div>
+            <div class="kpi">
+                <div class="label">Avg Edge Probability</div>
+                <div class="value">${pct(s.avg_edge)}</div>
+            </div>
+            <div class="kpi">
+                <div class="label">Avg PnL</div>
+                <div class="value ${s.avg_pnl > 0 ? 'positive' : s.avg_pnl < 0 ? 'negative' : ''}">${num(s.avg_pnl, 4)}</div>
+                <div class="sub">${s.resolved} resolved</div>
+            </div>
+        `;
+    } catch (err) {
+        document.getElementById('kpi-grid').innerHTML =
+            '<div class="error-msg">Failed to load KPIs: ' + err.message + '</div>';
+    }
+}
+
+// ── Winrate Chart ───────────────────────────────────────
+async function loadWinrate() {
+    try {
+        const data = await fetchJSON(API + '/winrate');
+        if (!data.length) return;
+        const labels = data.map(d => pct(d.bucket));
+        const winrates = data.map(d => d.total > 0 ? (d.wins / d.total * 100) : 0);
+        const totals = data.map(d => d.total);
+        new Chart(document.getElementById('winrateChart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Winrate %',
+                        data: winrates,
+                        backgroundColor: winrates.map(w => w >= 65 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+                        borderRadius: 6,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'Sample Size',
+                        data: totals,
+                        type: 'line',
+                        borderColor: 'rgba(59,130,246,0.8)',
+                        backgroundColor: 'rgba(59,130,246,0.1)',
+                        pointRadius: 4,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    annotation: {
+                        annotations: {
+                            target: {
+                                type: 'line', yMin: 65, yMax: 65,
+                                borderColor: 'rgba(245,158,11,0.5)', borderDash: [5,5],
+                                label: { content: '65% target', display: true }
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, max: 100, title: { display: true, text: 'Winrate %' }},
+                    y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'Count' }},
+                }
+            }
+        });
+    } catch (err) { console.error('Winrate chart error:', err); }
+}
+
+// ── Frequency Chart ─────────────────────────────────────
+async function loadFrequency() {
+    try {
+        const data = await fetchJSON(API + '/frequency?days=30');
+        if (!data.length) return;
+        const labels = data.map(d => {
+            const dt = new Date(d.date);
+            return dt.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+        });
+        new Chart(document.getElementById('frequencyChart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'Long', data: data.map(d => d.longs), backgroundColor: 'rgba(34,197,94,0.7)', borderRadius: 4 },
+                    { label: 'Short', data: data.map(d => d.shorts), backgroundColor: 'rgba(239,68,68,0.7)', borderRadius: 4 },
+                    { label: 'Watch', data: data.map(d => d.watches), backgroundColor: 'rgba(59,130,246,0.4)', borderRadius: 4 },
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true, title: { display: true, text: 'Alerts' }},
+                }
+            }
+        });
+    } catch (err) { console.error('Frequency chart error:', err); }
+}
+
+// ── Symbol Charts ───────────────────────────────────────
+async function loadSymbols() {
+    try {
+        const data = await fetchJSON(API + '/symbols?limit=15');
+        if (!data.length) return;
+
+        // Volume bar chart
+        new Chart(document.getElementById('symbolsChart'), {
+            type: 'bar',
+            data: {
+                labels: data.map(d => d.symbol),
+                datasets: [{
+                    label: 'Total Alerts',
+                    data: data.map(d => d.total),
+                    backgroundColor: 'rgba(168,85,247,0.6)',
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                indexAxis: 'y',
+                scales: { x: { beginAtZero: true } }
+            }
+        });
+
+        // Winrate scatter for symbols with resolved outcomes
+        const resolved = data.filter(d => d.winrate != null);
+        if (resolved.length) {
+            new Chart(document.getElementById('symbolWinrateChart'), {
+                type: 'bar',
+                data: {
+                    labels: resolved.map(d => d.symbol),
+                    datasets: [{
+                        label: 'Winrate %',
+                        data: resolved.map(d => (d.winrate * 100)),
+                        backgroundColor: resolved.map(d => d.winrate >= 0.65 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: 'Winrate %' }}},
+                }
+            });
+        }
+    } catch (err) { console.error('Symbols chart error:', err); }
+}
+
+// ── Alerts Table ────────────────────────────────────────
+async function loadAlerts() {
+    try {
+        const data = await fetchJSON(API + '/alerts?limit=50');
+        const tbody = document.getElementById('alerts-tbody');
+        if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="12" class="loading">No alerts yet</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.map(a => {
+            const dir = a.direction || '';
+            const dirClass = dir === 'LONG' ? 'badge-long' : dir === 'SHORT' ? 'badge-short' : 'badge-watch';
+            const entry = typeof a.entry === 'string' ? JSON.parse(a.entry) : (a.entry || {});
+            const out = a.outcome;
+            const outClass = out === 'WIN' ? 'badge-win' : out === 'LOSS' ? 'badge-loss' : out === 'SCRATCH' ? 'badge-scratch' : 'badge-open';
+            return `<tr>
+                <td>${shortTime(a.created_at)}</td>
+                <td><strong>${a.symbol}</strong></td>
+                <td><span class="badge ${dirClass}">${dir}</span></td>
+                <td>${pct(a.edge_probability)}</td>
+                <td>${pct(a.confidence)}</td>
+                <td>$${num(entry.level)}</td>
+                <td>$${num(entry.stop)}</td>
+                <td>$${num(entry.target)}</td>
+                <td>${rr(entry)}</td>
+                <td>${a.sources_agree ?? '—'}/10</td>
+                <td><span class="badge ${outClass}">${out || 'OPEN'}</span></td>
+                <td>${a.outcome_pnl != null ? num(a.outcome_pnl, 4) : '—'}</td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        document.getElementById('alerts-tbody').innerHTML =
+            '<tr><td colspan="12" class="error-msg">Failed to load: ' + err.message + '</td></tr>';
+    }
+}
+
+// ── Init ────────────────────────────────────────────────
+async function init() {
+    await Promise.all([loadKPIs(), loadWinrate(), loadFrequency(), loadSymbols(), loadAlerts()]);
+    document.getElementById('last-updated').textContent =
+        'Updated ' + new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
+}
+
+init();
+// Auto-refresh every 5 minutes
+setInterval(init, 5 * 60 * 1000);
+</script>
+</body>
+</html>

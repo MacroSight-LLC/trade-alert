@@ -55,6 +55,8 @@ python -m cuga run --workflows-dir workflows/ --schedule
 | `notifier_and_logger.py` | Discord embeds + Postgres logging                     |
 | `healthcheck.py`         | Redis/Postgres/MCP health checks + JSONL logging      |
 | `outcome_tracker.py`     | Resolves open alerts via Polygon.io price polling     |
+| `dashboard_api.py`       | FastAPI analytics dashboard (port 8080)               |
+| `dashboard.html`         | Single-file dashboard UI (Chart.js)                   |
 | `normalizers/`           | 5 normalizers (TA, flow, sentiment, market, macro)    |
 | `workflows/`             | CUGA YAML workflows (collectors, decisions, notifier) |
 | `.env.example`           | All environment variables with defaults               |

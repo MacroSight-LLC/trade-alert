@@ -236,3 +236,100 @@ class TestGetWinrateByBucket:
 
         stats = get_winrate_by_bucket()
         assert stats == []
+
+
+# ── get_alert_frequency ─────────────────────────────────────────
+
+
+class TestGetAlertFrequency:
+    """Tests for db.get_alert_frequency()."""
+
+    @patch("db.get_conn")
+    def test_returns_daily_counts(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [
+            {"date": "2026-03-10", "total": 15, "longs": 8, "shorts": 5, "watches": 2},
+            {"date": "2026-03-11", "total": 12, "longs": 6, "shorts": 4, "watches": 2},
+        ]
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import get_alert_frequency
+
+        rows = get_alert_frequency(days=7)
+        assert len(rows) == 2
+        assert rows[0]["total"] == 15
+
+    @patch("db.get_conn")
+    def test_empty(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = []
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import get_alert_frequency
+
+        assert get_alert_frequency() == []
+
+
+# ── get_symbol_performance ──────────────────────────────────────
+
+
+class TestGetSymbolPerformance:
+    """Tests for db.get_symbol_performance()."""
+
+    @patch("db.get_conn")
+    def test_returns_symbols(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [
+            {"symbol": "AAPL", "total": 25, "wins": 15, "losses": 8,
+             "winrate": 0.65, "avg_edge": 0.78, "avg_pnl": 0.02},
+        ]
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import get_symbol_performance
+
+        rows = get_symbol_performance(limit=10)
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "AAPL"
+
+    @patch("db.get_conn")
+    def test_default_limit_20(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = []
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import get_symbol_performance
+
+        get_symbol_performance()
+        args = mock_cur.execute.call_args[0][1]
+        assert args == (20,)
+
+
+# ── get_summary_stats ───────────────────────────────────────────
+
+
+class TestGetSummaryStats:
+    """Tests for db.get_summary_stats()."""
+
+    @patch("db.get_conn")
+    def test_returns_summary(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        # Two queries: summary + kpi
+        mock_cur.fetchone.side_effect = [
+            {"total_alerts": 100, "resolved": 80, "wins": 50, "losses": 25,
+             "scratches": 5, "overall_winrate": 0.625, "avg_edge": 0.78,
+             "avg_pnl": 0.01, "alerts_today": 8},
+            {"kpi_winrate_70": 0.70},
+        ]
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import get_summary_stats
+
+        result = get_summary_stats()
+        assert result["total_alerts"] == 100
+        assert result["kpi_winrate_70"] == 0.70
+        assert result["alerts_today"] == 8

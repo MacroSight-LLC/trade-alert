@@ -177,6 +177,124 @@ def get_winrate_by_bucket() -> list[dict]:
         _put_conn(conn)
 
 
+def get_alert_frequency(days: int = 30) -> list[dict]:
+    """Return daily alert counts for the last *days* days.
+
+    Args:
+        days: Number of days to look back.
+
+    Returns:
+        List of dicts with keys: date, total, longs, shorts, watches.
+    """
+    sql = """
+        SELECT
+            DATE(created_at AT TIME ZONE 'UTC') AS date,
+            COUNT(*) AS total,
+            SUM(CASE WHEN direction = 'LONG' THEN 1 ELSE 0 END) AS longs,
+            SUM(CASE WHEN direction = 'SHORT' THEN 1 ELSE 0 END) AS shorts,
+            SUM(CASE WHEN direction = 'WATCH' THEN 1 ELSE 0 END) AS watches
+        FROM alerts
+        WHERE created_at >= NOW() - INTERVAL '%s days'
+        GROUP BY date
+        ORDER BY date
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (days,))
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def get_symbol_performance(limit: int = 20) -> list[dict]:
+    """Return per-symbol performance statistics.
+
+    Args:
+        limit: Maximum number of symbols to return, sorted by alert count.
+
+    Returns:
+        List of dicts with keys: symbol, total, wins, losses, winrate,
+        avg_edge, avg_pnl.
+    """
+    sql = """
+        SELECT
+            symbol,
+            COUNT(*) AS total,
+            SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+            ROUND(
+                CASE WHEN SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END)
+                     / SUM(CASE WHEN outcome IS NOT NULL THEN 1.0 ELSE 0 END)
+                ELSE NULL END::numeric, 4
+            ) AS winrate,
+            ROUND(AVG(edge_probability)::numeric, 4) AS avg_edge,
+            ROUND(AVG(outcome_pnl)::numeric, 4) AS avg_pnl
+        FROM alerts
+        GROUP BY symbol
+        ORDER BY total DESC
+        LIMIT %s
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (limit,))
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def get_summary_stats() -> dict:
+    """Return aggregate dashboard summary statistics.
+
+    Returns:
+        Dict with keys: total_alerts, resolved, wins, losses, scratches,
+        overall_winrate, avg_edge, avg_rr, avg_pnl, alerts_today,
+        kpi_winrate_70 (winrate for edge >= 0.70).
+    """
+    sql = """
+        SELECT
+            COUNT(*) AS total_alerts,
+            SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
+            SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN outcome = 'SCRATCH' THEN 1 ELSE 0 END) AS scratches,
+            ROUND(
+                CASE WHEN SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END)
+                     / SUM(CASE WHEN outcome IS NOT NULL THEN 1.0 ELSE 0 END)
+                ELSE NULL END::numeric, 4
+            ) AS overall_winrate,
+            ROUND(AVG(edge_probability)::numeric, 4) AS avg_edge,
+            ROUND(AVG(outcome_pnl)::numeric, 4) AS avg_pnl,
+            SUM(CASE WHEN DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
+                THEN 1 ELSE 0 END) AS alerts_today
+        FROM alerts
+    """
+    sql_kpi = """
+        SELECT
+            ROUND(
+                CASE WHEN COUNT(*) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END) / COUNT(*)::numeric
+                ELSE NULL END, 4
+            ) AS kpi_winrate_70
+        FROM alerts
+        WHERE outcome IS NOT NULL AND edge_probability >= 0.70
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql)
+            row = dict(cur.fetchone())
+            cur.execute(sql_kpi)
+            kpi_row = dict(cur.fetchone())
+            row["kpi_winrate_70"] = kpi_row.get("kpi_winrate_70")
+            return row
+    finally:
+        _put_conn(conn)
+
+
 if __name__ == "__main__":
     # Test connection only — do not insert real data
     try:

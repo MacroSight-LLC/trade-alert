@@ -410,6 +410,43 @@ services:
       - trade-net
     restart: unless-stopped
 
+  # --- Dashboard (Phase 9) ---
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+      - path: .env.secrets
+        required: false
+      - path: .env.vault
+        required: false
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dashboard_api.py:/app/dashboard_api.py
+      - ./dashboard.html:/app/dashboard.html
+      - ./db.py:/app/db.py
+      - ./models.py:/app/models.py
+      - ./vault_env_loader.py:/app/vault_env_loader.py
+    command: ["python", "-m", "uvicorn", "dashboard_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/summary')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   langfuse_data:

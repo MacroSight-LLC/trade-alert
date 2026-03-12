@@ -17,7 +17,7 @@
 | Phase 7 | Orchestration, healthcheck, Docker      | ✅ Done    | v0.7.0 |
 | Phase 8 | Outcome tracker, winrate reporting      | ✅ Done    | v0.8.0 |
 | Polish  | Docker fixes, CI, tests, env extraction | ✅ Done    | v0.8.1 |
-| Phase 9 | Dashboard — not yet in spec (TBD)       | ⬜ Pending | —      |
+| Phase 9 | Dashboard — analytics web UI             | ✅ Done    | v0.9.0 |
 
 ### Architecture Notes
 
