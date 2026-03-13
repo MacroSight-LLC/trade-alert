@@ -7,7 +7,7 @@
 ![Architecture](./docs/images/Architecture.png)
 
 ## Documentation
-- **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.2.md`](./CUGA-Trading-Alert-System-SPEC-v1.2.md)
+- **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md)
 - **CUGA upstream docs:** [`README.cuga.md`](./README.cuga.md)
 
 ## Quick Start

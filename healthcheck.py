@@ -26,7 +26,7 @@ REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
 REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
-# SSOT §3: all 10 MCP services with /health endpoints
+# SSOT §3: all 8 MCP services with /health endpoints
 # Uses env-var overrides matching pipeline_runner.py pattern
 MCP_SERVICES: list[tuple[str, str]] = [
     ("tradingview-mcp", os.getenv("TRADINGVIEW_MCP_URL", "http://tradingview-mcp:8001") + "/health"),
@@ -34,11 +34,6 @@ MCP_SERVICES: list[tuple[str, str]] = [
     ("discord-mcp", os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003") + "/health"),
     ("finnhub-mcp", os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004") + "/health"),
     ("rot-mcp", os.getenv("ROT_MCP_URL", "http://rot-mcp:8005") + "/health"),
-    (
-        "crypto-orderbook-mcp",
-        os.getenv("CRYPTO_ORDERBOOK_MCP_URL", "http://crypto-orderbook-mcp:8006") + "/health",
-    ),
-    ("coingecko-mcp", os.getenv("COINGECKO_MCP_URL", "http://coingecko-mcp:8007") + "/health"),
     ("trading-mcp", os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008") + "/health"),
     ("fred-mcp", os.getenv("FRED_MCP_URL", "http://fred-mcp:8009") + "/health"),
     ("spamshield-mcp", os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010") + "/health"),

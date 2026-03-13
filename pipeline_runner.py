@@ -47,8 +47,6 @@ MCP_ENDPOINTS: dict[str, str] = {
     "discord-mcp": os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003"),
     "finnhub-mcp": os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004"),
     "rot-mcp": os.getenv("ROT_MCP_URL", "http://rot-mcp:8005"),
-    "crypto-orderbook-mcp": os.getenv("CRYPTO_ORDERBOOK_MCP_URL", "http://crypto-orderbook-mcp:8006"),
-    "coingecko-mcp": os.getenv("COINGECKO_MCP_URL", "http://coingecko-mcp:8007"),
     "trading-mcp": os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008"),
     "fred-mcp": os.getenv("FRED_MCP_URL", "http://fred-mcp:8009"),
     "spamshield-mcp": os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010"),

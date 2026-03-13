@@ -1,5 +1,5 @@
-# CUGA‑Trading‑Alert‑System‑SPEC-v1.2.md
-**Single Source of Truth | Version 1.2 | March 11, 2026**
+# CUGA‑Trading‑Alert‑System‑SPEC-v1.3.md
+**Single Source of Truth | Version 1.3 | March 12, 2026**
 
 > This document is the authoritative specification for the `/trade-alert` repository.
 > All AI tools (Claude Opus 4.6 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
@@ -10,7 +10,7 @@
 | -------- | --------------------------------------------------- | ------------- | ------- |
 | Phase 1  | Models, Redis collectors                            | ✅ Done        | v0.1.0  |
 | Phase 2  | TA collector                                        | ✅ Done        | v0.2.0  |
-| Phase 3  | Sentiment, orderbook, macro collectors              | ✅ Done        | v0.3.0  |
+| Phase 3  | Sentiment, macro collectors                        | ✅ Done        | v0.3.0  |
 | Phase 4  | Merger, Postgres DB layer                           | ✅ Done        | v0.4.0  |
 | Phase 5  | Decision engine workflows                           | ✅ Done        | v0.5.0  |
 | Phase 6  | Notifier, Discord embeds, Postgres log              | ✅ Done        | v0.6.0  |
@@ -79,7 +79,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 10 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 8 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → **Discord trading playbook alerts**.
 
 Output per alert:
 
@@ -87,7 +87,7 @@ Output per alert:
 - Thesis (1–2 sentence causal explanation).
 - Entry, stop, target, implied reward:risk.
 - Sentiment context (retail vs institutional).
-- Unusual activity (options/volume/orderbook).
+- Unusual activity (options flow/volume/insider activity).
 - Macro regime (risk‑on/off, volatility level).
 - Edge probability and confidence.
 
@@ -128,16 +128,14 @@ All MCP services run in Docker, expose `/health`, and are wired into CUGA via it
 
 | Port | Service Name         | Key Tools (examples)               | Role & Integration Notes                                                                                                                                                                   |
 | ---- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 8001 | TradingView MCP      | `bollinger_scan`, `rsi_scan`       | Primary TA: uses tradingview-ta (scraping, no API key). Rate-limited to ~10 req/min; use 8–10s inter-symbol delay, max 8 symbols per batch, 15 min cache TTL. Stagger equity/crypto scans. |
-| 8002 | Polygon MCP          | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                                                                   |
-| 8003 | Discord MCP          | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                                                                       |
-| 8004 | Finnhub MCP          | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                                                                |
-| 8005 | ROT MCP              | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.                                                   |
-| 8006 | crypto‑orderbook MCP | `imbalance`, `depth`               | Order book structure: bid/ask imbalance near current price. Use this only for symbols marked as crypto.                                                                                    |
-| 8007 | CoinGecko MCP        | `top_gainers`, `dominance`         | Crypto universe and broad market state. Use to build the crypto symbol list and detect sector rotations.                                                                                   |
-| 8008 | trading‑mcp server   | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal.                                          |
-| 8009 | FRED bundle MCP      | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                                                                    |
-| 8010 | SpamShieldpro MCP    | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                                                                  |
+| 8001 | TradingView MCP      | `bollinger_scan`, `rsi_scan`       | Primary TA: uses tradingview-ta (scraping, no API key). Rate-limited to ~10 req/min; use 8–10s inter-symbol delay, max 8 symbols per batch, 15 min cache TTL. |
+| 8002 | Polygon MCP          | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                                      |
+| 8003 | Discord MCP          | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                                          |
+| 8004 | Finnhub MCP          | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                                   |
+| 8005 | ROT MCP              | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.                      |
+| 8008 | trading‑mcp server   | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal.             |
+| 8009 | FRED bundle MCP      | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                                       |
+| 8010 | SpamShieldpro MCP    | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                                     |
 
 **Integration Best Practices (all MCPs)**
 
@@ -164,8 +162,9 @@ class Signal(BaseModel):
         'volume_spike',
         'sentiment_bull',
         'sentiment_bear',
-        'order_imbalance_long',
-        'order_imbalance_short',
+        'options_flow',
+        'insider_activity',
+        'relative_strength',
         'macro_risk_off'
     ]
     score: float          # -3.0 (strong negative) to +3.0 (strong positive)
@@ -222,7 +221,7 @@ class PlaybookAlert(BaseModel):
 Key points:
 
 - Redis and Postgres services as described in v1.1.
-- 10 MCP services bound to ports 8001–8010.
+- 8 MCP services bound to ports 8001–8005, 8008–8010.
 - `cuga` service built from `docker/Dockerfile.cuga`, mounting:
     - `./workflows` → `/app/workflows`
     - `./normalizers` → `/app/normalizers`
@@ -314,10 +313,17 @@ Each normalizer MUST:
       `|change| >= 5%` → score ±2.5 (conf 0.8).
     - Insider activity matching MUST be case-insensitive with aliases:
       "buying"/"purchase" → bull; "selling"/"sale"/"disposition" → bear.
-- **crypto‑orderbook → `order_imbalance_long` / `order_imbalance_short`:**
-    - Compute bid vs ask depth near top levels.
-    - Positive imbalance (bids dominate) → long signal; negative → short signal.
-    - Normalize to −3..+3 based on % imbalance.
+- **ROT → `options_flow` signals:**
+    - Large sweeps (≥500 contracts or ≥$1M premium) → score ±2.5 (conf 0.85).
+    - Medium sweeps (≥200 contracts or ≥$500K) → score ±2.0 (conf 0.75).
+    - Small sweeps (≥50 contracts or ≥$100K) → score ±1.0 (conf 0.60).
+    - Put sweeps negate score (bearish). One `options_flow` signal per symbol.
+- **trading-mcp (Market) → `insider_activity` signals:**
+    - Insider buying → `insider_activity` score +1.5 (conf 0.70).
+    - Insider selling → `insider_activity` score −1.5 (conf 0.70).
+- **Polygon (Market) → `relative_strength` signals:**
+    - RS = symbol % change − SPY % change.
+    - Emit when |RS| ≥ 2.0%. Score = clamp(RS, −3.0, +3.0). Confidence = min(|RS|/10, 1.0).
 - **Finnhub + ROT → sentiment signals:**
     - If Finnhub sentiment score is on −1..+1:
         - `score = clamp(sentiment * 2.0, -2.0, +2.0)` with `sentiment_bull` or `sentiment_bear`.
@@ -334,21 +340,22 @@ If a normalizer cannot confidently determine a signal, it SHOULD omit it rather 
 Each collector follows the template from v1.1, but now with additional best‑practice notes:
 
 - **collector‑market.yaml**
-    - Build distinct universes:
+    - Build equity universe:
         - `universe:equities` (top gainers/losers, volume leaders from trading‑mcp + Polygon).
-        - `universe:crypto` (top gainers/losers, high dominance from CoinGecko).
-    - Write arrays of symbols to Redis keys.
+    - Write array of symbols to Redis key.
+    - Normalize price changes → `technical_trend`, insider activity → `insider_activity`, relative strength vs SPY → `relative_strength`.
 - **collector‑ta.yaml**
     - Read universes from Redis.
     - Call TradingView + trading‑mcp on those symbols/timeframes.
     - Pass raw results to `ta_normalizer.normalize`.
     - Write snapshots to `snapshots:15m` and `snapshots:1h`.
 - **collector‑flow.yaml**
-    - Call Polygon and crypto‑orderbook for the same universes.
+    - Call Polygon for equity universe volume data.
     - Pass to `flow_normalizer.normalize`.
 - **collector‑sentiment.yaml**
     - For any raw text bodies (if present), call SpamShieldpro `classify_text`; drop results marked as spam.
     - Call Finnhub + ROT for sentiment and options flow.
+    - Route ROT options flow data as `rot_options_flow` for `options_flow` signal production.
     - Pass to `sentiment_normalizer.normalize`.
 - **collector‑macro.yaml**
     - Call FRED bundle; pass to `macro_normalizer.normalize`.

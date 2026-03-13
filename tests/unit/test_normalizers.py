@@ -157,28 +157,6 @@ class TestFlowNormalizer:
         result = flow_normalize(raw, timeframe="15m")
         assert result[0].signals[0].score == 3.0
 
-    def test_order_imbalance_long(self) -> None:
-        raw = {"BTC": {"volume_multiple": 0.5, "imbalance": 0.8}}
-        result = flow_normalize(raw, timeframe="15m")
-        assert len(result) == 1
-        assert result[0].signals[0].type == "order_imbalance_long"
-
-    def test_order_imbalance_short(self) -> None:
-        raw = {"ETH": {"volume_multiple": 0.5, "imbalance": -0.6}}
-        result = flow_normalize(raw, timeframe="15m")
-        assert len(result) == 1
-        assert result[0].signals[0].type == "order_imbalance_short"
-
-    def test_both_volume_and_imbalance(self) -> None:
-        raw = {"BTC": {"volume_multiple": 4.0, "imbalance": 0.5}}
-        result = flow_normalize(raw, timeframe="15m")
-        assert len(result[0].signals) == 2
-
-    def test_zero_imbalance_skipped(self) -> None:
-        raw = {"X": {"volume_multiple": 0.5, "imbalance": 0.0}}
-        result = flow_normalize(raw, timeframe="15m")
-        assert len(result) == 0
-
     def test_unusual_options_in_reason(self) -> None:
         raw = {"X": {"volume_multiple": 2.0, "unusual_options": ["$190c sweep"]}}
         result = flow_normalize(raw, timeframe="15m")
@@ -189,11 +167,6 @@ class TestFlowNormalizer:
 
     def test_nan_volume_no_spike(self) -> None:
         raw = {"X": {"volume_multiple": float("nan")}}
-        result = flow_normalize(raw, timeframe="15m")
-        assert len(result) == 0
-
-    def test_inf_imbalance_no_signal(self) -> None:
-        raw = {"X": {"volume_multiple": 0.5, "imbalance": float("inf")}}
         result = flow_normalize(raw, timeframe="15m")
         assert len(result) == 0
 
@@ -281,7 +254,7 @@ class TestMarketNormalizer:
     def test_moderate_positive_change(self) -> None:
         raw = {"X": {"price_change_24h": 7.0}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 1.5
+        assert result[0].signals[0].score == 2.5
 
     def test_large_negative_change(self) -> None:
         raw = {"X": {"price_change_24h": -12.0}}
@@ -289,27 +262,103 @@ class TestMarketNormalizer:
         assert result[0].signals[0].score == -2.5
 
     def test_small_change_no_signal(self) -> None:
-        raw = {"X": {"price_change_24h": 2.0}}
+        raw = {"X": {"price_change_24h": 1.0}}
         result = market_normalize(raw, timeframe="15m")
         assert len(result) == 0
 
     def test_insider_buying(self) -> None:
         raw = {"X": {"insider_activity": "buying"}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].type == "sentiment_bull"
+        assert result[0].signals[0].type == "insider_activity"
 
     def test_insider_selling(self) -> None:
         raw = {"X": {"insider_activity": "selling"}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].type == "sentiment_bear"
+        assert result[0].signals[0].type == "insider_activity"
 
     def test_insider_none_skipped(self) -> None:
         raw = {"X": {"insider_activity": "none"}}
         result = market_normalize(raw, timeframe="15m")
         assert len(result) == 0
 
+    def test_relative_strength_bullish(self) -> None:
+        raw = {"AAPL": {"price_change_24h": 5.0, "spy_pct_change": 1.0}}
+        result = market_normalize(raw, timeframe="15m")
+        rs_sigs = [s for snap in result for s in snap.signals if s.type == "relative_strength"]
+        assert len(rs_sigs) == 1
+        assert rs_sigs[0].score > 0
+
+    def test_relative_strength_bearish(self) -> None:
+        raw = {"AAPL": {"price_change_24h": -1.0, "spy_pct_change": 2.0}}
+        result = market_normalize(raw, timeframe="15m")
+        rs_sigs = [s for snap in result for s in snap.signals if s.type == "relative_strength"]
+        assert len(rs_sigs) == 1
+        assert rs_sigs[0].score < 0
+
+    def test_relative_strength_below_threshold(self) -> None:
+        raw = {"AAPL": {"price_change_24h": 1.5, "spy_pct_change": 1.0}}
+        result = market_normalize(raw, timeframe="15m")
+        rs_sigs = [s for snap in result for s in snap.signals if s.type == "relative_strength"]
+        assert len(rs_sigs) == 0
+
     def test_empty_input(self) -> None:
         assert market_normalize({}, timeframe="15m") == []
+
+
+# ── Options Flow (Sentiment Normalizer) ─────────────────────────
+
+
+class TestOptionsFlow:
+    """Tests for options_flow signal from sentiment_normalizer."""
+
+    def test_options_flow_large_sweep(self) -> None:
+        raw = {
+            "AAPL": {
+                "rot_options_flow": [{"contracts": 600, "premium": 1_200_000, "sweep_type": "call_sweep"}],
+                "spam_filtered": False,
+            }
+        }
+        result = sentiment_normalize(raw, timeframe="15m")
+        of_sigs = [s for snap in result for s in snap.signals if s.type == "options_flow"]
+        assert len(of_sigs) == 1
+        assert of_sigs[0].score == 2.5
+        assert of_sigs[0].confidence == 0.85
+
+    def test_options_flow_medium_sweep(self) -> None:
+        raw = {
+            "AAPL": {
+                "rot_options_flow": [{"contracts": 250, "premium": 600_000, "sweep_type": "call_sweep"}],
+                "spam_filtered": False,
+            }
+        }
+        result = sentiment_normalize(raw, timeframe="15m")
+        of_sigs = [s for snap in result for s in snap.signals if s.type == "options_flow"]
+        assert len(of_sigs) == 1
+        assert of_sigs[0].score == 2.0
+
+    def test_options_flow_small_sweep(self) -> None:
+        raw = {
+            "AAPL": {
+                "rot_options_flow": [{"contracts": 60, "premium": 120_000, "sweep_type": "call_sweep"}],
+                "spam_filtered": False,
+            }
+        }
+        result = sentiment_normalize(raw, timeframe="15m")
+        of_sigs = [s for snap in result for s in snap.signals if s.type == "options_flow"]
+        assert len(of_sigs) == 1
+        assert of_sigs[0].score == 1.0
+
+    def test_options_flow_put_bearish(self) -> None:
+        raw = {
+            "AAPL": {
+                "rot_options_flow": [{"contracts": 600, "premium": 1_200_000, "sweep_type": "put_sweep"}],
+                "spam_filtered": False,
+            }
+        }
+        result = sentiment_normalize(raw, timeframe="15m")
+        of_sigs = [s for snap in result for s in snap.signals if s.type == "options_flow"]
+        assert len(of_sigs) == 1
+        assert of_sigs[0].score == -2.5
 
 
 # ── Macro Normalizer ────────────────────────────────────────────

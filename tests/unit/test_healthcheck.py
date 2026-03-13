@@ -13,11 +13,11 @@ class TestCheckMcps:
     """Tests for the check_mcps() function."""
 
     def test_all_healthy(self) -> None:
-        """All 10 MCPs return 200."""
+        """All 8 MCPs return 200."""
         mock_resp = MagicMock(status_code=200)
         with patch.object(httpx, "get", return_value=mock_resp):
             healthy, unhealthy = check_mcps()
-        assert len(healthy) == 10
+        assert len(healthy) == 8
         assert unhealthy == []
 
     def test_all_unreachable(self) -> None:
@@ -25,7 +25,7 @@ class TestCheckMcps:
         with patch.object(httpx, "get", side_effect=httpx.ConnectError("refused")):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 10
+        assert len(unhealthy) == 8
 
     def test_partial_failure(self) -> None:
         """Some MCPs healthy, some not."""
@@ -40,7 +40,7 @@ class TestCheckMcps:
         assert len(unhealthy) == 2
         assert "tradingview-mcp" in unhealthy
         assert "polygon-mcp" in unhealthy
-        assert len(healthy) == 8
+        assert len(healthy) == 6
 
     def test_non_200_counted_as_unhealthy(self) -> None:
         """Non-200 status codes count as unhealthy."""
@@ -48,14 +48,14 @@ class TestCheckMcps:
         with patch.object(httpx, "get", return_value=mock_resp):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 10
+        assert len(unhealthy) == 8
 
     def test_timeout_counted_as_unhealthy(self) -> None:
         """Timeout errors count as unhealthy."""
         with patch.object(httpx, "get", side_effect=httpx.ReadTimeout("timeout")):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 10
+        assert len(unhealthy) == 8
 
     def test_custom_timeout_passed(self) -> None:
         """Custom timeout is forwarded to httpx.get."""
@@ -67,7 +67,7 @@ class TestCheckMcps:
 
     def test_mcp_services_has_10_entries(self) -> None:
         """SSOT §3 defines exactly 10 MCP services."""
-        assert len(MCP_SERVICES) == 10
+        assert len(MCP_SERVICES) == 8
 
     def test_mcp_ports_match_ssot(self) -> None:
         """Verify port assignments match SSOT §3."""
@@ -77,8 +77,6 @@ class TestCheckMcps:
             "discord-mcp": 8003,
             "finnhub-mcp": 8004,
             "rot-mcp": 8005,
-            "crypto-orderbook-mcp": 8006,
-            "coingecko-mcp": 8007,
             "trading-mcp": 8008,
             "fred-mcp": 8009,
             "spamshield-mcp": 8010,

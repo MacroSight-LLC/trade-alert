@@ -270,13 +270,13 @@ def _load_universe_tickers() -> frozenset[str] | None:
     """Load valid ticker symbols from Redis universe sets.
 
     Returns:
-        Set of valid tickers from universe:equities + universe:crypto,
+        Set of valid tickers from universe:equities,
         or None if Redis is unavailable (fail-open).
     """
     try:
         r = redis_lib.from_url(_REDIS_URL, decode_responses=True, socket_timeout=5.0)
         tickers: set[str] = set()
-        for key in ("universe:equities", "universe:crypto"):
+        for key in ("universe:equities",):
             raw = r.get(key)
             if raw:
                 tickers.update(s.upper() for s in json.loads(raw))

@@ -22,39 +22,6 @@ _RETRY_DELAY = 20.0  # TradingView rate limit resets after ~60s
 
 # --- Exchange / screener auto-detection ---
 
-_CRYPTO_SYMBOLS: set[str] = {
-    "BTC",
-    "ETH",
-    "SOL",
-    "BNB",
-    "AVAX",
-    "ADA",
-    "XRP",
-    "DOGE",
-    "DOT",
-    "MATIC",
-    "LINK",
-    "SHIB",
-    "UNI",
-    "LTC",
-    "ATOM",
-    "APT",
-    "ARB",
-    "OP",
-    "SUI",
-    "NEAR",
-    "FIL",
-    "ICP",
-    "HBAR",
-    "VET",
-    "ALGO",
-    "FTM",
-    "SAND",
-    "MANA",
-    "AAVE",
-    "MKR",
-}
-
 # Equities that trade on exchanges other than NASDAQ
 _EXCHANGE_OVERRIDES: dict[str, str] = {
     "SPY": "AMEX",
@@ -94,15 +61,11 @@ _EXCHANGE_OVERRIDES: dict[str, str] = {
 
 
 def _resolve_screener_exchange(symbol: str) -> tuple[str, str]:
-    """Return (screener, exchange) for a symbol.
+    """Return (screener, exchange) for an equity symbol.
 
-    Crypto symbols → ("crypto", "BINANCE")
     Known ETFs/NYSE stocks → ("america", <override>)
     Default → ("america", "NASDAQ")
     """
-    sym = symbol.upper().replace("USDT", "").replace("USD", "")
-    if sym in _CRYPTO_SYMBOLS or symbol.upper().endswith("USDT"):
-        return ("crypto", "BINANCE")
     override = _EXCHANGE_OVERRIDES.get(symbol.upper())
     if override:
         return ("america", override)
@@ -121,10 +84,8 @@ def _get_analysis(
     """Fetch TradingView technical analysis for a symbol (cached)."""
     from tradingview_ta import Interval, TA_Handler
 
-    # Binance needs USDT-suffixed pairs (e.g. BTCUSDT)
+    # Set up handler
     tv_symbol = symbol
-    if screener == "crypto" and not symbol.upper().endswith("USDT"):
-        tv_symbol = f"{symbol.upper()}USDT"
 
     cache_key = (symbol, screener, exchange, interval)
     now = time.monotonic()

@@ -1,35 +1,20 @@
 # collector-market.yaml
 # SSOT Reference: Section 8 - Collector Workflows (collector-market)
 # Purpose: Build the trading universe -- which symbols to watch this tick.
-# Runs every 5 minutes via cron; produces universe:equities and universe:crypto in Redis (TTL 900s).
+# Runs every 5 minutes via cron; produces universe:equities in Redis (TTL 900s).
 
 name: collector-market
-description: Build equity and crypto symbol universes for this 5-minute tick
+description: Build equity symbol universe for this 5-minute tick
 llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
-  - name: coingecko-mcp
-    endpoint: http://coingecko-mcp:8007
   - name: trading-mcp
     endpoint: http://trading-mcp:8008
   - name: polygon-mcp
     endpoint: http://polygon-mcp:8002
 
 steps:
-  # Step 1 -- Parallel: CoinGecko top_gainers + dominance
-  # SSOT S8: universe:crypto built from CoinGecko top gainers and dominance data
-  - name: fetch-coingecko
-    type: parallel_tool_calls
-    calls:
-      - tool: coingecko-mcp
-        method: top_gainers
-        params:
-          limit: 30
-      - tool: coingecko-mcp
-        method: dominance
-        params: {}
-
-  # Step 2 -- trading-mcp screen for equity candidates
+  # Step 1 -- trading-mcp screen for equity candidates
   # SSOT S8: universe:equities from trading-mcp screen + Polygon volume leaders
   # SSOT S3: Use structured outputs only; limit to screener subset
   - name: fetch-equity-screen
@@ -61,8 +46,8 @@ steps:
     params:
       symbols: []
 
-  # Step 4 -- Code agent: merge, deduplicate, build universes, write to Redis
-  # Redis keys: universe:equities (max 50), universe:crypto (max 30)
+  # Step 4 -- Code agent: merge, deduplicate, build universe, write to Redis
+  # Redis keys: universe:equities (max 50)
   # Redis TTL: 900s per SSOT S8
   - name: build-and-store-universes
     type: code
@@ -74,9 +59,7 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
 
       fallback_equities_str = os.environ.get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
-      fallback_crypto_str   = os.environ.get("FALLBACK_CRYPTO", "BTC,ETH,SOL,BNB,AVAX")
       fallback_equities = [s.strip() for s in fallback_equities_str.split(",")]
-      fallback_crypto   = [s.strip() for s in fallback_crypto_str.split(",")]
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       equity_symbols = set()
@@ -90,27 +73,17 @@ steps:
               equity_symbols.add(sym.upper())
       equity_list = sorted(equity_symbols)[:50]
 
-      crypto_symbols = set()
-      for item in steps["fetch-coingecko"][0].get("results", []):
-          sym = item.get("symbol") or item.get("id")
-          if sym:
-              crypto_symbols.add(sym.upper())
-      crypto_list = sorted(crypto_symbols)[:30]
-
       if len(equity_list) < 5:
           cached = r.get("universe:equities")
           equity_list = json.loads(cached) if cached else fallback_equities
-      if len(crypto_list) < 3:
-          cached = r.get("universe:crypto")
-          crypto_list = json.loads(cached) if cached else fallback_crypto
 
       r.setex("universe:equities", snapshot_ttl, json.dumps(equity_list))
-      r.setex("universe:crypto",   snapshot_ttl, json.dumps(crypto_list))
 
-      result = {"n_equities": len(equity_list), "n_crypto": len(crypto_list)}
+      result = {"n_equities": len(equity_list)}
 
-  # Step 5 -- Produce signal snapshots from CoinGecko top movers + insider activity
+  # Step 5 -- Produce signal snapshots from Polygon top movers + insider activity
   # SSOT S7: market_normalizer scores 24h movers as supplementary TA signals
+  # Also computes relative_strength (each symbol vs SPY) from Polygon grouped_daily
   - name: normalize-market-signals
     type: code
     code: |
@@ -124,13 +97,23 @@ steps:
 
       raw_results = {}
 
-      # CoinGecko top movers → price_change_24h signals
-      cg_data = steps["fetch-coingecko"][0]
-      for item in cg_data.get("results", []):
-          sym = item.get("symbol", "").upper()
-          change = item.get("change_24h")
+      # Polygon grouped daily → price_change_24h + relative_strength signals
+      polygon_data = steps.get("fetch-polygon-volume-leaders", {})
+      spy_change = None
+      all_changes = {}
+      for item in polygon_data.get("results", []):
+          sym = (item.get("symbol") or item.get("ticker", "")).upper()
+          change = item.get("change_pct") or item.get("change_24h")
           if sym and change is not None:
+              all_changes[sym] = float(change)
+              if sym == "SPY":
+                  spy_change = float(change)
+
+      for sym, change in all_changes.items():
+          if abs(change) >= 2.0:
               raw_results[sym] = {"price_change_24h": change}
+              if spy_change is not None:
+                  raw_results[sym]["spy_pct_change"] = spy_change
 
       # Insider activity signals
       insider_data = steps.get("fetch-insider-activity", {})
@@ -140,6 +123,8 @@ steps:
           if sym and activity:
               raw_results.setdefault(sym, {})
               raw_results[sym]["insider_activity"] = activity
+              if spy_change is not None and "spy_pct_change" not in raw_results[sym]:
+                  raw_results[sym]["spy_pct_change"] = spy_change
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
@@ -159,10 +144,9 @@ steps:
       import logging
       bsu = steps.get("build-and-store-universes") or {}
       ne = bsu.get("n_equities", 0)
-      nc = bsu.get("n_crypto", 0)
       ns = (steps.get("normalize-market-signals") or {}).get("n_snapshots", 0)
-      logging.getLogger(__name__).info("Universe built: %d equities, %d crypto, %d market signal snapshots", ne, nc, ns)
-      result = f"Universe built: {ne} equities, {nc} crypto, {ns} market signal snapshots"
+      logging.getLogger(__name__).info("Universe built: %d equities, %d market signal snapshots", ne, ns)
+      result = f"Universe built: {ne} equities, {ns} market signal snapshots"
 
 error_handling:
   # SSOT S8: never abort -- always produce a universe.
@@ -170,7 +154,6 @@ error_handling:
   on_mcp_error:
     strategy: fallback_to_cache
     fallback_equities_key: "universe:equities"
-    fallback_crypto_key: "universe:crypto"
     hardcoded_fallback:
       equities:
         [
@@ -185,7 +168,6 @@ error_handling:
           "AMZN",
           "GOOGL",
         ]
-      crypto: ["BTC", "ETH", "SOL", "BNB", "AVAX"]
   abort_on_failure: false
   retry:
     max_attempts: 2

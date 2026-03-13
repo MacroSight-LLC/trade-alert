@@ -237,54 +237,6 @@ services:
       - trade-net
     restart: unless-stopped
 
-  crypto-orderbook-mcp:
-    image: trade-alert-mcp:latest
-    depends_on:
-      tradingview-mcp:
-        condition: service_started
-    profiles: [mcp]
-    command: ["8006"]
-    ports:
-      - "8006:8006"
-    environment: *mcp-env
-    env_file: *mcp-envfile
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8006/health'')"',
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - trade-net
-    restart: unless-stopped
-
-  coingecko-mcp:
-    image: trade-alert-mcp:latest
-    depends_on:
-      tradingview-mcp:
-        condition: service_started
-    profiles: [mcp]
-    command: ["8007"]
-    ports:
-      - "8007:8007"
-    environment: *mcp-env
-    env_file: *mcp-envfile
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8007/health'')"',
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - trade-net
-    restart: unless-stopped
-
   trading-mcp:
     image: trade-alert-mcp:latest
     depends_on:

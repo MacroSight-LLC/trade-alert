@@ -515,7 +515,7 @@ curl http://localhost:8001/health
 
 ## Support & References
 
-- **Architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.2.md`](./CUGA-Trading-Alert-System-SPEC-v1.2.md)
+- **Architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md)
 - **Application docs:** [`README.cuga.md`](./README.cuga.md)
 - **Vault docs:** https://www.vaultproject.io/docs
 - **Docker Compose:** https://docs.docker.com/compose/

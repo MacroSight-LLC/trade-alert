@@ -3,6 +3,7 @@
 Runs inside the app container to verify:
   MCP calls → normalizers → Redis snapshots → merger
 """
+
 from __future__ import annotations
 
 import json
@@ -25,7 +26,7 @@ r = redis.Redis(host="redis", port=6379, decode_responses=True)
 TTL = 900
 
 # Flush old snapshots for clean test
-r.delete("snapshots:15m", "snapshots:1h", "universe:equities", "universe:crypto", "macro:regime")
+r.delete("snapshots:15m", "snapshots:1h", "universe:equities", "macro:regime")
 
 
 def mcp_get(host: str, port: int, tool: str) -> dict | list:
@@ -34,13 +35,10 @@ def mcp_get(host: str, port: int, tool: str) -> dict | list:
 
 
 # 1. Build universes
-cg = mcp_get("coingecko-mcp", 8007, "top_gainers")
 screen = mcp_get("trading-mcp", 8008, "screen")
-crypto = [item["symbol"] for item in cg]
 equities = [item["symbol"] for item in screen.get("results", [])]
 r.setex("universe:equities", TTL, json.dumps(equities))
-r.setex("universe:crypto", TTL, json.dumps(crypto))
-print(f"1. Universes: {len(equities)} equities, {len(crypto)} crypto")
+print(f"1. Universes: {len(equities)} equities")
 
 # 2. TA signals
 ta_bb = mcp_get("tradingview-mcp", 8001, "bollinger_scan")

@@ -86,6 +86,7 @@ def load_vault_secrets() -> int:
             resp = client.secrets.kv.v2.read_secret_version(
                 path=VAULT_SECRET_PATH,
                 mount_point=VAULT_MOUNT,
+                raise_on_deleted_version=True,
             )
             data: dict[str, str] = (resp or {}).get("data", {}).get("data", {})
 
@@ -163,6 +164,7 @@ if __name__ == "__main__":
             resp = client.secrets.kv.v2.read_secret_version(
                 path=VAULT_SECRET_PATH,
                 mount_point=VAULT_MOUNT,
+                raise_on_deleted_version=True,
             )
             data = (resp or {}).get("data", {}).get("data", {})
             if mode == "--export":

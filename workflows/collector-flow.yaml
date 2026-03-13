@@ -1,17 +1,15 @@
 # collector-flow.yaml
 # SSOT Reference: Section 8 - Collector Workflows (collector-flow)
 # Purpose: Collect volume and order flow signals.
-# Reads universe:equities and universe:crypto from Redis; writes to snapshots:15m.
+# Reads universe:equities from Redis; writes to snapshots:15m.
 
 name: collector-flow
-description: Collect volume spikes and order book imbalance signals
+description: Collect volume spike signals
 llm_model: claude-sonnet-4-20250514
 
 mcp_servers:
   - name: polygon-mcp
     endpoint: http://polygon-mcp:8002
-  - name: crypto-orderbook-mcp
-    endpoint: http://crypto-orderbook-mcp:8006
 
 steps:
   # Step 0 -- Early-exit check for POLYGON_API_KEY
@@ -24,8 +22,8 @@ steps:
       has_polygon = bool(polygon_key and polygon_key != "your_polygon_api_key_here")
       result = {"has_polygon": has_polygon}
 
-  # Step 1 -- Read universes from Redis
-  # SSOT S8: read universe:equities and universe:crypto set by collector-market
+  # Step 1 -- Read universe from Redis
+  # SSOT S8: read universe:equities set by collector-market
   - name: read-universes
     type: code
     code: |
@@ -36,10 +34,8 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
 
       equities_raw = r.get("universe:equities")
-      crypto_raw   = r.get("universe:crypto")
 
       equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
-      crypto   = json.loads(crypto_raw)   if crypto_raw   else ["BTC", "ETH", "SOL"]
 
       # If no polygon key, clear equities to skip polygon call
       has_polygon = steps["check-api-keys"]["has_polygon"]
@@ -48,29 +44,19 @@ steps:
           logging.getLogger(__name__).info("POLYGON_API_KEY not set — skipping equity flow signals")
           equities = []
 
-      result = {"equities": equities, "crypto": crypto, "has_polygon": has_polygon}
+      result = {"equities": equities, "has_polygon": has_polygon}
 
-  # Step 2 -- Parallel: Polygon grouped_daily + crypto-orderbook imbalance
+  # Step 2 -- Polygon grouped_daily for volume data
   # SSOT S3: Polygon -- grouped daily endpoint returns ALL tickers in 1 API call
-  # SSOT S3: crypto-orderbook MCP -- only for symbols marked as crypto (batch 15)
   - name: fetch-flow-signals
-    type: parallel_tool_calls
-    calls:
-      # Polygon grouped daily for all equities -- single API call for ALL symbols
-      # Replaces per-symbol aggs calls that took 12s each (144s for 5 symbols)
-      - tool: polygon-mcp
-        method: grouped_daily
-        params:
-          symbols: "{{ steps['read-universes']['equities'] }}"
-      # Crypto orderbook imbalance via Bybit (batch 15)
-      - tool: crypto-orderbook-mcp
-        method: imbalance
-        params:
-          symbols: "{{ steps['read-universes']['crypto'][:15] }}"
+    type: tool_call
+    tool: polygon-mcp
+    method: grouped_daily
+    params:
+      symbols: "{{ steps['read-universes']['equities'] }}"
 
-  # Step 3 -- Code agent: merge polygon + orderbook results, normalize, push to Redis
+  # Step 3 -- Code agent: merge polygon results, normalize, push to Redis
   # SSOT S7 Flow: volume_multiple scoring -- 1.5-3 => 1.0, 3-5 => 2.5, >=5 => 3.0
-  # SSOT S7 Crypto: positive imbalance => order_imbalance_long; negative => order_imbalance_short
   # Redis key: snapshots:15m, TTL 900s
   - name: normalize-and-store-snapshots
     type: code
@@ -83,9 +69,7 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
-      unusual_results   = {"results": []}  # unusual_activity requires paid Polygon plan
-      aggs_results      = steps["fetch-flow-signals"][0]
-      orderbook_results = steps["fetch-flow-signals"][1]
+      aggs_results = steps["fetch-flow-signals"]
 
       raw = {}
       for item in aggs_results.get("results", []):
@@ -97,16 +81,6 @@ steps:
                   "volume_multiple": current_vol / avg_vol,
                   "unusual_options": [],
               }
-      for item in unusual_results.get("results", []):
-          sym = item.get("symbol") or item.get("ticker")
-          if sym and sym in raw:
-              raw[sym]["unusual_options"].append(item)
-      for item in orderbook_results.get("results", []):
-          sym = item.get("symbol") or item.get("ticker")
-          if sym:
-              if sym not in raw:
-                  raw[sym] = {}
-              raw[sym]["imbalance"] = item.get("bid_imbalance", item.get("imbalance"))
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
@@ -129,13 +103,8 @@ steps:
       result = f"Flow collector: {n} snapshots pushed to Redis"
 
 error_handling:
-  # SSOT S8: if crypto-orderbook-mcp unavailable -- skip crypto flow, continue equities.
   # SSOT S8: if Polygon rate limited -- use previous tick's flow data from Redis.
   on_mcp_error:
-    crypto-orderbook-mcp:
-      strategy: skip
-      log: true
-      message: "crypto-orderbook-mcp unavailable -- skipping crypto flow signals"
     polygon-mcp:
       strategy: fallback_to_cache
       cache_key: "snapshots:15m"

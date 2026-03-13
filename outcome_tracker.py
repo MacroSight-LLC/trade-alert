@@ -27,30 +27,6 @@ OUTCOME_WINDOW_HOURS: int = int(os.getenv("OUTCOME_WINDOW_HOURS", "4"))
 PRICE_FETCH_MAX_RETRIES: int = int(os.getenv("PRICE_FETCH_MAX_RETRIES", "3"))
 PRICE_FETCH_TIMEOUT: float = float(os.getenv("PRICE_FETCH_TIMEOUT", "10.0"))
 
-# Known crypto symbols — extend as needed.
-_CRYPTO_SYMBOLS: frozenset[str] = frozenset(
-    {
-        "BTC",
-        "ETH",
-        "SOL",
-        "XRP",
-        "ADA",
-        "DOGE",
-        "AVAX",
-        "DOT",
-        "MATIC",
-        "LINK",
-        "UNI",
-        "ATOM",
-        "LTC",
-        "BCH",
-        "NEAR",
-        "BTCUSD",
-        "ETHUSD",
-        "SOLUSD",
-    }
-)
-
 _http_client: httpx.Client | None = None
 
 
@@ -63,16 +39,6 @@ def _get_http_client() -> httpx.Client:
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
     return _http_client
-
-
-def is_crypto(symbol: str) -> bool:
-    """Return True if *symbol* represents a cryptocurrency.
-
-    Args:
-        symbol: Ticker symbol (e.g. ``"BTC"``, ``"AAPL"``).
-    """
-    upper = symbol.upper().rstrip("USDT").rstrip("USD")
-    return symbol.upper() in _CRYPTO_SYMBOLS or upper in _CRYPTO_SYMBOLS
 
 
 # ── Price source chain ───────────────────────────────────────────
@@ -114,74 +80,18 @@ def _finnhub_quote(symbol: str) -> float | None:
     return None
 
 
-def _coingecko_price(symbol: str) -> float | None:
-    """CoinGecko /simple/price — free, no key required."""
-    # CoinGecko uses lowercase ids (e.g. "bitcoin", "ethereum")
-    _SYMBOL_TO_CG: dict[str, str] = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum",
-        "SOL": "solana",
-        "XRP": "ripple",
-        "ADA": "cardano",
-        "DOGE": "dogecoin",
-        "AVAX": "avalanche-2",
-        "DOT": "polkadot",
-        "MATIC": "matic-network",
-        "LINK": "chainlink",
-        "UNI": "uniswap",
-        "ATOM": "cosmos",
-        "LTC": "litecoin",
-        "BCH": "bitcoin-cash",
-        "NEAR": "near",
-    }
-    normalized = symbol.upper().rstrip("USDT").rstrip("USD")
-    cg_id = _SYMBOL_TO_CG.get(normalized)
-    if not cg_id:
-        return None
-    try:
-        resp = _get_http_client().get(
-            "https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": cg_id, "vs_currencies": "usd"},
-        )
-        resp.raise_for_status()
-        return float(resp.json()[cg_id]["usd"])
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-        logger.debug("CoinGecko price failed for %s: %s", symbol, exc)
-    return None
-
-
-def _binance_price(symbol: str) -> float | None:
-    """Binance ticker price — free, no key required."""
-    normalized = symbol.upper().rstrip("USD").rstrip("USDT")
-    pair = f"{normalized}USDT"
-    try:
-        resp = _get_http_client().get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": pair},
-        )
-        resp.raise_for_status()
-        return float(resp.json()["price"])
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-        logger.debug("Binance price failed for %s: %s", symbol, exc)
-    return None
-
-
 def get_current_price(symbol: str) -> float | None:
     """Fetch latest price using a multi-source fallback chain.
 
     Equities: Polygon prev-day close → Finnhub /quote → None
-    Crypto:   CoinGecko /simple/price → Binance ticker → None
 
     Args:
-        symbol: Ticker symbol (e.g. ``"AAPL"``, ``"BTC"``).
+        symbol: Ticker symbol (e.g. ``"AAPL"``).
 
     Returns:
         Latest price, or ``None`` if all sources fail.
     """
-    if is_crypto(symbol):
-        chain = [_coingecko_price, _binance_price]
-    else:
-        chain = [_polygon_prev_close, _finnhub_quote]
+    chain = [_polygon_prev_close, _finnhub_quote]
 
     for fetcher in chain:
         fetcher_name = getattr(fetcher, "__name__", repr(fetcher))

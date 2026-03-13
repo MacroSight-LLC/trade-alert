@@ -12,7 +12,6 @@ from outcome_tracker import (
     _map_db_row,
     evaluate_outcome,
     get_current_price,
-    is_crypto,
     run_tracker_cycle,
 )
 
@@ -161,31 +160,6 @@ class TestMapDbRow:
         assert mapped["symbol"] == "SPY"
 
 
-# ── is_crypto ───────────────────────────────────────────────────
-
-
-class TestIsCrypto:
-    """Tests for crypto symbol detection."""
-
-    def test_known_crypto(self) -> None:
-        assert is_crypto("BTC") is True
-        assert is_crypto("ETH") is True
-        assert is_crypto("SOL") is True
-
-    def test_crypto_with_usd_suffix(self) -> None:
-        assert is_crypto("BTCUSD") is True
-        assert is_crypto("ETHUSD") is True
-
-    def test_equity_not_crypto(self) -> None:
-        assert is_crypto("AAPL") is False
-        assert is_crypto("NVDA") is False
-        assert is_crypto("SPY") is False
-
-    def test_case_insensitive(self) -> None:
-        assert is_crypto("btc") is True
-        assert is_crypto("Eth") is True
-
-
 # ── get_current_price ───────────────────────────────────────────
 
 
@@ -210,24 +184,6 @@ class TestGetCurrentPrice:
     @patch("outcome_tracker._polygon_prev_close", return_value=None)
     def test_equity_all_sources_fail(self, _poly: MagicMock, _fh: MagicMock) -> None:
         assert get_current_price("AAPL") is None
-
-    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
-    @patch("outcome_tracker._coingecko_price", return_value=67500.0)
-    def test_crypto_coingecko_success(self, mock_cg: MagicMock) -> None:
-        assert get_current_price("BTC") == pytest.approx(67500.0)
-        mock_cg.assert_called_once_with("BTC")
-
-    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
-    @patch("outcome_tracker._binance_price", return_value=67000.0)
-    @patch("outcome_tracker._coingecko_price", return_value=None)
-    def test_crypto_fallback_to_binance(self, _cg: MagicMock, mock_bin: MagicMock) -> None:
-        assert get_current_price("ETH") == pytest.approx(67000.0)
-
-    @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 1)
-    @patch("outcome_tracker._binance_price", return_value=None)
-    @patch("outcome_tracker._coingecko_price", return_value=None)
-    def test_crypto_all_sources_fail(self, _cg: MagicMock, _bin: MagicMock) -> None:
-        assert get_current_price("BTC") is None
 
     @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 3)
     @patch("outcome_tracker.time.sleep")

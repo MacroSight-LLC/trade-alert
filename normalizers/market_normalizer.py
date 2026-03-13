@@ -54,6 +54,25 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     )
                 )
 
+        # Relative strength vs SPY (SSOT §7)
+        pct_change: float | None = data.get("price_change_24h")
+        spy_change: float | None = data.get("spy_pct_change")
+        if pct_change is not None and spy_change is not None:
+            rs = pct_change - spy_change
+            abs_rs = abs(rs)
+            if abs_rs >= 2.0:
+                rs_score = min(abs_rs / 2.0, 3.0) if rs > 0 else max(-abs_rs / 2.0, -3.0)
+                signals.append(
+                    Signal(
+                        source="polygon",
+                        type="relative_strength",
+                        score=rs_score,
+                        confidence=min(abs_rs / 10.0, 1.0),
+                        reason=f"RS vs SPY {rs:+.1f}% (sym {pct_change:+.1f}%, SPY {spy_change:+.1f}%)",
+                        raw=data,
+                    )
+                )
+
         insider: str | None = data.get("insider_activity")
         if insider:
             insider_lower = insider.strip().lower()
@@ -61,7 +80,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 signals.append(
                     Signal(
                         source="trading",
-                        type="sentiment_bull",
+                        type="insider_activity",
                         score=1.5,
                         confidence=0.75,
                         reason="Insider buying activity",
@@ -72,7 +91,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 signals.append(
                     Signal(
                         source="trading",
-                        type="sentiment_bear",
+                        type="insider_activity",
                         score=-1.5,
                         confidence=0.75,
                         reason="Insider selling activity",

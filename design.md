@@ -1,7 +1,7 @@
 # CugaSupervisor Design Document
 
 > **Note:** This document describes the upstream CUGA framework's supervisor pattern.
-> For the trade-alert system design, see [`CUGA-Trading-Alert-System-SPEC-v1.2.md`](./CUGA-Trading-Alert-System-SPEC-v1.2.md).
+> For the trade-alert system design, see [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md).
 
 ## Overview
 

@@ -1,7 +1,6 @@
-"""Polygon flow + crypto orderbook normalizer (SSOT §7).
+"""Polygon flow normalizer (SSOT §7).
 
-Transforms volume multiples into ``volume_spike`` signals and
-bid/ask imbalances into ``order_imbalance_long`` / ``order_imbalance_short``.
+Transforms volume multiples into ``volume_spike`` signals.
 """
 
 from __future__ import annotations
@@ -10,22 +9,20 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp as _clamp
 from normalizers import safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
-    """Convert flow/orderbook MCP output into Snapshots.
+    """Convert flow MCP output into Snapshots.
 
     Args:
         raw_results: Dict keyed by symbol. Each value contains:
             - volume_multiple (float): current_volume / avg_20d_volume
-            - imbalance (float, optional): bid-ask imbalance -1.0..+1.0
             - unusual_options (list[str], optional)
         timeframe: Candle timeframe, e.g. "15m".
 
     Returns:
-        List of Snapshots, one per symbol with 1-2 signals.
+        List of Snapshots, one per symbol with volume_spike signals.
     """
     snapshots: list[Snapshot] = []
     now = datetime.now(timezone.utc).isoformat()
@@ -60,36 +57,6 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         raw=data,
                     )
                 )
-
-        # Order-book imbalance scoring (SSOT §7 — crypto only)
-        imbalance: float | None = data.get("imbalance")
-        if imbalance is not None:
-            imbalance = safe_float(imbalance)
-            if imbalance != 0.0:
-                if imbalance > 0:
-                    imb_score = _clamp(imbalance * 3.0, 0.0, 3.0)
-                    signals.append(
-                        Signal(
-                            source="crypto-orderbook",
-                            type="order_imbalance_long",
-                            score=imb_score,
-                            confidence=min(abs(imbalance), 1.0),
-                            reason=f"bid/ask imbalance {imbalance:+.2f}",
-                            raw=data,
-                        )
-                    )
-                else:
-                    imb_score = _clamp(imbalance * 3.0, -3.0, 0.0)
-                    signals.append(
-                        Signal(
-                            source="crypto-orderbook",
-                            type="order_imbalance_short",
-                            score=imb_score,
-                            confidence=min(abs(imbalance), 1.0),
-                            reason=f"bid/ask imbalance {imbalance:+.2f}",
-                            raw=data,
-                        )
-                    )
 
         if signals:
             snapshots.append(

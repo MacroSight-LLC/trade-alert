@@ -81,8 +81,9 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                             "volume_spike",
                             "sentiment_bull",
                             "sentiment_bear",
-                            "order_imbalance_long",
-                            "order_imbalance_short",
+                            "options_flow",
+                            "insider_activity",
+                            "relative_strength",
                             "macro_risk_off",
                         ],
                         rot_type,
@@ -93,6 +94,43 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     raw=data,
                 )
             )
+
+        # ROT options flow → options_flow signal (SSOT §7)
+        rot_flow_items: list[dict] = data.get("rot_options_flow", [])
+        for flow_item in rot_flow_items:
+            premium = flow_item.get("premium", 0)
+            contracts = flow_item.get("contracts", 0)
+            sweep_type = flow_item.get("sweep_type", "")
+            strike = flow_item.get("strike", "")
+
+            # Score by magnitude: small sweep → 1.0, medium → 2.0, large → 2.5
+            if contracts >= 500 or premium >= 1_000_000:
+                flow_score = 2.5
+                flow_conf = 0.85
+            elif contracts >= 200 or premium >= 500_000:
+                flow_score = 2.0
+                flow_conf = 0.75
+            elif contracts >= 50 or premium >= 100_000:
+                flow_score = 1.0
+                flow_conf = 0.60
+            else:
+                continue
+
+            # Determine direction from sweep type (call = bullish, put = bearish)
+            if "put" in sweep_type.lower():
+                flow_score = -flow_score
+
+            signals.append(
+                Signal(
+                    source="rot",
+                    type="options_flow",
+                    score=flow_score,
+                    confidence=flow_conf,
+                    reason=f"Options sweep: {sweep_type} {strike} {contracts} contracts ${premium:,.0f}",
+                    raw=flow_item,
+                )
+            )
+            break  # One options_flow signal per symbol
 
         if signals:
             snapshots.append(

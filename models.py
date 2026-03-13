@@ -29,8 +29,9 @@ class Signal(BaseModel):
         "volume_spike",
         "sentiment_bull",
         "sentiment_bear",
-        "order_imbalance_long",
-        "order_imbalance_short",
+        "options_flow",
+        "insider_activity",
+        "relative_strength",
         "macro_risk_off",
     ]
     score: float
