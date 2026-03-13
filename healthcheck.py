@@ -42,6 +42,8 @@ MCP_SERVICES: list[tuple[str, str]] = [
 
 HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.jsonl"
 MCP_HEALTH_TIMEOUT: float = float(os.getenv("MCP_HEALTH_TIMEOUT", "5.0"))
+LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "http://langfuse:3000")
+REDIS_SNAPSHOT_STALE_TTL: int = int(os.getenv("REDIS_SNAPSHOT_STALE_TTL", "800"))
 
 
 HEALTH_LOG_MAX_LINES: int = int(os.getenv("HEALTH_LOG_MAX_LINES", "2000"))
@@ -88,6 +90,38 @@ def check_redis() -> bool:
     except redis.RedisError as exc:
         logger.error("Healthcheck: Redis FAILED — %s", exc)
         return False
+
+
+def check_redis_snapshot_staleness() -> str | None:
+    """Check TTL of snapshot queue keys for data staleness.
+
+    Scans ``snapshots:*`` keys and inspects their TTL values.
+    If every key's TTL exceeds ``REDIS_SNAPSHOT_STALE_TTL`` (default 800s)
+    the snapshots are likely stale — collectors may have stopped.
+
+    Returns:
+        Warning string if all snapshot keys are stale, else None.
+    """
+    try:
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        keys = r.keys("snapshots:*")
+        if not keys:
+            return None  # No snapshot keys — nothing to check
+        ttls = [r.ttl(k) for k in keys]
+        # TTL returns -1 for no-expiry, -2 for missing key
+        valid_ttls = [t for t in ttls if t > 0]
+        if not valid_ttls:
+            return None
+        if all(t > REDIS_SNAPSHOT_STALE_TTL for t in valid_ttls):
+            return (
+                f"Snapshot data may be stale — all {len(valid_ttls)} keys "
+                f"have TTL > {REDIS_SNAPSHOT_STALE_TTL}s "
+                f"(min={min(valid_ttls)}s, max={max(valid_ttls)}s)"
+            )
+        return None
+    except redis.RedisError as exc:
+        logger.warning("Healthcheck: Redis staleness check failed — %s", exc)
+        return None
 
 
 def check_postgres() -> bool:
@@ -166,6 +200,29 @@ def check_mcps(timeout: float | None = None) -> tuple[list[str], list[str]]:
     return healthy, unhealthy
 
 
+def check_langfuse() -> str:
+    """Check Langfuse observability service connectivity.
+
+    Sends HTTP GET to ``LANGFUSE_HOST/api/public/health``.
+    Returns ``"OK"`` on 200, ``"DEGRADED"`` on any failure.
+    Langfuse is non-critical — a failure should never block alerts.
+
+    Returns:
+        ``"OK"`` or ``"DEGRADED"``.
+    """
+    url = f"{LANGFUSE_HOST.rstrip('/')}/api/public/health"
+    try:
+        resp = httpx.get(url, timeout=5.0)
+        if resp.status_code == 200:
+            logger.info("Healthcheck: Langfuse OK")
+            return "OK"
+        logger.warning("Healthcheck: Langfuse returned %d", resp.status_code)
+        return "DEGRADED"
+    except httpx.HTTPError as exc:
+        logger.warning("Healthcheck: Langfuse unreachable — %s", exc)
+        return "DEGRADED"
+
+
 def run_healthcheck(timeframe: str) -> None:
     """Run all healthchecks and alert ops on infrastructure failures.
 
@@ -178,8 +235,10 @@ def run_healthcheck(timeframe: str) -> None:
     """
     try:
         redis_ok = check_redis()
+        snapshot_stale_warning = check_redis_snapshot_staleness()
         pg_ok = check_postgres()
         healthy_mcps, unhealthy_mcps = check_mcps()
+        langfuse_status = check_langfuse()
         check_recent_alerts(timeframe)
 
         # SSOT §13: structured JSONL log entry
@@ -188,9 +247,11 @@ def run_healthcheck(timeframe: str) -> None:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "timeframe": timeframe,
                 "redis_ok": redis_ok,
+                "snapshot_stale_warning": snapshot_stale_warning,
                 "pg_ok": pg_ok,
                 "mcp_healthy": healthy_mcps,
                 "mcp_unhealthy": unhealthy_mcps,
+                "langfuse": langfuse_status,
             }
         )
 
@@ -201,10 +262,14 @@ def run_healthcheck(timeframe: str) -> None:
         failures: list[str] = []
         if not redis_ok:
             failures.append(f"Redis={redis_icon}")
+        if snapshot_stale_warning:
+            failures.append(f"⏳ {snapshot_stale_warning}")
         if not pg_ok:
             failures.append(f"Postgres={pg_icon}")
         if unhealthy_mcps:
             failures.append(f"MCPs={mcp_icon} ({', '.join(unhealthy_mcps)})")
+        if langfuse_status == "DEGRADED":
+            failures.append("Langfuse=⚠️ DEGRADED")
 
         if failures:
             msg = f"⚠️ Healthcheck FAILED [{timeframe}]: {' | '.join(failures)}"

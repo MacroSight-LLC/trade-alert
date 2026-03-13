@@ -11,6 +11,7 @@ import pytest
 from models import PlaybookAlert
 from notifier_and_logger import (
     _score_bar,
+    _thesis_similarity,
     compute_rr,
     format_embed,
     notify,
@@ -501,3 +502,121 @@ class TestSendOpsEmbed:
         mock_client.post.side_effect = httpx.RequestError("timeout")
         mock_client_fn.return_value = mock_client
         assert send_ops_embed({"embeds": []}) is False
+
+
+# ── _thesis_similarity ──────────────────────────────────────────
+
+
+class TestThesisSimilarity:
+    """Tests for Jaccard similarity of thesis word sets."""
+
+    def test_identical_theses(self) -> None:
+        assert _thesis_similarity("RSI breakout above support", "RSI breakout above support") == 1.0
+
+    def test_completely_different(self) -> None:
+        sim = _thesis_similarity("RSI breakout momentum", "earnings catalyst rotation")
+        assert sim == 0.0
+
+    def test_partial_overlap(self) -> None:
+        sim = _thesis_similarity(
+            "RSI breakout above support with volume",
+            "RSI breakout below resistance with volume",
+        )
+        assert 0.0 < sim < 1.0
+
+    def test_empty_first(self) -> None:
+        assert _thesis_similarity("", "some thesis content") == 0.0
+
+    def test_empty_second(self) -> None:
+        assert _thesis_similarity("some thesis content", "") == 0.0
+
+    def test_both_empty(self) -> None:
+        assert _thesis_similarity("", "") == 0.0
+
+    def test_case_insensitive(self) -> None:
+        assert _thesis_similarity("RSI Breakout", "rsi breakout") == 1.0
+
+    def test_high_similarity_above_threshold(self) -> None:
+        # Same thesis with minor word swap → should be > 0.5
+        a = "RSI divergence at support with bollinger squeeze and volume spike"
+        b = "RSI divergence at support with bollinger squeeze and momentum spike"
+        sim = _thesis_similarity(a, b)
+        assert sim >= 0.5
+
+
+# ── Content-aware dedup ─────────────────────────────────────────
+
+
+class TestContentAwareDedup:
+    """Tests for _is_duplicate_alert with thesis similarity."""
+
+    @patch("notifier_and_logger._redis")
+    def test_first_alert_not_duplicate(self, mock_redis_mod: MagicMock) -> None:
+        from notifier_and_logger import _is_duplicate_alert
+
+        mock_conn = MagicMock()
+        mock_conn.exists.return_value = False
+        mock_redis_mod.from_url.return_value = mock_conn
+
+        result = _is_duplicate_alert("AAPL", "LONG", "15m", "RSI breakout")
+        assert result is False
+        mock_conn.setex.assert_called()
+
+    @patch("notifier_and_logger._redis")
+    def test_exact_duplicate_suppressed(self, mock_redis_mod: MagicMock) -> None:
+        from notifier_and_logger import _is_duplicate_alert
+
+        mock_conn = MagicMock()
+        mock_conn.exists.return_value = True
+        mock_conn.get.return_value = "RSI breakout above support with volume"
+        mock_redis_mod.from_url.return_value = mock_conn
+
+        result = _is_duplicate_alert(
+            "AAPL",
+            "LONG",
+            "15m",
+            "RSI breakout above support with volume",
+        )
+        assert result is True
+
+    @patch("notifier_and_logger._redis")
+    def test_different_thesis_allowed_through(self, mock_redis_mod: MagicMock) -> None:
+        from notifier_and_logger import _is_duplicate_alert
+
+        mock_conn = MagicMock()
+        mock_conn.exists.return_value = True
+        mock_conn.get.return_value = "RSI breakout above support with volume"
+        mock_redis_mod.from_url.return_value = mock_conn
+
+        # Completely different thesis → similarity < 0.5 → allow through
+        result = _is_duplicate_alert(
+            "AAPL",
+            "LONG",
+            "15m",
+            "Earnings catalyst with sector rotation and dark pool activity",
+        )
+        assert result is False
+
+    @patch("notifier_and_logger._redis")
+    def test_no_thesis_defaults_to_suppress(self, mock_redis_mod: MagicMock) -> None:
+        from notifier_and_logger import _is_duplicate_alert
+
+        mock_conn = MagicMock()
+        mock_conn.exists.return_value = True
+        mock_redis_mod.from_url.return_value = mock_conn
+
+        # No thesis → suppress as normal dedup
+        result = _is_duplicate_alert("AAPL", "LONG", "15m")
+        assert result is True
+
+    @patch("notifier_and_logger._redis")
+    def test_redis_error_allows_through(self, mock_redis_mod: MagicMock) -> None:
+        import redis as _test_redis
+
+        from notifier_and_logger import _is_duplicate_alert
+
+        mock_redis_mod.from_url.side_effect = _test_redis.RedisError("gone")
+        mock_redis_mod.RedisError = _test_redis.RedisError
+
+        result = _is_duplicate_alert("AAPL", "LONG", "15m", "thesis")
+        assert result is False

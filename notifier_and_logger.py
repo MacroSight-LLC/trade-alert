@@ -8,6 +8,7 @@ Implements SSOT §11.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -350,32 +351,87 @@ def send_ops_embed(embed_payload: dict) -> bool:
         return False
 
 
-def _is_duplicate_alert(symbol: str, direction: str, timeframe: str) -> bool:
+def _thesis_similarity(a: str, b: str) -> float:
+    """Jaccard similarity of thesis word sets.
+
+    Args:
+        a: First thesis string.
+        b: Second thesis string.
+
+    Returns:
+        Similarity score from 0.0 (completely different) to 1.0 (identical).
+    """
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def _is_duplicate_alert(
+    symbol: str,
+    direction: str,
+    timeframe: str,
+    thesis: str = "",
+) -> bool:
     """Check Redis for a recent alert with the same symbol/direction/timeframe.
 
     Sets a key with TTL on first fire, returns True if key already exists.
     Prevents duplicate alerts within the dedup window.
 
+    When a dedup hit is found, compares the new thesis against the stored
+    thesis using Jaccard similarity. If the theses are materially different
+    (similarity < 0.5), the alert is allowed through and the stored thesis
+    is updated.
+
     Args:
         symbol: Ticker symbol.
         direction: LONG/SHORT/WATCH.
         timeframe: Pipeline timeframe.
+        thesis: Alert thesis for content-aware dedup.
 
     Returns:
         True if a duplicate was found (alert should be suppressed).
     """
-    dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}"
+    # Include a short thesis hash in the dedup key so that the same symbol
+    # can re-alert within the window IF the thesis is materially different.
+    thesis_hash = hashlib.md5(thesis[:120].encode()).hexdigest()[:8] if thesis else "no_thesis"
+    dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}:{thesis_hash}"
+    thesis_key = f"alert:thesis:{symbol}:{direction}:{timeframe}"
     try:
         r = _redis.from_url(
             os.getenv("REDIS_URL", "redis://redis:6379"),
             decode_responses=True,
             socket_timeout=5.0,
         )
-        if r.exists(dedup_key):
-            logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
-            return True
-        r.setex(dedup_key, DEDUP_WINDOW_SECONDS, "1")
-        return False
+        # Atomic SET NX+EX eliminates the TOCTOU race between EXISTS and
+        # SETEX — a concurrent pipeline tick can no longer slip between
+        # the read and the write, which previously allowed duplicate
+        # Discord sends for the same signal.
+        was_set = r.set(dedup_key, "1", nx=True, ex=DEDUP_WINDOW_SECONDS)
+        if was_set:
+            # First time seeing this key — store thesis for similarity checks
+            if thesis:
+                r.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
+            return False
+
+        # Key already existed — check for content-aware override.
+        # Jaccard threshold 0.5: allows re-alerting when less than half the
+        # thesis words overlap, indicating a materially different thesis.
+        if thesis:
+            stored_thesis = r.get(thesis_key) or ""
+            if stored_thesis and _thesis_similarity(thesis, stored_thesis) < 0.5:
+                logger.info(
+                    "Dedup: allowing new thesis for %s %s %s (different content)",
+                    symbol,
+                    direction,
+                    timeframe,
+                )
+                r.set(dedup_key, "1", ex=DEDUP_WINDOW_SECONDS)
+                r.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
+                return False
+        logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
+        return True
     except _redis.RedisError as exc:
         logger.warning("Dedup check failed (allowing alert through): %s", exc)
         return False
@@ -412,7 +468,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                 continue
             alert = PlaybookAlert(**item)
             # Dedup: suppress duplicate alerts within the window
-            if _is_duplicate_alert(alert.symbol, alert.direction, alert.timeframe):
+            if _is_duplicate_alert(alert.symbol, alert.direction, alert.timeframe, alert.thesis):
                 continue
             valid_alerts.append(alert)
         except Exception as exc:
@@ -439,13 +495,33 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             chart_png = generate_chart(alert.symbol, alert.timeframe, alert.entry)
             if chart_png:
                 embed["embeds"][0]["image"] = {"url": "attachment://chart.png"}
-            sent = send_discord_embed(embed, chart_png=chart_png)
-            if sent:
-                n_sent += 1
+
+            # Persist-first ordering: INSERT into Postgres BEFORE sending
+            # to Discord.  This prevents "phantom alerts" where a Discord
+            # message is delivered but the alert is never recorded (e.g. a
+            # crash between Discord send and Postgres write).  If Postgres
+            # fails we skip Discord entirely — no user-visible alert without
+            # a persisted record.  If Discord fails after a successful
+            # insert the alert is safely persisted; Discord failure is
+            # non-fatal and will be retried or noticed via ops monitoring.
             try:
                 insert_alert(alert, snapshots)
             except Exception as exc:
-                logger.error("Postgres insert failed for %s: %s", alert.symbol, exc)
+                logger.error(
+                    "Postgres insert failed for %s — skipping Discord send: %s",
+                    alert.symbol,
+                    exc,
+                )
+                continue
+
+            sent = send_discord_embed(embed, chart_png=chart_png)
+            if sent:
+                n_sent += 1
+            else:
+                logger.warning(
+                    "Discord send failed for %s after successful Postgres insert",
+                    alert.symbol,
+                )
         except Exception as exc:
             logger.error("Notifier alert send failed: %s", exc)
 

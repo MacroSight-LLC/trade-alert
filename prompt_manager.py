@@ -17,7 +17,9 @@ Variables injected at runtime:
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from langfuse_client import get_langfuse_client
@@ -66,12 +68,18 @@ QUALITY RULES — follow these strictly:
    - Insider buying + bearish technical = potential divergence — treat with caution
    - Volume_spike without directional technical confirmation = noise, not signal
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
+
+RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
+{{performance_context}}
+If the actual win-rate for your EP bucket is below 50%, lower your EP estimates.
+
 {{extra_rules}}"""
 
 _FALLBACK_USER = """\
 Timeframe: {{timeframe}}
 Macro Regime: {{macro_summary}}
-VIX: {{vix}} | Yield Curve: {{yc}}bps
+VIX: {{vix}} | Yield Curve: {{yc}}bps | Data: {{data_freshness}}
+Snapshot age: oldest={{snapshot_age_oldest}}s, newest={{snapshot_age_newest}}s
 
 Evaluate these {{n}} symbols and their signals:
 
@@ -114,6 +122,8 @@ CRITICAL CHECKS before outputting each alert:
 
 {{extra_rules}}
 
+{{few_shot_examples}}
+
 Return [] if no symbols meet ALL requirements.
 Return ONLY the JSON array. No other text."""
 
@@ -138,7 +148,16 @@ _EXTRA_RULES: dict[str, str] = {
         "- Macro regime context weighs MORE heavily at 1h than 15m — "
         "a risk-off environment should suppress long setups unless 4+ sources agree.\n"
         "- Prefer setups near key technical levels (support/resistance) rather than "
-        "mid-range entries."
+        "mid-range entries.\n"
+        "- MACRO IS CRITICAL at 1h: weight FRED data (VIX, yield curve) heavily "
+        "in your assessment. An elevated VIX + risk-off regime is a strong "
+        "headwind for long positions, even with bullish TA.\n"
+        "- De-weight intraday noise: 15m momentum spikes that haven't sustained "
+        "across multiple candles are less reliable at the 1h timeframe.\n"
+        "- Prefer setups with fundamental catalysts (earnings surprise, insider "
+        "buying cluster, sector rotation) over pure TA patterns.\n"
+        "- Thesis MUST reference at least one macro or fundamental factor, "
+        "not just technical indicators."
     ),
 }
 
@@ -147,6 +166,167 @@ _GATE_DEFAULTS: dict[str, dict[str, str]] = {
     "15m": {"ep_gate": "0.70", "sa_gate": "3", "conf_gate": "0.75"},
     "1h": {"ep_gate": "0.75", "sa_gate": "3", "conf_gate": "0.75"},
 }
+
+
+def format_winrate_context() -> str:
+    """Format recent win-rate data for injection into the system prompt.
+
+    Returns:
+        Human-readable summary of recent win-rate stats, or a default
+        message if data is unavailable.
+    """
+    try:
+        from db import get_recent_winrate_summary
+
+        data = get_recent_winrate_summary(days=7)
+        total = data.get("total_resolved", 0)
+        if total < 5:
+            return "No recent outcome data available yet."
+
+        winrate = data.get("winrate")
+        avg_ep = data.get("avg_ep")
+        lines = [
+            f"Last 7 days: {total} resolved alerts, win-rate {winrate:.0%}, avg EP claimed {avg_ep:.2f}.",
+        ]
+        for bucket in data.get("ep_calibration", []):
+            b = bucket["bucket"]
+            t = bucket["total"]
+            wr = bucket.get("actual_winrate")
+            if t >= 2 and wr is not None:
+                lines.append(f"  EP {b:.1f}: {t} alerts, actual win-rate {wr:.0%}")
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001
+        return "No recent outcome data available yet."
+
+
+def format_golden_examples() -> str:
+    """Format few-shot examples from the golden dataset for the user prompt.
+
+    Returns:
+        Formatted examples string, or empty string if none available.
+    """
+    try:
+        from langfuse_datasets import get_golden_examples
+
+        examples = get_golden_examples(n=3)
+        if not examples:
+            return ""
+
+        import json
+
+        lines = [
+            "REFERENCE EXAMPLES (high-quality alerts from production — "
+            "match this specificity and calibration):",
+        ]
+        for i, ex in enumerate(examples, 1):
+            alerts = ex.get("expected_output", {}).get("alerts", [])
+            if alerts:
+                lines.append(f"\nExample {i}:")
+                lines.append(json.dumps(alerts[0], indent=2))
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def get_quality_escalation_rules(timeframe: str) -> str:
+    """Check recent quality scores and return escalation rules if degrading.
+
+    Fetches the last 5 ``batch_avg_quality`` scores from Langfuse traces
+    for the given timeframe. If the rolling average is below threshold,
+    returns stricter rules to inject into the prompt.
+
+    Args:
+        timeframe: Pipeline timeframe (``"15m"`` or ``"1h"``).
+
+    Returns:
+        Extra rules string to append, or empty string if quality is fine.
+    """
+    try:
+        from langfuse_client import get_langfuse_client
+
+        lf = get_langfuse_client()
+        if lf is None:
+            return ""
+
+        session_id = f"orchestrator-{timeframe}"
+        response = lf.fetch_traces(
+            session_id=session_id,
+            limit=5,
+            order_by="timestamp.DESC",
+        )
+        traces = response.data if response.data else []
+        if not traces:
+            return ""
+
+        quality_scores: list[float] = []
+        for trace in traces:
+            scores = getattr(trace, "scores", None) or []
+            for score_obj in scores:
+                if getattr(score_obj, "name", "") == "batch_avg_quality":
+                    val = getattr(score_obj, "value", None)
+                    if val is not None:
+                        quality_scores.append(float(val))
+
+        if len(quality_scores) < 3:
+            return ""  # not enough data to judge
+
+        avg_quality = sum(quality_scores) / len(quality_scores)
+
+        if avg_quality < 0.50:
+            return (
+                "\n⚠️ QUALITY ESCALATION (STRICT): Recent alert quality has "
+                "degraded significantly. Apply stricter standards:\n"
+                "- Output at MOST 2 alerts this cycle\n"
+                "- Each alert MUST have sources_agree >= 4\n"
+                "- Thesis MUST contain specific numeric values from the signals\n"
+                "- When in doubt, output [] rather than a marginal alert"
+            )
+        if avg_quality < 0.65:
+            return (
+                "\n⚠️ QUALITY ESCALATION (MODERATE): Recent alert quality is "
+                "below target. Be MORE selective:\n"
+                "- Raise your internal conviction bar — only alert on setups "
+                "you would consider exceptional\n"
+                "- Ensure every thesis is specific and causal, not generic"
+            )
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def compute_snapshot_freshness(snapshots_json: str) -> dict[str, int]:
+    """Compute age of oldest and newest snapshots for prompt injection.
+
+    Parses ISO 8601 timestamps from snapshot objects and computes
+    the delta to now.
+
+    Args:
+        snapshots_json: JSON string of Snapshot dicts (each with a
+            ``timestamp`` field in ISO 8601 format).
+
+    Returns:
+        Dict with ``oldest_seconds`` and ``newest_seconds`` age values.
+        Returns ``{"oldest_seconds": 0, "newest_seconds": 0}`` when
+        timestamps cannot be parsed.
+    """
+    try:
+        snaps = json.loads(snapshots_json)
+        timestamps: list[datetime] = []
+        for s in snaps:
+            ts_str = s.get("timestamp", "")
+            if ts_str:
+                # Handle both timezone-aware and naive (assume UTC) strings
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                timestamps.append(dt)
+        if not timestamps:
+            return {"oldest_seconds": 0, "newest_seconds": 0}
+        now = datetime.now(timezone.utc)
+        oldest = int((now - min(timestamps)).total_seconds())
+        newest = int((now - max(timestamps)).total_seconds())
+        return {"oldest_seconds": max(oldest, 0), "newest_seconds": max(newest, 0)}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {"oldest_seconds": 0, "newest_seconds": 0}
+
 
 # Module-level cache for last prompt source
 _last_source: str = "not-loaded"
@@ -199,9 +379,55 @@ def get_decision_prompts(
     merged = {
         "timeframe": timeframe,
         "extra_rules": _EXTRA_RULES.get(timeframe, ""),
+        "data_freshness": "LIVE",
+        "performance_context": "No recent outcome data available yet.",
+        "few_shot_examples": "",
+        "snapshot_age_oldest": "0",
+        "snapshot_age_newest": "0",
         **_GATE_DEFAULTS.get(timeframe, _GATE_DEFAULTS["15m"]),
         **variables,
     }
+
+    # ── Inject snapshot data freshness (Group 3a) ────────────────
+    snap_json = merged.get("snapshots_json", "")
+    if snap_json and snap_json != "[]":
+        freshness = compute_snapshot_freshness(str(snap_json))
+        merged["snapshot_age_oldest"] = str(freshness["oldest_seconds"])
+        merged["snapshot_age_newest"] = str(freshness["newest_seconds"])
+
+    # ── Build dynamic system prompt warnings ─────────────────────
+    _warnings: list[str] = []
+    # 3a: Stale snapshot warning (> 20 min)
+    if int(merged["snapshot_age_oldest"]) > 1200:
+        _warnings.append(
+            f"⚠️ SIGNAL FRESHNESS WARNING: Oldest snapshot is "
+            f"{merged['snapshot_age_oldest']}s old. "
+            f"Downgrade confidence on time-sensitive signals."
+        )
+    # 3b: FRED data freshness — CACHED sentinel set by decision YAML
+    #     when FRED MCP is unreachable and cached values are used.
+    if str(merged.get("data_freshness", "")).startswith("CACHED"):
+        _warnings.append(
+            "⚠️ MACRO DATA WARNING: VIX/yield data is stale "
+            "(FRED unavailable). Downgrade confidence on "
+            "macro-sensitive signals."
+        )
+
+    # ── Inject historical signal accuracy (Group 4b) ─────────────
+    # Appends per-bucket win-rate breakdown to the system prompt so
+    # the LLM can self-calibrate its edge_probability estimates.
+    try:
+        from winrate_injector import format_winrate_section, get_winrate_context
+
+        wr_dict = get_winrate_context(timeframe)
+        wr_section = format_winrate_section(wr_dict)
+        if wr_section:
+            existing_perf = str(merged.get("performance_context", ""))
+            merged["performance_context"] = (
+                existing_perf + "\n\n" + wr_section if existing_perf else wr_section
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("winrate injection skipped: %s", exc)
 
     # ── Try Langfuse first ───────────────────────────────────────
     import time as _time
@@ -216,6 +442,8 @@ def get_decision_prompts(
                 user = usr_obj.compile(**merged)
                 _last_source = "langfuse"
                 _last_version = str(getattr(sys_obj, "version", "unknown"))
+                if _warnings:
+                    system = "\n".join(_warnings) + "\n\n" + system
                 return (system, user)
             except Exception:  # noqa: BLE001
                 pass  # stale/broken cache entry — refetch below
@@ -231,6 +459,8 @@ def get_decision_prompts(
             _last_source = "langfuse"
             _last_version = str(getattr(sys_prompt_obj, "version", "unknown"))
             logger.info("Prompts loaded from Langfuse (version=%s)", _last_version)
+            if _warnings:
+                system = "\n".join(_warnings) + "\n\n" + system
             return (system, user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Langfuse prompt fetch failed — using YAML fallback: %s", exc)
@@ -241,6 +471,10 @@ def get_decision_prompts(
     _last_source = "yaml-fallback"
     _last_version = "yaml-fallback"
     logger.info("Prompts loaded from YAML fallback (timeframe=%s)", timeframe)
+
+    # Prepend any freshness warnings to the compiled system prompt
+    if _warnings:
+        system = "\n".join(_warnings) + "\n\n" + system
     return (system, user)
 
 

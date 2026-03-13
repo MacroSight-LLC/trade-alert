@@ -1,4 +1,4 @@
-# CUGA‑Trading‑Alert‑System‑SPEC-v1.3.md
+# CUGA‑Trading‑Alert‑System‑SPEC-v1.2.md
 **Single Source of Truth | Version 1.3 | March 12, 2026**
 
 > This document is the authoritative specification for the `/trade-alert` repository.

@@ -162,3 +162,42 @@ def promote_to_golden(
         logger.info("Promoted item %s to golden dataset", dataset_item_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to promote to golden dataset: %s", exc)
+
+
+def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
+    """Fetch recent high-quality examples from the golden dataset.
+
+    Used to inject few-shot examples into the decision prompt so the
+    LLM can match the specificity and calibration of production alerts.
+
+    Args:
+        n: Maximum number of examples to return.
+
+    Returns:
+        List of example dicts with ``input`` and ``expected_output`` keys,
+        or empty list if golden dataset is unavailable or empty.
+    """
+    lf = get_langfuse_client()
+    if lf is None:
+        return []
+
+    try:
+        dataset = lf.get_dataset(GOLDEN_DATASET_NAME)
+        items = dataset.items or []
+        # Take the most recent N items
+        recent = items[-n:] if len(items) > n else items
+        examples = []
+        for item in recent:
+            output = item.expected_output or {}
+            alerts = output.get("alerts", [])
+            if alerts:
+                examples.append(
+                    {
+                        "input": item.input,
+                        "expected_output": output,
+                    }
+                )
+        return examples
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Golden dataset fetch failed (non-blocking): %s", exc)
+        return []

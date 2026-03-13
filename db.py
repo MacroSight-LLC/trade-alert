@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import Any
 
 import psycopg2
 import psycopg2.pool
@@ -145,6 +146,74 @@ def get_recent_alerts(limit: int = 50) -> list[dict]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, (limit,))
             return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def get_recent_winrate_summary(days: int = 7) -> dict[str, Any]:
+    """Return recent win-rate stats for prompt injection.
+
+    Queries resolved alerts from the last *days* days and returns
+    aggregate stats plus per-EP-bucket calibration data so the LLM
+    can adjust its edge_probability estimates.
+
+    Args:
+        days: Look-back window in calendar days.
+
+    Returns:
+        Dict with keys: total_resolved, wins, losses, winrate,
+        avg_ep, ep_calibration (list of bucket dicts).
+    """
+    sql_summary = """
+        SELECT
+            COUNT(*) AS total_resolved,
+            SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+            ROUND(
+                CASE WHEN COUNT(*) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END) / COUNT(*)::numeric
+                ELSE NULL END, 4
+            ) AS winrate,
+            ROUND(AVG(edge_probability)::numeric, 4) AS avg_ep
+        FROM alerts
+        WHERE outcome IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '%s days'
+    """
+    sql_buckets = """
+        SELECT
+            ROUND(edge_probability::numeric, 1) AS bucket,
+            COUNT(*) AS total,
+            SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+            ROUND(
+                CASE WHEN COUNT(*) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END) / COUNT(*)::numeric
+                ELSE NULL END, 4
+            ) AS actual_winrate
+        FROM alerts
+        WHERE outcome IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '%s days'
+        GROUP BY bucket
+        ORDER BY bucket DESC
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql_summary, (days,))
+            summary = dict(cur.fetchone())
+            cur.execute(sql_buckets, (days,))
+            buckets = [dict(row) for row in cur.fetchall()]
+            summary["ep_calibration"] = buckets
+            return summary
+    except Exception as exc:
+        logger.warning("get_recent_winrate_summary failed: %s", exc)
+        return {
+            "total_resolved": 0,
+            "wins": 0,
+            "losses": 0,
+            "winrate": None,
+            "avg_ep": None,
+            "ep_calibration": [],
+        }
     finally:
         _put_conn(conn)
 

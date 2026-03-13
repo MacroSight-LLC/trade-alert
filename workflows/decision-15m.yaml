@@ -8,290 +8,253 @@
 
 name: decision-15m
 description: >
-  Ensemble decision agent — merges 15m snapshots, reasons across all
-  signal types using Claude Sonnet, produces PlaybookAlert JSON.
+    Ensemble decision agent — merges 15m snapshots, reasons across all
+    signal types using Claude Sonnet, produces PlaybookAlert JSON.
 llm_model: claude-sonnet-4-20250514
 mcp_servers:
-  - name: fred-mcp
-    endpoint: http://fred-mcp:8009
+    - name: fred-mcp
+      endpoint: http://fred-mcp:8009
 
 steps:
-  # Step 1 — Merge snapshots (prefer pre-merged inputs from orchestrator)
-  # SSOT §9: merger.merge returns top N symbols by aggregate strength
-  # SSOT §10.1: accept merged snapshots + macro regime context
-  # When invoked from orchestrator, inputs provide pre-merged data to avoid
-  # a redundant Redis round-trip.  Falls back to Redis when run standalone.
-  - name: merge-snapshots
-    type: code
-    code: |
-      import json
-      import logging
+    # Step 1 — Merge snapshots (prefer pre-merged inputs from orchestrator)
+    # SSOT §9: merger.merge returns top N symbols by aggregate strength
+    # SSOT §10.1: accept merged snapshots + macro regime context
+    # When invoked from orchestrator, inputs provide pre-merged data to avoid
+    # a redundant Redis round-trip.  Falls back to Redis when run standalone.
+    - name: merge-snapshots
+      type: code
+      code: |
+          import json
+          import logging
 
-      logger = logging.getLogger(__name__)
+          logger = logging.getLogger(__name__)
 
-      # Orchestrator passes pre-merged data via workflow inputs
-      _inp_json = inputs.get("merged_snapshots_json", "") if inputs else ""
-      _inp_macro = inputs.get("merged_macro") if inputs else None
-      _inp_n = inputs.get("merged_n") if inputs else None
+          # Orchestrator passes pre-merged data via workflow inputs
+          _inp_json = inputs.get("merged_snapshots_json", "") if inputs else ""
+          _inp_macro = inputs.get("merged_macro") if inputs else None
+          _inp_n = inputs.get("merged_n") if inputs else None
 
-      if _inp_json and _inp_n:
-          snapshots_json = _inp_json
-          macro = _inp_macro or {}
-          n = int(_inp_n)
-          logger.info("Decision-15m: using %d pre-merged symbols from orchestrator", n)
-          result = {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
-      else:
-          from merger import merge, get_macro_regime
-          snapshots = merge("15m", limit=20)
-          macro = get_macro_regime()
-          if len(snapshots) == 0:
-              logger.info("No snapshots available for 15m decision — skipping")
-              result = {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
+          if _inp_json and _inp_n:
+              snapshots_json = _inp_json
+              macro = _inp_macro or {}
+              n = int(_inp_n)
+              logger.info("Decision-15m: using %d pre-merged symbols from orchestrator", n)
+              result = {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
           else:
-              snapshots_json = json.dumps(
-                  [snap.model_dump() for snap in snapshots], indent=2
-              )
-              logger.info("Decision-15m: merged %d symbols for evaluation", len(snapshots))
-              result = {
-                  "skip": False,
+              from merger import merge, get_macro_regime
+              snapshots = merge("15m", limit=20)
+              macro = get_macro_regime()
+              if len(snapshots) == 0:
+                  logger.info("No snapshots available for 15m decision — skipping")
+                  result = {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
+              else:
+                  snapshots_json = json.dumps(
+                      [snap.model_dump() for snap in snapshots], indent=2
+                  )
+                  logger.info("Decision-15m: merged %d symbols for evaluation", len(snapshots))
+                  result = {
+                      "skip": False,
+                      "snapshots_json": snapshots_json,
+                      "macro": macro,
+                      "n": len(snapshots),
+                  }
+
+    # Step 2 — Fetch live FRED context (VIX + yield curve)
+    # SSOT §3: FRED bundle MCP — use in decision prompts
+    # Supplements macro regime with fresh data for the prompt
+    - name: fetch-fred-context
+      type: conditional
+      condition: '{{ not steps["merge-snapshots"]["skip"] }}'
+      if_true:
+          type: parallel_tool_calls
+          calls:
+              - tool: fred-mcp
+                method: vix_level
+                params: {}
+              - tool: fred-mcp
+                method: yield_curve
+                params:
+                    spread: "10Y-2Y"
+      if_false:
+          type: code
+          code: |
+              result = [{"vix_level": None}, {"spread_bps": None}]
+
+    # Step 3 — Build ensemble prompt for Claude Sonnet
+    # SSOT §10.2: decision prompt with PlaybookAlert schema, gate requirements
+    # Prompts loaded from Langfuse Prompt Management (with YAML fallback).
+    # Edit prompts at http://localhost:3000 → Prompts → decision-system / decision-user
+    - name: build-prompt
+      type: conditional
+      condition: '{{ not steps["merge-snapshots"]["skip"] }}'
+      if_true:
+          type: code
+          code: |
+              from prompt_manager import get_decision_prompts, get_prompt_version
+              from prompt_manager import format_winrate_context, format_golden_examples
+              from prompt_manager import get_quality_escalation_rules
+
+              macro = steps["merge-snapshots"]["macro"]
+              snapshots_json = steps["merge-snapshots"]["snapshots_json"]
+              n = steps["merge-snapshots"]["n"]
+
+              fred_results = steps["fetch-fred-context"]
+              vix = fred_results[0].get("vix_level") or fred_results[0].get("value", "N/A")
+              yc = fred_results[1].get("spread_bps") or fred_results[1].get("value", "N/A")
+
+              # Detect FRED data freshness (None values indicate fallback/cache)
+              _fred_live = vix != "N/A" and yc != "N/A"
+              data_freshness = "LIVE" if _fred_live else "CACHED (stale — FRED unavailable)"
+
+              risk_on = macro.get("risk_on", True)
+              macro_summary = f"{'Risk-on' if risk_on else 'Risk-off'}, VIX={vix}, Yield curve={yc}bps"
+
+              # Build performance context with optional quality escalation
+              perf_ctx = format_winrate_context()
+              escalation = get_quality_escalation_rules("15m")
+              if escalation:
+                  perf_ctx = perf_ctx + "\n" + escalation if perf_ctx else escalation
+
+              system_prompt, user_prompt = get_decision_prompts("15m", {
+                  "macro_summary": macro_summary,
+                  "vix": vix,
+                  "yc": yc,
+                  "n": n,
                   "snapshots_json": snapshots_json,
-                  "macro": macro,
-                  "n": len(snapshots),
-              }
+                  "data_freshness": data_freshness,
+                  "performance_context": perf_ctx,
+                  "few_shot_examples": format_golden_examples(),
+              })
 
-  # Step 2 — Fetch live FRED context (VIX + yield curve)
-  # SSOT §3: FRED bundle MCP — use in decision prompts
-  # Supplements macro regime with fresh data for the prompt
-  - name: fetch-fred-context
-    type: conditional
-    condition: '{{ not steps["merge-snapshots"]["skip"] }}'
-    if_true:
-      type: parallel_tool_calls
-      calls:
-        - tool: fred-mcp
-          method: vix_level
-          params: {}
-        - tool: fred-mcp
-          method: yield_curve
-          params:
-            spread: "10Y-2Y"
-    if_false:
-      type: code
-      code: |
-        result = [{"vix_level": None}, {"spread_bps": None}]
+              full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
+              result = {"prompt": full_prompt, "prompt_version": get_prompt_version()}
+      if_false:
+          type: code
+          code: |
+              result = {"prompt": "", "prompt_version": "skipped"}
 
-  # Step 3 — Build ensemble prompt for Claude Sonnet
-  # SSOT §10.2: decision prompt with PlaybookAlert schema, gate requirements
-  # Prompts loaded from Langfuse Prompt Management (with YAML fallback).
-  # Edit prompts at http://localhost:3000 → Prompts → decision-system / decision-user
-  - name: build-prompt
-    type: conditional
-    condition: '{{ not steps["merge-snapshots"]["skip"] }}'
-    if_true:
-      type: code
-      code: |
-        from prompt_manager import get_decision_prompts, get_prompt_version
+    # Step 4 — Call Claude Sonnet with ensemble prompt
+    # SSOT §10.1: use Claude 3.5 Sonnet as llm_model
+    - name: ensemble-decide
+      type: conditional
+      condition: '{{ not steps["merge-snapshots"]["skip"] }}'
+      if_true:
+          type: llm
+          prompt: '{{ steps["build-prompt"]["prompt"] }}'
+      if_false:
+          type: code
+          code: |
+              result = "[]"
 
-        macro = steps["merge-snapshots"]["macro"]
-        snapshots_json = steps["merge-snapshots"]["snapshots_json"]
-        n = steps["merge-snapshots"]["n"]
+    # Step 5 — Validate and filter LLM output against PlaybookAlert + gates
+    # SSOT §4: LLM JSON outputs MUST be validated against PlaybookAlert
+    # SSOT §10.2: gate — edge_probability >= 0.70, sources_agree >= 3, confidence >= 0.75
+    - name: validate-and-filter
+      type: conditional
+      condition: '{{ not steps["merge-snapshots"]["skip"] }}'
+      if_true:
+          type: code
+          code: |
+              import json
+              import logging
 
-        fred_results = steps["fetch-fred-context"]
-        vix = fred_results[0].get("vix_level") or fred_results[0].get("value", "N/A")
-        yc = fred_results[1].get("spread_bps") or fred_results[1].get("value", "N/A")
+              logger = logging.getLogger(__name__)
 
-        risk_on = macro.get("risk_on", True)
-        macro_summary = f"{'Risk-on' if risk_on else 'Risk-off'}, VIX={vix}, Yield curve={yc}bps"
+              # Access parent trace for Langfuse scoring
+              try:
+                  from pipeline_tracing import add_score, tag_trace
+                  tid = steps.get("__trace_id__")
+              except ImportError:
+                  add_score = tag_trace = tid = None
 
-        system_prompt, user_prompt = get_decision_prompts("15m", {
-            "macro_summary": macro_summary,
-            "vix": vix,
-            "yc": yc,
-            "n": n,
-            "snapshots_json": snapshots_json,
-        })
+              llm_response = steps["ensemble-decide"]
 
-        full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
-        result = {"prompt": full_prompt, "prompt_version": get_prompt_version()}
-    if_false:
-      type: code
-      code: |
-        result = {"prompt": "", "prompt_version": "skipped"}
+              # ── Read VIX + macro context for server-side gates ──
+              try:
+                  _fred = steps["fetch-fred-context"]
+                  _vix = float(_fred[0].get("vix_level") or _fred[0].get("value", 0))
+              except (ValueError, TypeError, IndexError, KeyError):
+                  _vix = 0.0
+              _macro = steps["merge-snapshots"].get("macro") or {}
 
-  # Step 4 — Call Claude Sonnet with ensemble prompt
-  # SSOT §10.1: use Claude 3.5 Sonnet as llm_model
-  - name: ensemble-decide
-    type: conditional
-    condition: '{{ not steps["merge-snapshots"]["skip"] }}'
-    if_true:
-      type: llm
-      prompt: '{{ steps["build-prompt"]["prompt"] }}'
-    if_false:
-      type: code
-      code: |
-        result = "[]"
+              # ── Delegate to extracted validate_and_filter module ──
+              from validate_and_filter import validate_and_filter as _vf
+              alerts, alerts_json = _vf(
+                  llm_response=llm_response,
+                  snapshots_json=steps["merge-snapshots"]["snapshots_json"],
+                  macro=_macro,
+                  vix=_vix,
+                  timeframe="15m",
+                  add_score_fn=add_score,
+                  trace_id=tid,
+              )
+              result = {"alerts_json": alerts_json, "count": len(alerts)}
 
-  # Step 5 — Validate and filter LLM output against PlaybookAlert + gates
-  # SSOT §4: LLM JSON outputs MUST be validated against PlaybookAlert
-  # SSOT §10.2: gate — edge_probability >= 0.70, sources_agree >= 3, confidence >= 0.75
-  - name: validate-and-filter
-    type: conditional
-    condition: '{{ not steps["merge-snapshots"]["skip"] }}'
-    if_true:
-      type: code
-      code: |
-        import json
-        import logging
-        from models import PlaybookAlert
+              # Deep quality scoring via Langfuse
+              quality_report = None
+              try:
+                  from alert_quality import post_quality_scores
+                  quality_report = post_quality_scores(tid, alerts)
+                  result["quality"] = quality_report
+              except Exception as qe:
+                  logger.debug("Quality scoring failed (non-blocking): %s", qe)
 
-        logger = logging.getLogger(__name__)
+              # Capture to Langfuse dataset for continuous improvement
+              try:
+                  from langfuse_datasets import capture_decision_run
+                  from prompt_manager import get_prompt_version
+                  capture_decision_run(
+                      "15m",
+                      steps["merge-snapshots"]["snapshots_json"],
+                      llm_response,
+                      alerts_json,
+                      quality_report,
+                      trace_id=tid,
+                      prompt_version=get_prompt_version(),
+                  )
+              except Exception as de:
+                  logger.debug("Dataset capture failed (non-blocking): %s", de)
 
-        # Access parent trace for Langfuse scoring
-        try:
-            from pipeline_tracing import add_score, tag_trace
-            tid = steps.get("__trace_id__")
-        except ImportError:
-            add_score = tag_trace = tid = None
+              if tag_trace and tid:
+                  tag_trace(tid, [f"alerts:{len(alerts)}"])
+      if_false:
+          type: code
+          code: |
+              result = {"alerts_json": "[]", "count": 0}
 
-        llm_response = steps["ensemble-decide"]
-
-        try:
-            raw = json.loads(llm_response)
-            assert isinstance(raw, list)
-        except Exception as e:
-            logger.error("Decision engine JSON parse error: %s", e)
-            logger.error("Raw response: %s", str(llm_response)[:500])
-            result = {"alerts_json": "[]", "count": 0}
-            if add_score and tid:
-                add_score(tid, "llm_json_valid", 0.0, comment="JSON parse failed")
-        else:
-            if add_score and tid:
-                add_score(tid, "llm_json_valid", 1.0, comment="valid JSON array")
-
-            # Build per-symbol signal-type index from snapshots for server-side
-            # sources_agree verification (belt-and-suspenders for the ≥3 gate).
-            _snap_types = {}  # {symbol: {type, ...}}
-            try:
-                _snaps = json.loads(steps["merge-snapshots"]["snapshots_json"])
-                for _s in _snaps:
-                    sym = _s.get("symbol", "")
-                    for sig in _s.get("signals", []):
-                        _snap_types.setdefault(sym, set()).add(sig.get("type", ""))
-            except Exception:
-                pass  # degrade gracefully — skip cross-check if parsing fails
-
-            alerts = []
-            for item in raw:
-                try:
-                    alert = PlaybookAlert(**item)
-                    # Cross-check sources_agree against actual snapshot signals
-                    if alert.symbol in _snap_types:
-                        server_count = len(_snap_types[alert.symbol])
-                        if server_count < alert.sources_agree:
-                            logger.warning(
-                                "sources_agree override: %s LLM=%d actual=%d",
-                                alert.symbol, alert.sources_agree, server_count,
-                            )
-                            alert.sources_agree = server_count
-                    # Re-enforce gates (belt and suspenders)
-                    if (alert.edge_probability >= 0.70
-                            and alert.sources_agree >= 3
-                            and alert.confidence >= 0.75):
-                        # R:R gate: reward must be >= 2x risk for actionable alerts
-                        risk = abs(alert.entry["level"] - alert.entry["stop"])
-                        reward = abs(alert.entry["target"] - alert.entry["level"])
-                        if alert.direction != "WATCH" and risk > 0 and reward / risk < 2.0:
-                            logger.info(
-                                "Alert filtered: %s R:R %.1f:1 below 2:1 minimum",
-                                alert.symbol, reward / risk,
-                            )
-                            continue
-                        alerts.append(alert)
-                    else:
-                        logger.info(
-                            "Alert filtered post-validation: %s ep=%.2f sa=%d conf=%.2f",
-                            alert.symbol, alert.edge_probability,
-                            alert.sources_agree, alert.confidence,
-                        )
-                except Exception as e:
-                    logger.warning("PlaybookAlert validation failed for %s: %s", item, e)
-
-            logger.info("Decision-15m: %d alerts passed gates", len(alerts))
-            alerts_json = json.dumps([a.model_dump() for a in alerts])
-            result = {"alerts_json": alerts_json, "count": len(alerts)}
-
-            # Deep quality scoring via Langfuse
-            quality_report = None
-            try:
-                from alert_quality import post_quality_scores
-                quality_report = post_quality_scores(tid, alerts)
-                result["quality"] = quality_report
-            except Exception as qe:
-                logger.debug("Quality scoring failed (non-blocking): %s", qe)
-
-            # Capture to Langfuse dataset for continuous improvement
-            try:
-                from langfuse_datasets import capture_decision_run
-                from prompt_manager import get_prompt_version
-                capture_decision_run(
-                    "15m",
-                    steps["merge-snapshots"]["snapshots_json"],
-                    llm_response,
-                    alerts_json,
-                    quality_report,
-                    trace_id=tid,
-                    prompt_version=get_prompt_version(),
-                )
-            except Exception as de:
-                logger.debug("Dataset capture failed (non-blocking): %s", de)
-
-            # Score alert pass rate and tag trace
-            if add_score and tid:
-                pass_rate = len(alerts) / max(len(raw), 1)
-                add_score(tid, "alert_pass_rate", pass_rate,
-                          comment=f"{len(alerts)}/{len(raw)} passed gates")
-                add_score(tid, "alerts_fired", float(len(alerts)),
-                          comment=f"{len(alerts)} alerts")
-            if tag_trace and tid:
-                tag_trace(tid, [f"alerts:{len(alerts)}"])
-    if_false:
-      type: code
-      code: |
-        result = {"alerts_json": "[]", "count": 0}
-
-  # Step 6 — Hand off to notifier workflow (SSOT §11)
-  # Invokes notifier.yaml which validates, sends Discord embeds, and logs to Postgres
-  - name: hand-off-to-notifier
-    type: conditional
-    condition: '{{ steps["validate-and-filter"]["count"] > 0 }}'
-    if_true:
-      type: workflow
-      workflow: notifier.yaml
-      inputs:
-        alerts_json: '{{ steps["validate-and-filter"]["alerts_json"] }}'
-    if_false:
-      type: code
-      code: |
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Decision-15m: no alerts passed gates — nothing to notify")
-        result = {"notified": False, "count": 0}
+    # Step 6 — Hand off to notifier workflow (SSOT §11)
+    # Invokes notifier.yaml which validates, sends Discord embeds, and logs to Postgres
+    - name: hand-off-to-notifier
+      type: conditional
+      condition: '{{ steps["validate-and-filter"]["count"] > 0 }}'
+      if_true:
+          type: workflow
+          workflow: notifier.yaml
+          inputs:
+              alerts_json: '{{ steps["validate-and-filter"]["alerts_json"] }}'
+      if_false:
+          type: code
+          code: |
+              import logging
+              logger = logging.getLogger(__name__)
+              logger.info("Decision-15m: no alerts passed gates — nothing to notify")
+              result = {"notified": False, "count": 0}
 
 error_handling:
-  # SSOT §10.2: LLM timeout — log and skip this tick
-  # JSON parse failure — log raw response (first 500 chars) and skip
-  # Validation failure per alert — skip that alert, continue others
-  # Never crash the workflow — always complete gracefully
-  on_mcp_error:
-    fred-mcp:
-      strategy: fallback_to_cache
-      cache_key: "macro:regime"
-      log: true
-      message: "FRED MCP unavailable — using cached macro data"
-  on_rate_limit:
-    strategy: skip_symbol
-    log: true
-  abort_on_failure: false
-  retry:
-    max_attempts: 2
-    backoff_seconds: 5
+    # SSOT §10.2: LLM timeout — log and skip this tick
+    # JSON parse failure — log raw response (first 500 chars) and skip
+    # Validation failure per alert — skip that alert, continue others
+    # Never crash the workflow — always complete gracefully
+    on_mcp_error:
+        fred-mcp:
+            strategy: fallback_to_cache
+            cache_key: "macro:regime"
+            log: true
+            message: "FRED MCP unavailable — using cached macro data"
+    on_rate_limit:
+        strategy: skip_symbol
+        log: true
+    abort_on_failure: false
+    retry:
+        max_attempts: 2
+        backoff_seconds: 5

@@ -1,0 +1,42 @@
+feat: Phase 9 -- pipeline hardening, integration tests, and feedback loop
+
+Server-side gate extraction (validate_and_filter.py):
+- Extract inline gate logic from both decision YAMLs into shared module
+- EP ceiling by actual source count (1->0.55, 2->0.65, 3->0.75, 4->0.85, 5->0.90)
+- VIX > 30 universal hard gate for all directional alerts
+- Source-hallucination detection (delta >= 2 hard reject, == 1 downgrade)
+- Rewire decision-15m.yaml and decision-1h.yaml to use extracted module
+
+Notifier hardening (notifier_and_logger.py):
+- Atomic dedup via SET NX+EX (eliminates TOCTOU race)
+- Content-aware dedup with thesis hash + Jaccard similarity override
+- Persist-first ordering: Postgres INSERT before Discord send
+
+Prompt enrichment (prompt_manager.py):
+- Snapshot freshness injection with stale-data warnings
+- FRED data freshness detection (CACHED sentinel)
+- Win-rate context injection via winrate_injector.py
+- Golden few-shot examples from Langfuse datasets
+- Dynamic quality escalation rules based on recent scores
+- Enhanced 1h macro emphasis rules
+
+Feedback loop:
+- winrate_injector.py: per-bucket win-rate from resolved alerts
+- db.py: get_recent_winrate_summary() for prompt calibration
+- langfuse_datasets.py: get_golden_examples() for few-shot injection
+
+Observability (healthcheck.py):
+- Redis snapshot staleness check (TTL monitoring)
+- Langfuse connectivity check (non-blocking)
+
+Quality scoring (alert_quality.py):
+- Expanded technical terms frozenset
+- Improved batch diversity scoring with overlap detection
+
+Tests:
+- tests/test_validate_and_filter.py (27 tests)
+- tests/test_winrate_injector.py (13 tests)
+- tests/test_pipeline_integration.py (9 tests, 3 skip without redis)
+- tests/unit/test_alert_quality.py (comprehensive quality scoring tests)
+- tests/unit/test_notifier.py (thesis similarity + content-aware dedup)
+- tests/unit/test_prompt_manager.py (freshness, winrate, escalation)

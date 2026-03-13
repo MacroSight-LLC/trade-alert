@@ -36,6 +36,56 @@ _VAGUE_PHRASES = frozenset(
     }
 )
 
+# Equity-relevant technical terms used for thesis quality scoring.
+# Each term found in thesis adds +0.1 to quality (max +0.25).
+_TECHNICAL_TERMS: frozenset[str] = frozenset(
+    {
+        # Classic TA
+        "bollinger",
+        "rsi",
+        "macd",
+        "volume",
+        "squeeze",
+        "breakout",
+        "imbalance",
+        "support",
+        "resistance",
+        "divergence",
+        "momentum",
+        "consolidation",
+        "accumulation",
+        "fibonacci",
+        "ema",
+        "sma",
+        "vwap",
+        "atr",
+        "gap",
+        "reversal",
+        "trend",
+        # Price action patterns
+        "doji",
+        "engulfing",
+        "hammer",
+        "channel",
+        # Options / flow
+        "sweep",
+        "iv",
+        "vix",
+        "premium",
+        "gamma",
+        "delta",
+        "oi",
+        "dark pool",
+        "block trade",
+        # Sector / fundamental
+        "rotation",
+        "sector",
+        "relative strength",
+        "outperformance",
+        "earnings",
+    }
+)
+
 
 def score_thesis_quality(thesis: str) -> float:
     """Score the specificity and quality of an alert thesis.
@@ -60,26 +110,8 @@ def score_thesis_quality(thesis: str) -> float:
     if re.search(r'\d+\.?\d*[x%]|\d+\.\d+', thesis):
         score += 0.25
 
-    # Contains specific technical terms
-    technical_terms = {
-        "bollinger",
-        "rsi",
-        "macd",
-        "volume",
-        "squeeze",
-        "breakout",
-        "imbalance",
-        "sweep",
-        "iv",
-        "vix",
-        "support",
-        "resistance",
-        "divergence",
-        "momentum",
-        "consolidation",
-        "accumulation",
-    }
-    term_count = sum(1 for t in technical_terms if t in thesis.lower())
+    # Contains specific technical terms (module-level constant)
+    term_count = sum(1 for t in _TECHNICAL_TERMS if t in thesis.lower())
     score += min(term_count * 0.1, 0.25)
 
     # Penalize vague phrases
@@ -229,24 +261,49 @@ def score_batch(alerts: list[PlaybookAlert]) -> dict[str, float]:
         Dict of batch-level metrics.
     """
     if not alerts:
-        return {"batch_diversity": 1.0, "batch_concentration": 0.0, "batch_avg_quality": 0.0}
+        return {
+            "batch_diversity": 1.0,
+            "batch_concentration": 0.0,
+            "batch_avg_quality": 0.0,
+            "overlapping_entries": 0,
+        }
 
-    # Direction diversity (not all same direction)
+    # Direction diversity — single direction with many alerts is penalised more
     directions = {a.direction for a in alerts}
-    direction_diversity = len(directions) / 3.0  # max 3 directions
+    if len(directions) >= 2:
+        direction_score = 1.0
+    elif len(alerts) <= 2:
+        direction_score = 0.5
+    else:
+        direction_score = 0.3
 
     # Symbol concentration (alerts should be spread across symbols)
     symbols = [a.symbol for a in alerts]
     unique_ratio = len(set(symbols)) / len(symbols)
 
+    # Overlapping entry zones — flag when 2+ entries are within 2% of each other
+    actionable_entries = sorted(
+        a.entry.get("level", 0) for a in alerts if a.direction != "WATCH" and a.entry.get("level", 0) > 0
+    )
+    overlap_count = sum(
+        1
+        for i in range(1, len(actionable_entries))
+        if actionable_entries[i - 1] > 0
+        and abs(actionable_entries[i] - actionable_entries[i - 1]) / actionable_entries[i - 1] < 0.02
+    )
+    overlap_penalty = min(overlap_count * 0.15, 0.30)
+
     # Average per-alert quality
     per_alert_scores = [score_alert(a)["composite_quality"] for a in alerts]
     avg_quality = sum(per_alert_scores) / len(per_alert_scores)
 
+    batch_diversity = max(0.0, min((direction_score + unique_ratio) / 2.0, 1.0) - overlap_penalty)
+
     return {
-        "batch_diversity": min(direction_diversity + unique_ratio, 1.0) / 2.0,
+        "batch_diversity": batch_diversity,
         "batch_concentration": 1.0 - unique_ratio,
         "batch_avg_quality": avg_quality,
+        "overlapping_entries": overlap_count,
     }
 
 

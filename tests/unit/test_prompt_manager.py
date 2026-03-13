@@ -189,3 +189,182 @@ class TestCompileTemplate:
     def test_numeric_values_converted(self) -> None:
         result = pm._compile_template("count={{n}}", {"n": 42})
         assert result == "count=42"
+
+
+# ── Data Freshness & Performance Context ─────────────────────────
+
+
+class TestNewTemplateVariables:
+    """Tests for data_freshness, performance_context, few_shot_examples."""
+
+    def setup_method(self) -> None:
+        _reset_module()
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_data_freshness_default_is_live(self, _mock: MagicMock) -> None:
+        _, user = pm.get_decision_prompts("15m", _base_variables())
+        assert "LIVE" in user
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_data_freshness_override(self, _mock: MagicMock) -> None:
+        vars_ = {**_base_variables(), "data_freshness": "CACHED"}
+        _, user = pm.get_decision_prompts("15m", vars_)
+        assert "CACHED" in user
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_performance_context_in_system(self, _mock: MagicMock) -> None:
+        vars_ = {
+            **_base_variables(),
+            "performance_context": "Win rate: 65% over last 7 days",
+        }
+        system, _ = pm.get_decision_prompts("15m", vars_)
+        assert "Win rate: 65%" in system
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_performance_context_default(self, _mock: MagicMock) -> None:
+        system, _ = pm.get_decision_prompts("15m", _base_variables())
+        assert "No recent outcome data" in system
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_few_shot_examples_in_user(self, _mock: MagicMock) -> None:
+        vars_ = {
+            **_base_variables(),
+            "few_shot_examples": "REFERENCE EXAMPLES: ...",
+        }
+        _, user = pm.get_decision_prompts("15m", vars_)
+        assert "REFERENCE EXAMPLES:" in user
+
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_1h_has_macro_emphasis_rules(self, _mock: MagicMock) -> None:
+        system, _ = pm.get_decision_prompts("1h", _base_variables())
+        assert "MACRO IS CRITICAL" in system
+        assert "fundamental" in system.lower()
+
+
+# ── format_winrate_context ───────────────────────────────────────
+
+
+class TestFormatWinrateContext:
+    """Tests for the winrate context formatter."""
+
+    def test_formats_winrate_data(self) -> None:
+        import db
+
+        with patch.object(db, "get_recent_winrate_summary") as mock_summary:
+            mock_summary.return_value = {
+                "total_resolved": 20,
+                "wins": 13,
+                "losses": 7,
+                "winrate": 0.65,
+                "avg_ep": 0.78,
+                "ep_calibration": [
+                    {"bucket": 0.8, "total": 10, "wins": 6, "actual_winrate": 0.60},
+                ],
+            }
+            result = pm.format_winrate_context()
+        assert "65" in result
+        assert "20" in result
+
+    def test_few_resolved_returns_default(self) -> None:
+        import db
+
+        with patch.object(db, "get_recent_winrate_summary") as mock_summary:
+            mock_summary.return_value = {
+                "total_resolved": 3,
+                "wins": 2,
+                "losses": 1,
+                "winrate": 0.67,
+                "avg_ep": 0.80,
+                "ep_calibration": [],
+            }
+            result = pm.format_winrate_context()
+        assert "No recent outcome data" in result
+
+    def test_exception_returns_safe_default(self) -> None:
+        import db
+
+        with patch.object(db, "get_recent_winrate_summary", side_effect=RuntimeError("DB down")):
+            result = pm.format_winrate_context()
+        assert isinstance(result, str)
+        assert "No recent outcome data" in result
+
+
+# ── get_quality_escalation_rules ─────────────────────────────────
+
+
+class TestGetQualityEscalationRules:
+    """Tests for dynamic quality-based prompt escalation."""
+
+    @patch("langfuse_client.get_langfuse_client", return_value=None)
+    def test_no_langfuse_returns_empty(self, _mock: MagicMock) -> None:
+        assert pm.get_quality_escalation_rules("15m") == ""
+
+    @patch("langfuse_client.get_langfuse_client")
+    def test_strict_escalation_below_050(self, mock_get_client: MagicMock) -> None:
+        mock_score = MagicMock()
+        mock_score.name = "batch_avg_quality"
+        mock_score.value = 0.40
+
+        mock_trace = MagicMock()
+        mock_trace.scores = [mock_score]
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_trace] * 5
+
+        lf = MagicMock()
+        lf.fetch_traces.return_value = mock_response
+        mock_get_client.return_value = lf
+
+        result = pm.get_quality_escalation_rules("15m")
+        assert "STRICT" in result
+        assert "at MOST 2" in result
+
+    @patch("langfuse_client.get_langfuse_client")
+    def test_moderate_escalation_below_065(self, mock_get_client: MagicMock) -> None:
+        mock_score = MagicMock()
+        mock_score.name = "batch_avg_quality"
+        mock_score.value = 0.55
+
+        mock_trace = MagicMock()
+        mock_trace.scores = [mock_score]
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_trace] * 5
+
+        lf = MagicMock()
+        lf.fetch_traces.return_value = mock_response
+        mock_get_client.return_value = lf
+
+        result = pm.get_quality_escalation_rules("15m")
+        assert "MODERATE" in result
+
+    @patch("langfuse_client.get_langfuse_client")
+    def test_no_escalation_above_065(self, mock_get_client: MagicMock) -> None:
+        mock_score = MagicMock()
+        mock_score.name = "batch_avg_quality"
+        mock_score.value = 0.80
+
+        mock_trace = MagicMock()
+        mock_trace.scores = [mock_score]
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_trace] * 5
+
+        lf = MagicMock()
+        lf.fetch_traces.return_value = mock_response
+        mock_get_client.return_value = lf
+
+        result = pm.get_quality_escalation_rules("15m")
+        assert result == ""
+
+    @patch("langfuse_client.get_langfuse_client")
+    def test_insufficient_data_returns_empty(self, mock_get_client: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.data = []
+
+        lf = MagicMock()
+        lf.fetch_traces.return_value = mock_response
+        mock_get_client.return_value = lf
+
+        result = pm.get_quality_escalation_rules("15m")
+        assert result == ""
