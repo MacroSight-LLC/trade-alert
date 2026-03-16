@@ -1,0 +1,206 @@
+# collector-events.yaml
+# SSOT Reference: Section 8 - Collector Workflows
+# Purpose: Collect earnings calendar, insider filings, short interest,
+#          options chain, and intraday volume signals.
+# Reads universe:equities from Redis; writes to snapshots:15m and snapshots:1h.
+
+name: collector-events
+description: Collect catalyst events, short interest, options chain, and intraday volume
+llm_model: claude-sonnet-4-20250514
+
+mcp_servers:
+  - name: finnhub-mcp
+    endpoint: http://finnhub-mcp:8004
+  - name: edgar-mcp
+    endpoint: http://edgar-mcp:8006
+  - name: yfinance-mcp
+    endpoint: http://yfinance-mcp:8007
+  - name: alpaca-mcp
+    endpoint: http://alpaca-mcp:8011
+
+steps:
+  # Step 1 -- Read universes from Redis
+  - name: read-universes
+    type: code
+    code: |
+      import json
+      import os
+      import redis
+
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      equities_raw = r.get("universe:equities")
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+      result = {"equities": equities}
+
+  # Step 2 -- Parallel data fetch from all new/extended MCPs
+  # Each call is independent; partial failures are OK (abort_on_failure: false)
+  - name: fetch-events-data
+    type: parallel_tool_calls
+    abort_on_failure: false
+    calls:
+      # Finnhub earnings calendar (existing MCP, new tool)
+      - tool: finnhub-mcp
+        method: earnings_calendar
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
+          days_ahead: 7
+      # SEC EDGAR insider Form 4 filings
+      - tool: edgar-mcp
+        method: insider_filings
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
+          days_back: 7
+      # SEC EDGAR recent material filings (8-K, 10-K, 10-Q)
+      - tool: edgar-mcp
+        method: recent_filings
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:20] }}"
+          days_back: 7
+      # yfinance short interest
+      - tool: yfinance-mcp
+        method: short_ratio
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:10] }}"
+      # yfinance options chain analysis
+      - tool: yfinance-mcp
+        method: options_activity
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:5] }}"
+      # Alpaca intraday bars (volume acceleration)
+      - tool: alpaca-mcp
+        method: intraday_bars
+        params:
+          symbols: "{{ steps['read-universes']['equities'][:10] }}"
+
+  # Step 3 -- Normalize all signals and push to Redis
+  - name: normalize-and-store-snapshots
+    type: code
+    code: |
+      import json
+      import logging
+      import os
+      from datetime import datetime, timezone, timedelta
+      import redis
+
+      from normalizers.events_normalizer import normalize as normalize_events
+      from normalizers.si_normalizer import normalize as normalize_si
+      from normalizers.flow_normalizer import normalize as normalize_flow
+      from normalizers.market_normalizer import normalize as normalize_market
+
+      logger = logging.getLogger(__name__)
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+
+      # Unpack parallel results (indices match call order above)
+      raw_data = steps.get("fetch-events-data", [])
+      earnings_data = raw_data[0] if len(raw_data) > 0 else {"results": []}
+      insider_data = raw_data[1] if len(raw_data) > 1 else {"results": []}
+      filings_data = raw_data[2] if len(raw_data) > 2 else {"results": []}
+      short_data = raw_data[3] if len(raw_data) > 3 else {"results": []}
+      options_data = raw_data[4] if len(raw_data) > 4 else {"results": []}
+      intraday_data = raw_data[5] if len(raw_data) > 5 else {"results": []}
+
+      # Handle None values from failed MCP calls (abort_on_failure: false)
+      earnings_data = earnings_data or {"results": []}
+      insider_data = insider_data or {"results": []}
+      filings_data = filings_data or {"results": []}
+      short_data = short_data or {"results": []}
+      options_data = options_data or {"results": []}
+      intraday_data = intraday_data or {"results": []}
+
+      now = datetime.now(timezone.utc)
+      today_str = now.strftime("%Y-%m-%d")
+      yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+      # ── Build events normalizer input ──
+      events_raw = {}
+      for item in earnings_data.get("results", []):
+          sym = item.get("symbol", "")
+          if sym:
+              events_raw[sym] = {
+                  "earnings_date": item.get("date", ""),
+                  "eps_estimate": item.get("epsEstimate"),
+                  "revenue_estimate": item.get("revenueEstimate"),
+                  "hour": item.get("hour", ""),
+              }
+
+      # Merge 8-K filings into events data
+      for item in filings_data.get("results", []):
+          sym = item.get("symbol", "")
+          filings = item.get("filings", [])
+          if sym and filings:
+              has_recent_8k = any(
+                  f.get("form_type") == "8-K" and f.get("date", "") >= yesterday
+                  for f in filings
+              )
+              events_raw.setdefault(sym, {})["recent_8k"] = has_recent_8k
+              events_raw[sym]["filing_count"] = len(filings)
+
+      # ── Build short interest normalizer input ──
+      si_raw = {}
+      for item in short_data.get("results", []):
+          sym = item.get("symbol", "")
+          if sym:
+              si_raw[sym] = {
+                  "si_pct_float": item.get("si_pct_float"),
+                  "short_ratio": item.get("short_ratio"),
+                  "shares_short": item.get("shares_short"),
+              }
+
+      # ── Build enhanced flow normalizer input ──
+      # This adds yfinance options + Alpaca intraday to existing flow data format
+      flow_raw = {}
+      for item in options_data.get("results", []):
+          sym = item.get("symbol", "")
+          if sym:
+              flow_raw[sym] = {
+                  "call_put_ratio": item.get("call_put_ratio"),
+                  "unusual_oi": item.get("unusual_oi", False),
+              }
+
+      for item in intraday_data.get("results", []):
+          sym = item.get("symbol", "")
+          if sym:
+              flow_raw.setdefault(sym, {})["volume_acceleration"] = item.get("volume_acceleration")
+
+      # ── Build enhanced market normalizer input (EDGAR insider filings) ──
+      market_raw = {}
+      for item in insider_data.get("results", []):
+          sym = item.get("symbol", "")
+          filings = item.get("filings", [])
+          if sym and filings:
+              market_raw[sym] = {"edgar_filings": filings}
+
+      # ── Normalize and push all signals ──
+      n_pushed = 0
+      for timeframe in ["15m", "1h"]:
+          redis_key = f"snapshots:{timeframe}"
+          all_snapshots = []
+
+          if events_raw:
+              all_snapshots.extend(normalize_events(events_raw, timeframe=timeframe))
+          if si_raw:
+              all_snapshots.extend(normalize_si(si_raw, timeframe=timeframe))
+          if flow_raw:
+              all_snapshots.extend(normalize_flow(flow_raw, timeframe=timeframe))
+          if market_raw:
+              all_snapshots.extend(normalize_market(market_raw, timeframe=timeframe))
+
+          for snap in all_snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
+
+      logger.info("collector-events: pushed %d snapshots (events=%d, si=%d, flow=%d, market=%d)",
+                   n_pushed, len(events_raw), len(si_raw), len(flow_raw), len(market_raw))
+      result = {"n_snapshots": n_pushed}
+
+  # Step 4 -- Log completion
+  - name: log-completion
+    type: code
+    code: |
+      import logging
+      logger = logging.getLogger(__name__)
+      n = steps.get("normalize-and-store-snapshots", {}).get("n_snapshots", 0)
+      logger.info("collector-events complete: %d snapshots pushed", n)
+      result = {"status": "ok", "n_snapshots": n}

@@ -30,7 +30,7 @@ steps:
         params: {}
 
   # Step 2 -- Compute risk_on flag
-  # risk_on = vix < 20 AND yield_curve_slope > -25
+  # risk_on = vix < VIX_RISK_THRESHOLD (default 25) AND yield_curve_slope > -25
   - name: compute-risk-flag
     type: code
     code: |

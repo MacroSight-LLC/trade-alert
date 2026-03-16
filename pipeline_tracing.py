@@ -130,6 +130,20 @@ def span_step(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to close span '%s': %s", name, exc)
 
+        # Post per-step latency score for collector spans so Langfuse
+        # dashboards can track individual collector p95 trends.
+        if trace_id is not None and name.startswith("run-collector"):
+            try:
+                collector_name = name.replace("run-collectors-", "").replace("run-collector-", "")
+                add_score(
+                    trace_id,
+                    f"collector_latency_{collector_name}",
+                    round(elapsed, 3),
+                    comment=f"{collector_name} completed in {elapsed:.3f}s",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
 
 def add_score(
     trace_id: str | None,

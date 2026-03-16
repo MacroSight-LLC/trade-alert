@@ -221,6 +221,50 @@ def score_confidence_calibration(
     return 0.7
 
 
+def score_signal_consistency(alert: PlaybookAlert) -> float:
+    """Score whether the alert's signals are internally consistent.
+
+    Detects contradictions like a LONG alert with bearish sentiment
+    or a SHORT with bullish options flow. Uses the alert's
+    ``sentiment_context`` and ``unusual_activity`` fields as proxies.
+
+    Args:
+        alert: Validated PlaybookAlert.
+
+    Returns:
+        Score from 0.0 (contradictions detected) to 1.0 (consistent).
+    """
+    score = 1.0
+    direction = alert.direction
+
+    if direction == "WATCH":
+        return 0.75  # WATCH inherently has mixed signals
+
+    sentiment = (alert.sentiment_context or "").lower()
+    thesis = alert.thesis.lower()
+
+    # Check for bull/bear contradiction in sentiment
+    has_bull = "bull" in sentiment or "positive" in sentiment
+    has_bear = "bear" in sentiment or "negative" in sentiment
+    if has_bull and has_bear:
+        score -= 0.30  # contradicting sentiment signals present
+
+    # Direction consistency: LONG with bearish signals or SHORT with bullish
+    if direction == "LONG" and ("bear" in thesis or "risk_off" in thesis or "risk-off" in thesis):
+        score -= 0.20
+    if direction == "SHORT" and "bull" in thesis:
+        score -= 0.20
+
+    # Macro inconsistency: LONG during "risk-off" in macro_regime
+    macro = (alert.macro_regime or "").lower()
+    if direction == "LONG" and "risk-off" in macro:
+        score -= 0.15
+    if direction == "SHORT" and "risk-on" in macro and "no headwind" in macro:
+        score -= 0.15
+
+    return max(0.0, min(1.0, score))
+
+
 def score_alert(alert: PlaybookAlert) -> dict[str, float]:
     """Compute all quality sub-scores for a single alert.
 
@@ -239,13 +283,15 @@ def score_alert(alert: PlaybookAlert) -> dict[str, float]:
             alert.confidence,
             alert.sources_agree,
         ),
+        "signal_consistency": score_signal_consistency(alert),
     }
     # Composite quality score: weighted average
     weights = {
-        "thesis_quality": 0.25,
-        "rr_ratio": 0.30,
+        "thesis_quality": 0.20,
+        "rr_ratio": 0.25,
         "signal_coverage": 0.20,
-        "confidence_calibration": 0.25,
+        "confidence_calibration": 0.20,
+        "signal_consistency": 0.15,
     }
     scores["composite_quality"] = sum(scores[k] * weights[k] for k in weights)
     return scores

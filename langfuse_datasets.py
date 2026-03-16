@@ -101,6 +101,7 @@ def capture_decision_run(
             "snapshots": json.loads(snapshots_json) if isinstance(snapshots_json, str) else snapshots_json,
             "prompt_version": prompt_version,
             "timestamp": now.isoformat(),
+            "llm_raw_response": llm_response,
         }
 
         expected_output = {

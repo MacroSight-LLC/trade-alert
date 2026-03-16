@@ -48,7 +48,14 @@ QUALITY RULES — follow these strictly:
    - Never exceed 0.95 — no setup is certain
 6. sources_agree = count of DISTINCT independent signal groups pointing same direction
    Valid groups: technical_trend, volume_spike, sentiment_bull/bear,
-   options_flow, insider_activity, relative_strength, macro_risk_off
+   options_flow, insider_activity, relative_strength, macro_risk_off,
+   catalyst_event, short_interest
+   - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
+     Positive score = catalyst imminent. Higher score = closer/more impactful.
+     Use to gauge volatility risk and event-driven opportunity.
+   - short_interest: Short interest as % of float from FINRA data.
+     Positive score = high short interest (squeeze potential).
+     Combine with volume_spike for short-squeeze conviction.
 7. ENTRY LEVEL RULES:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
@@ -104,13 +111,13 @@ Output format — a JSON array (may be empty []):
     "edge_probability": 0.78,
     "confidence": 0.80,
     "timeframe": "{{timeframe}}",
-    "thesis": "Bollinger squeeze resolving upward with 2.8x avg volume. Unusual options activity: large $185c sweep, 500+ contracts. Retail sentiment turned bullish in last 2h. Classic breakout pattern with volume confirmation.",
+    "thesis": "Bollinger squeeze resolving upward with 2.8x avg volume. Unusual options activity: large $185c sweep, 500+ contracts. Retail sentiment turned bullish in last 2h. Earnings in 2 days (BMO) adds catalyst urgency. SI at 8% with 4.2 DTC provides squeeze fuel. Classic breakout pattern with multi-source confirmation.",
     "entry": {"level": 185.00, "stop": 182.00, "target": 192.00},
     "timeframe_rationale": "15m breakout aligning with 1h uptrend — momentum expected to persist 2-4 candles.",
     "sentiment_context": "ROT: strong_bullish (0.82 conf), Finnhub aggregate +0.6. Institutional flow neutral.",
-    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts"],
+    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential"],
     "macro_regime": "Risk-on. VIX 14.2, curve +18bps. No headwinds.",
-    "sources_agree": 4
+    "sources_agree": 6
   }
 ]
 
@@ -131,27 +138,28 @@ Return ONLY the JSON array. No other text."""
 _EXTRA_RULES: dict[str, str] = {
     "15m": (
         "\nADDITIONAL 15m RULES:\n"
-        "- If VIX > 20 and the macro regime is risk-off, suppress LONG alerts "
-        "unless sources_agree >= 4 and edge_probability >= 0.80. "
-        "In elevated-volatility environments, only the strongest confluences "
-        "justify short-timeframe longs.\n"
+        "- If VIX > 25 and the macro regime is risk-off, BE MORE CAUTIOUS with LONG alerts "
+        "but DO NOT suppress them entirely. Require sources_agree >= 4 or "
+        "edge_probability >= 0.80 for longs in elevated-VIX environments. "
+        "VIX 20-25 is NORMAL volatility — do not treat it as a suppression signal.\n"
         "- 15m stops should be tight (0.5-2% of entry)\n"
         "- Momentum must be FRESH — if the move already happened (score relates to "
         "a completed move), do not alert on a chase entry."
     ),
     "1h": (
         "\nADDITIONAL 1h RULES:\n"
-        "- A strong macro_risk_off signal (score >= 2.0) VETOES all long setups — "
-        "do not output LONG alerts when macro is strongly risk-off.\n"
+        "- A strong macro_risk_off signal should HEAVILY DISCOUNT long setups — "
+        "require 4+ sources for LONG when macro is risk-off, but do NOT refuse "
+        "to alert entirely. Exceptional confluences can override macro headwinds.\n"
         "- Entry stops and targets must reflect wider ranges appropriate "
         "for 1h holding periods (1-3% stops for equities).\n"
         "- Macro regime context weighs MORE heavily at 1h than 15m — "
-        "a risk-off environment should suppress long setups unless 4+ sources agree.\n"
+        "a risk-off environment should raise the bar for longs, not eliminate them.\n"
         "- Prefer setups near key technical levels (support/resistance) rather than "
         "mid-range entries.\n"
-        "- MACRO IS CRITICAL at 1h: weight FRED data (VIX, yield curve) heavily "
-        "in your assessment. An elevated VIX + risk-off regime is a strong "
-        "headwind for long positions, even with bullish TA.\n"
+        "- MACRO AWARENESS at 1h: weight FRED data (VIX, yield curve) in "
+        "your assessment. VIX > 25 + risk-off is a headwind for longs but "
+        "VIX 20-25 is normal volatility — do not suppress alerts for it.\n"
         "- De-weight intraday noise: 15m momentum spikes that haven't sustained "
         "across multiple candles are less reliable at the 1h timeframe.\n"
         "- Prefer setups with fundamental catalysts (earnings surprise, insider "
@@ -353,6 +361,24 @@ def _compile_template(template: str, variables: dict[str, Any]) -> str:
     return result
 
 
+def _check_unresolved_placeholders(text: str, label: str) -> None:
+    """Warn if any ``{{...}}`` placeholders remain after compilation.
+
+    Args:
+        text: Compiled prompt text.
+        label: Human-readable label for the log message (e.g. ``"system"``).
+    """
+    import re
+
+    remaining = re.findall(r"\{\{(\w+)\}\}", text)
+    if remaining:
+        logger.warning(
+            "Unresolved placeholders in %s prompt: %s",
+            label,
+            ", ".join(f"{{{{{v}}}}}" for v in remaining),
+        )
+
+
 def get_decision_prompts(
     timeframe: str,
     variables: dict[str, Any],
@@ -444,6 +470,8 @@ def get_decision_prompts(
                 _last_version = str(getattr(sys_obj, "version", "unknown"))
                 if _warnings:
                     system = "\n".join(_warnings) + "\n\n" + system
+                _check_unresolved_placeholders(system, "system")
+                _check_unresolved_placeholders(user, "user")
                 return (system, user)
             except Exception:  # noqa: BLE001
                 pass  # stale/broken cache entry — refetch below
@@ -461,6 +489,8 @@ def get_decision_prompts(
             logger.info("Prompts loaded from Langfuse (version=%s)", _last_version)
             if _warnings:
                 system = "\n".join(_warnings) + "\n\n" + system
+            _check_unresolved_placeholders(system, "system")
+            _check_unresolved_placeholders(user, "user")
             return (system, user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Langfuse prompt fetch failed — using YAML fallback: %s", exc)
@@ -475,6 +505,8 @@ def get_decision_prompts(
     # Prepend any freshness warnings to the compiled system prompt
     if _warnings:
         system = "\n".join(_warnings) + "\n\n" + system
+    _check_unresolved_placeholders(system, "system")
+    _check_unresolved_placeholders(user, "user")
     return (system, user)
 
 

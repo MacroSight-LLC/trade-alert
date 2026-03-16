@@ -1,7 +1,8 @@
 """Unit tests for validate_and_filter module.
 
-Tests the three new server-side rules (EP ceiling, VIX hard gate,
-source hallucination) plus existing gate behaviour.  Uses
+Tests server-side rules (EP ceiling, VIX hard gate, source hallucination,
+R:R zero-risk, VIX soft SHORT suppression, env-configurable EP ceiling,
+structured gate telemetry) plus existing gate behaviour.  Uses
 ``pytest.mark.parametrize`` for boundary and rejection paths.
 """
 
@@ -13,8 +14,11 @@ import pytest
 
 from validate_and_filter import (
     EP_CEILING,
+    GateRejection,
     _build_snap_type_index,
     _get_macro_risk_off_score,
+    _load_ep_ceiling,
+    _parse_snapshots,
     validate_and_filter,
 )
 
@@ -231,14 +235,30 @@ class TestBuildSnapTypeIndex:
 
     def test_normal_case(self) -> None:
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike"])]
-        result = _build_snap_type_index(json.dumps(snaps))
+        result = _build_snap_type_index(snaps)
         assert result == {"AAPL": {"technical_trend", "volume_spike"}}
 
-    def test_empty_json(self) -> None:
-        assert _build_snap_type_index("[]") == {}
+    def test_empty_list(self) -> None:
+        assert _build_snap_type_index([]) == {}
+
+
+class TestParseSnapshots:
+    """Tests for _parse_snapshots()."""
+
+    def test_valid_json(self) -> None:
+        snaps = [_snap("AAPL", ["technical_trend"])]
+        result = _parse_snapshots(json.dumps(snaps))
+        assert len(result) == 1
+        assert result[0]["symbol"] == "AAPL"
+
+    def test_empty_array(self) -> None:
+        assert _parse_snapshots("[]") == []
 
     def test_malformed_json(self) -> None:
-        assert _build_snap_type_index("not json") == {}
+        assert _parse_snapshots("not json") == []
+
+    def test_non_array_json(self) -> None:
+        assert _parse_snapshots('{"key": "value"}') == []
 
 
 class TestMacroRiskOffScore:
@@ -254,11 +274,11 @@ class TestMacroRiskOffScore:
                 ],
             }
         ]
-        assert _get_macro_risk_off_score(json.dumps(snaps)) == 2.5
+        assert _get_macro_risk_off_score(snaps) == 2.5
 
     def test_no_macro_signals(self) -> None:
         snaps = [{"symbol": "AAPL", "signals": [{"type": "technical_trend", "score": 1.0}]}]
-        assert _get_macro_risk_off_score(json.dumps(snaps)) == 0.0
+        assert _get_macro_risk_off_score(snaps) == 0.0
 
 
 # ── R:R and Gate Integration Tests ─────────────────────────────────
@@ -328,3 +348,217 @@ class TestGateIntegration:
         )
         assert results == []
         assert json_str == "[]"
+
+
+# ── R:R Zero-Risk Tests ────────────────────────────────────────────
+
+
+class TestRRZeroRisk:
+    """Directional alerts with stop==level (zero risk) must be rejected."""
+
+    def test_long_zero_risk_rejected(self) -> None:
+        """LONG with stop==level → rejected."""
+        a = _alert(entry={"level": 185.0, "stop": 185.0, "target": 195.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_short_zero_risk_rejected(self) -> None:
+        """SHORT with stop==level → rejected."""
+        a = _alert(
+            direction="SHORT",
+            entry={"level": 185.0, "stop": 185.0, "target": 175.0},
+        )
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_watch_zero_risk_passes(self) -> None:
+        """WATCH with stop==level → allowed (not directional)."""
+        a = _alert(
+            direction="WATCH",
+            entry={"level": 185.0, "stop": 185.0, "target": 185.0},
+        )
+        results, _ = _run([a])
+        assert len(results) == 1
+
+
+# ── VIX Soft Gate SHORT Suppression Tests ──────────────────────────
+
+
+class TestVixSoftShort:
+    """VIX > 25 + risk-on suppresses weak SHORTs (short squeeze risk)."""
+
+    def test_weak_short_suppressed_in_risk_on(self) -> None:
+        """SHORT sa=3, ep=0.75 in risk-on + VIX=26 → suppressed."""
+        a = _alert(
+            direction="SHORT",
+            sources_agree=3,
+            edge_probability=0.75,
+            entry={"level": 185.0, "stop": 188.0, "target": 175.0},
+        )
+        results, _ = _run([a], vix=26.0, macro={"risk_on": True})
+        assert len(results) == 0
+
+    def test_high_conviction_short_passes_in_risk_on(self) -> None:
+        """SHORT sa=4, ep=0.85 in risk-on + VIX=26 → allowed (high conviction)."""
+        a = _alert(
+            direction="SHORT",
+            sources_agree=4,
+            edge_probability=0.85,
+            entry={"level": 185.0, "stop": 188.0, "target": 175.0},
+        )
+        results, _ = _run([a], vix=26.0, macro={"risk_on": True})
+        assert len(results) == 1
+
+    def test_short_ok_in_risk_off(self) -> None:
+        """SHORT in risk-off + VIX=26 → allowed (shorts are natural in risk-off)."""
+        a = _alert(
+            direction="SHORT",
+            sources_agree=3,
+            edge_probability=0.75,
+            entry={"level": 185.0, "stop": 188.0, "target": 175.0},
+        )
+        results, _ = _run([a], vix=26.0, macro={"risk_on": False})
+        # In risk-off, weak LONGs are suppressed but SHORTs pass
+        assert len(results) == 1
+
+    def test_weak_long_still_suppressed_in_risk_off(self) -> None:
+        """LONG sa=3, ep=0.75 in risk-off + VIX=26 → suppressed (original behaviour)."""
+        a = _alert(
+            direction="LONG",
+            sources_agree=3,
+            edge_probability=0.75,
+        )
+        results, _ = _run([a], vix=26.0, macro={"risk_on": False})
+        assert len(results) == 0
+
+
+# ── Env-Configurable EP Ceiling Tests ──────────────────────────────
+
+
+class TestEnvEpCeiling:
+    """EP_CEILING_JSON environment variable overrides defaults."""
+
+    def test_load_custom_ceiling(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Valid EP_CEILING_JSON → parsed correctly."""
+        custom = json.dumps({"1": 0.50, "2": 0.60, "3": 0.70})
+        monkeypatch.setenv("EP_CEILING_JSON", custom)
+        result = _load_ep_ceiling()
+        assert result == {1: 0.50, 2: 0.60, 3: 0.70}
+
+    def test_load_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No EP_CEILING_JSON → defaults used."""
+        monkeypatch.delenv("EP_CEILING_JSON", raising=False)
+        result = _load_ep_ceiling()
+        assert result[1] == 0.55
+        assert result[4] == 0.85
+
+    def test_invalid_json_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid JSON → falls back to defaults."""
+        monkeypatch.setenv("EP_CEILING_JSON", "not valid json")
+        result = _load_ep_ceiling()
+        assert result == {1: 0.55, 2: 0.65, 3: 0.75, 4: 0.85, 5: 0.90, 6: 0.92, 7: 0.95}
+
+
+# ── Structured Gate Telemetry Tests ────────────────────────────────
+
+
+class TestGateTelemetry:
+    """Structured gate rejection tracking via Langfuse add_score_fn."""
+
+    def test_rejection_scores_emitted(self) -> None:
+        """VIX hard gate rejection emits gate_reject_vix_hard score."""
+        scores: list[tuple[str, str, float]] = []
+
+        def mock_add_score(trace_id: str, name: str, value: float, comment: str = "") -> None:
+            scores.append((name, value, comment))
+
+        a = _alert(direction="LONG")
+        validate_and_filter(
+            llm_response=json.dumps([a]),
+            snapshots_json=json.dumps(
+                [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+            ),
+            macro={"risk_on": True},
+            vix=31.0,
+            timeframe="15m",
+            add_score_fn=mock_add_score,
+            trace_id="test-trace",
+        )
+        score_names = [s[0] for s in scores]
+        assert "gate_reject_vix_hard" in score_names
+
+    def test_pass_rate_and_alerts_fired(self) -> None:
+        """Passing alerts still emit pass_rate and alerts_fired."""
+        scores: list[tuple[str, float]] = []
+
+        def mock_add_score(trace_id: str, name: str, value: float, comment: str = "") -> None:
+            scores.append((name, value))
+
+        a = _alert()
+        validate_and_filter(
+            llm_response=json.dumps([a]),
+            snapshots_json=json.dumps(
+                [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+            ),
+            macro={"risk_on": True},
+            vix=14.0,
+            timeframe="15m",
+            add_score_fn=mock_add_score,
+            trace_id="test-trace",
+        )
+        score_names = [s[0] for s in scores]
+        assert "alert_pass_rate" in score_names
+        assert "alerts_fired" in score_names
+
+    def test_multiple_gate_rejections_counted(self) -> None:
+        """Multiple alerts hitting different gates → separate rejection counts."""
+        scores: list[tuple[str, str, float]] = []
+
+        def mock_add_score(trace_id: str, name: str, value: float, comment: str = "") -> None:
+            scores.append((name, value, comment))
+
+        alerts = [
+            _alert(direction="LONG"),  # will hit VIX hard gate
+            _alert(symbol="MSFT", direction="SHORT"),  # also VIX hard gate
+        ]
+        snaps = [
+            _snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"]),
+            _snap("MSFT", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"]),
+        ]
+        validate_and_filter(
+            llm_response=json.dumps(alerts),
+            snapshots_json=json.dumps(snaps),
+            macro={"risk_on": True},
+            vix=31.0,
+            timeframe="15m",
+            add_score_fn=mock_add_score,
+            trace_id="test-trace",
+        )
+        vix_hard_scores = [s for s in scores if s[0] == "gate_reject_vix_hard"]
+        assert len(vix_hard_scores) == 1  # one score entry with count=2
+        assert vix_hard_scores[0][1] == 2.0
+
+
+# ── GateRejection Enum Tests ──────────────────────────────────────
+
+
+class TestGateRejectionEnum:
+    """GateRejection enum values match expected strings."""
+
+    def test_all_values_are_strings(self) -> None:
+        for member in GateRejection:
+            assert isinstance(member.value, str)
+
+    def test_expected_members_exist(self) -> None:
+        expected = {
+            "vix_hard",
+            "source_hallucination",
+            "ep_threshold",
+            "sa_threshold",
+            "conf_threshold",
+            "rr_minimum",
+            "rr_zero_risk",
+            "macro_veto",
+            "vix_soft",
+        }
+        assert {m.value for m in GateRejection} == expected

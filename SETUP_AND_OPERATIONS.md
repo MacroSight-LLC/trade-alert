@@ -1,6 +1,6 @@
 # Trade Alert: Complete Setup & Operations Guide
 
-**Status:** Your stack is **fully operational**. All 17 containers healthy, secrets stored in Vault.
+**Status:** 20 containers, persistent Vault (file backend, auto-unseal), 11 MCP data sources, Langfuse observability.
 
 ---
 
@@ -9,38 +9,42 @@
 2. [Vault Initialization (Critical)](#vault-initialization-critical)
 3. [Environment Variables](#environment-variables)
 4. [Full Stack Startup](#full-stack-startup)
-5. [Health Checks & Monitoring](#health-checks--monitoring)
-6. [Common Operations](#common-operations)
-7. [Troubleshooting](#troubleshooting)
+5. [Discord Bot Commands](#discord-bot-commands)
+6. [Health Checks & Monitoring](#health-checks--monitoring)
+7. [Common Operations](#common-operations)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Current Status
 
-### Running Containers (17 total)
+### Running Containers (20 total)
 
-| Component                   | Status                 | Notes                                      |
-| --------------------------- | ---------------------- | ------------------------------------------ |
-| **Infrastructure**          |                        |                                            |
-| Vault                       | ✅ Healthy              | Dev-mode, auto-unsealed via docker-compose |
-| Redis                       | ✅ Healthy              | Ready to store snapshots & state           |
-| PostgreSQL (main)           | ✅ Healthy              | Ready to store alerts & outcomes           |
-| PostgreSQL (Langfuse)       | ✅ Healthy              | Ready for observability traces             |
-| Langfuse                    | ✅ Healthy              | Available at http://localhost:3000         |
-| **Application**             |                        |                                            |
-| CUGA (app)                  | ✅ Healthy              | Ready to execute workflows                 |
-| Cron                        | ⚠️ UP (no health check) | Running fine, attempting Vault connection  |
-| **MCP Services** (10 total) | ✅ All Healthy          | All data connectors ready                  |
-| - tradingview-mcp           | ✅ Healthy              | TradingView data on :8001                  |
-| - polygon-mcp               | ✅ Healthy              | Polygon.io data on :8002                   |
-| - discord-mcp               | ✅ Healthy              | Discord notifications on :8003             |
-| - finnhub-mcp               | ✅ Healthy              | Finnhub financial data on :8004            |
-| - rot-mcp                   | ✅ Healthy              | ROT sentiment on :8005                     |
-| - crypto-orderbook-mcp      | ✅ Healthy              | Crypto orderbook on :8006                  |
-| - coingecko-mcp             | ✅ Healthy              | CoinGecko crypto data on :8007             |
-| - trading-mcp               | ✅ Healthy              | Trading signals on :8008                   |
-| - fred-mcp                  | ✅ Healthy              | Federal Reserve economic data on :8009     |
-| - spamshield-mcp            | ✅ Healthy              | Spam filtering on :8010                    |
+| Component                 | Status    | Notes                                           |
+| ------------------------- | --------- | ----------------------------------------------- |
+| **Infrastructure**        |           |                                                 |
+| Vault                     | ✅ Healthy | Server mode, file backend, auto-unseal          |
+| Redis                     | ✅ Healthy | Snapshot queues (TTL 900s)                      |
+| PostgreSQL (main)         | ✅ Healthy | Alert logging, win-rate history                 |
+| PostgreSQL (Langfuse)     | ✅ Healthy | Observability traces (persistent volume)        |
+| Langfuse                  | ✅ Healthy | Prompt mgmt + tracing at http://localhost:3000  |
+| **Application**           |           |                                                 |
+| CUGA (app)                | ✅ Healthy | Pipeline engine                                 |
+| Cron                      | ✅ UP      | Scheduled 15m/1h pipeline runs                  |
+| Discord Bot               | ✅ UP      | `!scan`, `!status`, `!last`, `!help`            |
+| Dashboard                 | ✅ Healthy | Analytics at http://localhost:8080              |
+| **MCP Data Sources** (11) |           |                                                 |
+| tradingview-mcp           | ✅ Healthy | Chart patterns, TA signals on :8001             |
+| polygon-mcp               | ✅ Healthy | OHLCV price data, candlestick charts on :8002   |
+| discord-mcp               | ✅ Healthy | Discord API proxy on :8003                      |
+| finnhub-mcp               | ✅ Healthy | Insider trades, earnings, company data on :8004 |
+| rot-mcp                   | ✅ Healthy | Rules-of-thumb signal filtering on :8005        |
+| edgar-mcp                 | ✅ Healthy | SEC filings, institutional holdings on :8006    |
+| yfinance-mcp              | ✅ Healthy | Options flow, short interest on :8007           |
+| trading-mcp               | ✅ Healthy | Position sizing, R:R calculations on :8008      |
+| fred-mcp                  | ✅ Healthy | Macro data (VIX, yield curve, CPI) on :8009     |
+| spamshield-mcp            | ✅ Healthy | Duplicate/noise filtering on :8010              |
+| alpaca-mcp                | ✅ Healthy | Real-time quotes, market status on :8011        |
 
 ---
 
@@ -48,93 +52,67 @@
 
 ### Why This Matters
 Vault is your **secret store** for production. All API keys, tokens, and
-credentials live exclusively in Vault at `secret/trade-alert`. The `.env` file
-holds only non-secret tunables and connectivity URLs.
+credentials live exclusively in Vault at `secret/trade-alert`. The `.env.secrets`
+file is the source for seeding; secrets are loaded at runtime by `vault_env_loader.py`.
 
-### Development Setup (Recommended)
+### How It Works
 
-The docker-compose Vault container runs in **dev mode** (auto-unsealed, root
-token `dev-root-token`). Secrets are loaded via `vault-init.sh` which reads
-from the `.env.secrets` backup.
+Vault runs in **server mode** with a **file backend** (`deployment/vault-config.hcl`).
+Secrets persist across container restarts via the `vault-data` Docker volume.
+An auto-unseal entrypoint (`deployment/vault-entrypoint.sh`) reads the unseal key
+from `.vault-init.json` and unseals automatically on boot.
 
 ```bash
-# 1. Ensure .env.secrets exists with your real key values
-cp .env .env.secrets   # one-time — .env.secrets is git-ignored
-
-# 2. Run the init script (seeds Vault KV v2)
+# First-time setup (initializes Vault, generates unseal keys, seeds secrets):
 ./scripts/vault-init.sh
 
-# 3. Verify secrets are stored
-export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=dev-root-token
-vault kv get secret/trade-alert
+# The script will:
+# 1. Wait for Vault to be listening
+# 2. Initialize Vault (if not already initialized) — saves keys to .vault-init.json
+# 3. Unseal Vault
+# 4. Enable KV v2 secrets engine
+# 5. Read .env.secrets and write all secrets to Vault
+# 6. Generate .env.vault for MCP containers
 ```
 
-After seeding, **remove raw secret values from `.env`** — the runtime loads
-them from Vault via `vault_env_loader.py`.
+**Important files:**
+- `.vault-init.json` — unseal keys + root token (git-ignored, DO NOT commit)
+- `.env.secrets` — source of truth for secret values (git-ignored)
+- `deployment/vault-config.hcl` — Vault server configuration (file backend)
+- `deployment/vault-entrypoint.sh` — auto-unseal on container start
 
-### Production Setup
+### After Volume Loss (e.g., `docker compose down -v`)
 
-For production, replace the dev Vault with a properly initialised instance:
-- Use **Shamir key holders** or **cloud auto-unseal** (AWS KMS, GCP CKMS).
+All secrets are lost. Re-initialize:
+```bash
+rm .vault-init.json   # remove stale init file
+docker compose -f docker-compose.prod.yml up -d vault
+./scripts/vault-init.sh   # re-initializes and re-seeds
+# Update VAULT_TOKEN in .env.secrets with the new token printed by the script
+```
+
+### Production Considerations
+
+For production, replace the file backend with cloud auto-unseal:
+- Use **AWS KMS**, **GCP CKMS**, or **Azure Key Vault** for auto-unseal
 - Generate a scoped AppRole or token (not root) and set `VAULT_TOKEN` in the
-  deployment environment.
+  deployment environment
 - See: https://www.vaultproject.io/docs/concepts/seal
 
-### Vault Recovery (File-Backed Storage)
+### Vault Secrets Stored
 
-The production `docker-compose.prod.yml` uses **file-backed storage** (not
-dev-mode in-memory). Secrets persist across container restarts via the
-`vault-data` Docker volume.
-
-**After a clean restart** (volume intact):
-Vault starts **sealed**. You must unseal it before the pipeline can read secrets:
+After running `vault-init.sh`, verify with:
 
 ```bash
-# Check status (shows "Sealed: true")
-docker compose -f docker-compose.prod.yml exec vault vault status
-
-# Unseal with your unseal key(s) — stored during initial vault operator init
-docker compose -f docker-compose.prod.yml exec vault \
-  vault operator unseal <UNSEAL_KEY>
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=<your-root-token>  # from .vault-init.json or .env.secrets
+vault kv get -format=json secret/trade-alert | python3 -c "import json,sys; [print(f'  {k}') for k in sorted(json.load(sys.stdin)['data']['data'].keys())]"
 ```
 
-**After volume loss** (e.g., `docker compose down -v`):
-All secrets are lost. Re-initialize Vault and re-seed:
-
-```bash
-# 1. Re-init (produces new unseal keys + root token — save these securely)
-docker compose -f docker-compose.prod.yml exec vault vault operator init
-
-# 2. Unseal with the new keys
-docker compose -f docker-compose.prod.yml exec vault \
-  vault operator unseal <NEW_UNSEAL_KEY>
-
-# 3. Re-seed secrets from .env.secrets
-VAULT_TOKEN=<NEW_ROOT_TOKEN> ./scripts/vault-init.sh
-
-# 4. Update VAULT_TOKEN in .env.secrets / deployment config
-```
-
-**Tip:** For unattended restarts, configure cloud auto-unseal (AWS KMS, GCP
-CKMS) so Vault unseals itself on boot. See the Vault auto-unseal docs.
-
----
-
-## Environment Variables
-
-### Secrets (Vault — `secret/trade-alert`)
-
-All secrets are loaded at runtime by `vault_env_loader.py`. They must **not**
-appear in `.env`. After running `vault-init.sh`, verify with:
-
-```bash
-vault kv get -format=json secret/trade-alert | jq '.data.data | keys'
-```
-
-Expected keys:
-`ANTHROPIC_API_KEY`, `DISCORD_ALERT_CHANNEL_ID`, `DISCORD_BOT_TOKEN`,
-`DISCORD_OPS_CHANNEL_ID`, `ENCRYPTION_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY`,
+Expected keys (17):
+`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ANTHROPIC_API_KEY`,
+`DISCORD_ALERT_CHANNEL_ID`, `DISCORD_BOT_TOKEN`, `DISCORD_OPS_CHANNEL_ID`,
+`EDGAR_USER_AGENT`, `ENCRYPTION_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY`,
 `GROQ_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
 `NEXTAUTH_SECRET`, `POLYGON_API_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_USER`
 
@@ -147,6 +125,7 @@ Expected keys:
 | Finnhub           | https://finnhub.io/dashboard (free tier available)      | 5 min |
 | FRED              | https://stlouisfed.org/fred (free tier available)       | 5 min |
 | Polygon.io        | https://polygon.io/dashboard/keys (free tier available) | 5 min |
+| Alpaca            | https://app.alpaca.markets/paper/dashboard/overview     | 5 min |
 
 ### Langfuse Setup (After First Run)
 
@@ -174,35 +153,33 @@ Expected keys:
 ```bash
 cd /Users/taylordean/trade-alert
 
-# 1. Copy & fill environment
-cp .env.example .env
-# ← EDIT .env with your API keys ←
+# 1. Create .env.secrets with your API keys
+cp .env.example .env.secrets
+# ← EDIT .env.secrets with your API keys ←
 
-# 2. Start core infrastructure (Redis, PostgreSQL, Langfuse)
-docker compose -f docker-compose.prod.yml up -d redis postgres langfuse-db langfuse vault
+# 2. Load secrets into shell environment
+set -a && source .env.secrets && set +a
 
-# 3. Wait for PostgreSQL to initialize (30-60 seconds)
+# 3. Start the full stack (all 20 containers)
+docker compose -f docker-compose.prod.yml --profile mcp up -d
+
+# 4. Wait for PostgreSQL to initialize (30-60 seconds)
 docker compose -f docker-compose.prod.yml exec postgres pg_isready -U trade_alert
 
-# 4. Apply schema
+# 5. Apply database schema
 docker compose -f docker-compose.prod.yml exec postgres \
   psql -U trade_alert -d trade_alert -f /docker-entrypoint-initdb.d/schema.sql
 
-# 5. Seed secrets into Vault
+# 6. Initialize Vault and seed secrets
 ./scripts/vault-init.sh
+# ⚠️ If this is the first run, update .env.secrets with the new VAULT_TOKEN printed by the script
 
-# 6. Start application layer (CUGA, cron)
-docker compose -f docker-compose.prod.yml up -d cuga cron
-
-# 7. Start all MCP services
-docker compose -f docker-compose.prod.yml --profile mcp up -d
-
-# 8. Seed Langfuse prompts (enables live editing via UI)
+# 7. Seed Langfuse prompts (enables live editing via UI)
 docker compose -f docker-compose.prod.yml exec cuga \
   python scripts/seed_langfuse_prompts.py
 
-# 9. Verify all services
-docker compose -f docker-compose.prod.yml ps
+# 8. Verify all services
+docker compose -f docker-compose.prod.yml --profile mcp ps
 ```
 
 ### Langfuse Prompt Seeding
@@ -225,22 +202,44 @@ propagate within 300s (the `prompt_manager.py` TTL cache).
 ### Restart Running Stack
 
 ```bash
-# If containers are already running:
-docker compose -f docker-compose.prod.yml restart
+set -a && source .env.secrets && set +a
+docker compose -f docker-compose.prod.yml --profile mcp up -d
 ```
 
 ### Shutdown
 
 ```bash
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml --profile mcp down
 ```
 
 ### Shutdown + Cleanup Data
 
 ```bash
-docker compose -f docker-compose.prod.yml down -v
-# This deletes: Redis data, Vault data, Langfuse database
+docker compose -f docker-compose.prod.yml --profile mcp down -v
+# This deletes: Redis data, Vault data + secrets, Langfuse database, Postgres alerts
+# You will need to re-run vault-init.sh and seed_langfuse_prompts.py after restart
 ```
+
+---
+
+## Discord Bot Commands
+
+The Discord bot runs in the `discord-bot` container, polling the **ops channel** for commands:
+
+| Command       | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `!scan`       | Run the 15m pipeline now                           |
+| `!scan 1h`    | Run the 1h pipeline now                            |
+| `!scan 15m`   | Run the 15m pipeline (explicit)                    |
+| `!status`     | Show pipeline health, Redis snapshot counts, MCP status |
+| `!last`       | Show the most recent fired alert from Postgres     |
+| `!help`       | Show available commands                            |
+
+**Channel routing:**
+- **Ops channel** (`DISCORD_OPS_CHANNEL_ID`): Bot listens here for commands
+- **Alert channel** (`DISCORD_ALERT_CHANNEL_ID`): Alerts + candlestick charts are posted here by the notifier
+
+**Concurrency:** Only one `!scan` can run at a time; subsequent requests are queued.
 
 ---
 
@@ -376,13 +375,19 @@ docker compose -f docker-compose.prod.yml up -d
 
 ### Vault Stays Unhealthy
 
-**Problem:** `docker exec trade-alert-vault-1 vault status` returns an error
+**Problem:** `docker exec trade-alert-vault-1 vault status` returns sealed or error
 
-**Solution (dev mode):** The dev-mode Vault auto-unseals. If the container
-restarted, secrets may be lost (dev-mode is in-memory). Re-seed:
+**Solution:** Vault uses server mode with auto-unseal. If `.vault-init.json` is
+present and mounted, the entrypoint script unseals automatically. If it fails:
 ```bash
+# Manual unseal
+export VAULT_ADDR=http://127.0.0.1:8200
+UNSEAL_KEY=$(python3 -c "import json; print(json.load(open('.vault-init.json'))['unseal_keys_b64'][0])")
+vault operator unseal "$UNSEAL_KEY"
+
+# Re-seed if needed
+export VAULT_TOKEN=$(python3 -c "import json; print(json.load(open('.vault-init.json'))['root_token'])")
 ./scripts/vault-init.sh
-vault kv get secret/trade-alert   # verify
 ```
 
 ### CUGA Container Exits
@@ -523,4 +528,4 @@ curl http://localhost:8001/health
 
 ---
 
-**Last Updated:** March 2026 | Status: Fully operational — secrets in Vault, all 17 containers healthy
+**Last Updated:** March 2026 | Status: 20 containers, persistent Vault (file backend), 11 MCPs, 10 signal types

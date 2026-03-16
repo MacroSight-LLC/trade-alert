@@ -2,81 +2,94 @@
 
 > Production trading alert engine built on [CUGA](./README.cuga.md).
 
-10 MCP ensemble (TA · flow · sentiment · macro) → Claude Sonnet probabilistic reasoning → Discord trade playbooks with entry, stop, target, thesis & edge probability.
-
-![Architecture](./docs/images/Architecture.png)
+11 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest) → Claude Sonnet 4 probabilistic reasoning → Discord trade playbooks with candlestick charts, entry, stop, target, thesis & edge probability.
 
 ## Documentation
 - **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md)
+- **Setup & operations:** [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md)
 - **CUGA upstream docs:** [`README.cuga.md`](./README.cuga.md)
+
+## Stack Overview
+
+| Layer                 | Components                                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Data (11 MCPs)**    | TradingView (:8001), Polygon (:8002), Discord (:8003), Finnhub (:8004), ROT (:8005), EDGAR (:8006), YFinance (:8007), Trading (:8008), FRED (:8009), SpamShield (:8010), Alpaca (:8011) |
+| **Pipeline**          | 6 collectors → merger → Claude Sonnet 4 decision → 7-gate validate & filter → notifier                                                                                                  |
+| **Signal types (10)** | `technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`, `options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`, `catalyst_event`, `short_interest`    |
+| **Infra**             | Redis (snapshot queues), Postgres (alert logging), Vault (secrets, file backend), Langfuse (prompt mgmt + tracing)                                                                      |
+| **Output**            | Discord embeds with mplfinance candlestick charts, entry/stop/target overlays                                                                                                           |
+| **Ops**               | Discord bot (`!scan`, `!status`, `!last`), cron scheduler, analytics dashboard (:8080)                                                                                                  |
+
+**20 containers total** — all orchestrated via `docker-compose.prod.yml`.
 
 ## Quick Start
 
 ### 1. Prerequisites
 - Python 3.11+
 - Docker & Docker Compose
-- API keys: Anthropic, Finnhub, FRED, Polygon.io, Discord bot token
+- API keys: Anthropic, Finnhub, FRED, Polygon.io, Alpaca, Discord bot token
 
 ### 2. Environment setup
 ```bash
-cp .env.example .env
-# Fill in all required values (ANTHROPIC_API_KEY, DISCORD_BOT_TOKEN, etc.)
-cp .env .env.secrets        # backup with real keys (git-ignored)
+cp .env.example .env.secrets
+# Fill in all required values (API keys, Discord tokens, etc.)
+# .env.secrets is git-ignored
 ```
 
-### 3. Seed secrets into Vault
+### 3. Launch the full stack
 ```bash
-docker compose up -d vault
-./scripts/vault-init.sh     # reads .env.secrets → writes to Vault KV v2
+set -a && source .env.secrets && set +a
+docker compose -f docker-compose.prod.yml --profile mcp up -d
 ```
 
-### 4. Run unit tests (no infrastructure needed)
+### 4. Initialize Vault & seed secrets
 ```bash
-pip install pydantic httpx psycopg2-binary redis pytest pytest-cov
-pytest tests/unit/ -v
+./scripts/vault-init.sh     # initializes, unseals, seeds .env.secrets → Vault KV v2
 ```
 
-### 5. Launch infrastructure
+### 5. Seed Langfuse prompts
 ```bash
-docker compose up -d redis postgres
-# Wait for Postgres to initialize, then apply the schema:
-docker compose exec postgres psql -U trade_alert -d trade_alert -f /docker-entrypoint-initdb.d/schema.sql
+docker compose -f docker-compose.prod.yml exec cuga python scripts/seed_langfuse_prompts.py
 ```
 
-### 6. Run the alert engine
+### 6. Run unit tests
 ```bash
-# Start all MCP servers + CUGA orchestrator
-docker compose up -d
-
-# Or run locally for development:
-python -m cuga run --workflows-dir workflows/ --schedule
+pip install pydantic httpx psycopg2-binary redis pytest
+pytest tests/test_validate_and_filter.py -v   # 45 tests
 ```
 
 ## Project Structure
 
-| File                     | Purpose                                               |
-| ------------------------ | ----------------------------------------------------- |
-| `models.py`              | Pydantic schemas: Signal, Snapshot, PlaybookAlert     |
-| `merger.py`              | Deduplicates & ranks snapshots from Redis             |
-| `db.py`                  | Postgres insert/update/query for alerts table         |
-| `notifier_and_logger.py` | Discord embeds + Postgres logging                     |
-| `healthcheck.py`         | Redis/Postgres/MCP health checks + JSONL logging      |
-| `outcome_tracker.py`     | Resolves open alerts via Polygon.io price polling     |
-| `dashboard_api.py`       | FastAPI analytics dashboard (port 8080)               |
-| `dashboard.html`         | Single-file dashboard UI (Chart.js)                   |
-| `normalizers/`           | 5 normalizers (TA, flow, sentiment, market, macro)    |
-| `workflows/`             | CUGA YAML workflows (collectors, decisions, notifier) |
-| `.env.example`           | All environment variables with defaults               |
+| File                     | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `models.py`              | Pydantic schemas: Signal, Snapshot, PlaybookAlert              |
+| `merger.py`              | Deduplicates & ranks snapshots from Redis                      |
+| `validate_and_filter.py` | 7-gate server-side filter (VIX, R:R, EP ceiling, etc.)         |
+| `notifier_and_logger.py` | Discord embeds + candlestick charts + Postgres logging         |
+| `chart_gen.py`           | mplfinance candlestick PNG generation from Polygon data        |
+| `db.py`                  | Postgres insert/update/query for alerts table                  |
+| `pipeline_runner.py`     | Generic YAML workflow engine (collectors → decision)           |
+| `prompt_manager.py`      | Langfuse-first prompt loading with 300s cache + fallback       |
+| `discord_bot.py`         | Discord ops bot (`!scan`, `!status`, `!last`, `!help`)         |
+| `healthcheck.py`         | Redis/Postgres/MCP health checks + JSONL logging               |
+| `outcome_tracker.py`     | Resolves open alerts via Polygon/Finnhub price polling         |
+| `alert_quality.py`       | Per-alert quality scoring (5 sub-scores)                       |
+| `winrate_injector.py`    | Injects historical win-rate calibration into prompts           |
+| `dashboard_api.py`       | FastAPI analytics dashboard (port 8080)                        |
+| `vault_env_loader.py`    | Auto-loads Vault secrets into `os.environ` on import           |
+| `normalizers/`           | 7 normalizers (TA, flow, sentiment, market, macro, events, SI) |
+| `workflows/`             | CUGA YAML workflows (6 collectors, 2 decisions, orchestrators) |
+| `deployment/`            | Vault config (HCL), auto-unseal entrypoint                     |
 
 ## Testing
 
 ```bash
-# Unit tests (160+ tests, no infrastructure)
-pytest tests/unit/ -v
+# Unit tests (45 gate tests)
+pytest tests/test_validate_and_filter.py -v
 
 # With coverage
-pytest tests/unit/ --cov=. --cov-report=term-missing
+pytest tests/ --cov=. --cov-report=term-missing
 
-# Integration smoke test (optional — needs Docker)
+# Integration smoke test (needs Docker)
 python tests/integration_smoke.py
 ```

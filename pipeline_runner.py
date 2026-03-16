@@ -47,9 +47,12 @@ MCP_ENDPOINTS: dict[str, str] = {
     "discord-mcp": os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003"),
     "finnhub-mcp": os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004"),
     "rot-mcp": os.getenv("ROT_MCP_URL", "http://rot-mcp:8005"),
+    "edgar-mcp": os.getenv("EDGAR_MCP_URL", "http://edgar-mcp:8006"),
+    "yfinance-mcp": os.getenv("YFINANCE_MCP_URL", "http://yfinance-mcp:8007"),
     "trading-mcp": os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008"),
     "fred-mcp": os.getenv("FRED_MCP_URL", "http://fred-mcp:8009"),
     "spamshield-mcp": os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010"),
+    "alpaca-mcp": os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011"),
 }
 
 # Also accept workflow-level mcp_servers overrides

@@ -1,6 +1,7 @@
 .env
 .env.secrets
 .env.vault
+.vault-init.json
 __pycache__
 output
 *.db

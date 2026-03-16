@@ -1,6 +1,7 @@
-"""Polygon flow normalizer (SSOT §7).
+"""Flow normalizer (SSOT §7).
 
-Transforms volume multiples into ``volume_spike`` signals.
+Transforms volume multiples (Polygon), options chain data (yfinance),
+and intraday volume acceleration (Alpaca) into flow signals.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import safe_float
+from normalizers import normalize_score, safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -35,12 +36,16 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         if vol_mult is not None:
             vol_mult = safe_float(vol_mult)
             if vol_mult >= 1.5:
+                # Continuous interpolation: avoids the 1.0→2.5 cliff at 3.0x
+                # 1.5x → 1.0, 3.0x → 2.0, 5.0x → 3.0 (linearly interpolated)
                 if vol_mult >= 5.0:
                     vol_score = 3.0
                 elif vol_mult >= 3.0:
-                    vol_score = 2.5
+                    # Interpolate 3.0→5.0 mapping to 2.0→3.0
+                    vol_score = 2.0 + (vol_mult - 3.0) / 2.0
                 else:
-                    vol_score = 1.0
+                    # Interpolate 1.5→3.0 mapping to 1.0→2.0
+                    vol_score = 1.0 + (vol_mult - 1.5) / 1.5
 
                 unusual: list[str] = data.get("unusual_options", [])
                 reason_parts = [f"volume {vol_mult:.1f}x avg"]
@@ -51,9 +56,63 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="polygon",
                         type="volume_spike",
-                        score=vol_score,
+                        score=normalize_score(vol_score, 0.0, 3.0),
                         confidence=min(vol_mult / 5.0, 1.0),
                         reason="; ".join(reason_parts),
+                        raw=data,
+                    )
+                )
+
+        # Enhanced options flow from yfinance chain data
+        call_put_ratio: float | None = data.get("call_put_ratio")
+        if call_put_ratio is not None:
+            call_put_ratio = safe_float(call_put_ratio)
+            unusual_oi: bool = data.get("unusual_oi", False)
+
+            if call_put_ratio > 2.0:
+                flow_score = 1.5
+                if unusual_oi:
+                    flow_score = 2.0
+                signals.append(
+                    Signal(
+                        source="yfinance",
+                        type="options_flow",
+                        score=normalize_score(flow_score, -3.0, 3.0),
+                        confidence=0.70,
+                        reason=f"Call/put ratio {call_put_ratio:.1f}x"
+                        + (" (unusual OI)" if unusual_oi else ""),
+                        raw=data,
+                    )
+                )
+            elif call_put_ratio < 0.5 and call_put_ratio > 0:
+                flow_score = -1.5
+                if unusual_oi:
+                    flow_score = -2.0
+                signals.append(
+                    Signal(
+                        source="yfinance",
+                        type="options_flow",
+                        score=normalize_score(flow_score, -3.0, 3.0),
+                        confidence=0.70,
+                        reason=f"Put-heavy ratio {call_put_ratio:.2f}x"
+                        + (" (unusual OI)" if unusual_oi else ""),
+                        raw=data,
+                    )
+                )
+
+        # Enhanced intraday volume from Alpaca
+        vol_accel: float | None = data.get("volume_acceleration")
+        if vol_accel is not None:
+            vol_accel = safe_float(vol_accel)
+            if vol_accel >= 2.0:
+                accel_score = min(vol_accel / 2.0, 3.0)
+                signals.append(
+                    Signal(
+                        source="alpaca",
+                        type="volume_spike",
+                        score=normalize_score(accel_score, 0.0, 3.0),
+                        confidence=min(vol_accel / 5.0, 1.0),
+                        reason=f"Intraday volume acceleration {vol_accel:.1f}x (last 3 bars vs prior 3)",
                         raw=data,
                     )
                 )

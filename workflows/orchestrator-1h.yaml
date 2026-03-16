@@ -63,6 +63,7 @@ steps:
           - collector-flow.yaml
           - collector-sentiment.yaml
           - collector-macro.yaml
+          - collector-events.yaml
 
     # Step 1b — Record parent + per-collector spans in Langfuse
     - name: span-collectors

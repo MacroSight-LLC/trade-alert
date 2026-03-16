@@ -177,17 +177,25 @@ uv sync --dev
 
 ### Run tests
 
-Comprehensive test suite including linting, unit tests, and e2e tests:
+### trade-alert Tests
+
+```bash
+# Gate validation tests (45 tests, no infrastructure needed)
+pytest tests/test_validate_and_filter.py -v
+
+# All tests with coverage
+pytest tests/ --cov=. --cov-report=term-missing
+
+# Integration smoke test (needs Docker running)
+python tests/integration_smoke.py
+```
+
+### CUGA Framework Tests (upstream)
 
 ```bash
 chmod +x ./src/scripts/run_tests.sh
 ./src/scripts/run_tests.sh
 ```
-
-This will run:
-- **Linting checks**: Ruff code quality and formatting validation
-- **Unit tests**: Variables manager, API response handling, registry functionality
-- **E2E tests**: System tests across Fast and Balanced modes for real-world scenarios
 
 
 ## IDE Setup Quick Links

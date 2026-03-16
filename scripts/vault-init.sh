@@ -36,11 +36,12 @@ echo "  Secret path: $VAULT_PATH"
 echo "  Env file   : $ENV_FILE"
 echo ""
 
-# ── Wait for Vault to be ready ──────────────────────────────
-echo "⏳ Waiting for Vault to be ready..."
+# ── Wait for Vault to be listening ───────────────────────────
+echo "⏳ Waiting for Vault to be listening..."
 for i in $(seq 1 30); do
-    if vault status >/dev/null 2>&1; then
-        echo "✅ Vault is ready"
+    HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$VAULT_ADDR/v1/sys/health" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" != "000" ]; then
+        echo "✅ Vault is listening (HTTP $HTTP_CODE)"
         break
     fi
     if [ "$i" -eq 30 ]; then
@@ -49,6 +50,52 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# ── Init + Unseal (server mode with file backend) ───────────
+INIT_FILE="$REPO_ROOT/.vault-init.json"
+
+INIT_STATUS=$(vault status -format=json 2>/dev/null || true)
+IS_INITIALIZED=$(echo "$INIT_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('initialized',False))" 2>/dev/null || echo "False")
+
+if [ "$IS_INITIALIZED" = "False" ]; then
+    echo ""
+    echo "🔑 Vault not yet initialized — running vault operator init (1 key, threshold 1)..."
+    vault operator init -key-shares=1 -key-threshold=1 -format=json > "$INIT_FILE"
+    chmod 600 "$INIT_FILE"
+    echo "   ✅ Init complete — keys saved to $INIT_FILE (DO NOT commit this file)"
+
+    # Extract root token and unseal key
+    UNSEAL_KEY=$(python3 -c "import json; d=json.load(open('$INIT_FILE')); print(d['unseal_keys_b64'][0])")
+    ROOT_TOKEN=$(python3 -c "import json; d=json.load(open('$INIT_FILE')); print(d['root_token'])")
+
+    echo "   Unsealing..."
+    vault operator unseal "$UNSEAL_KEY" >/dev/null
+    echo "   ✅ Vault unsealed"
+
+    # Re-export VAULT_TOKEN to the newly generated root token
+    export VAULT_TOKEN="$ROOT_TOKEN"
+    echo ""
+    echo "   ⚠️  NEW ROOT TOKEN generated. Update .env.secrets:"
+    echo "      VAULT_TOKEN=$ROOT_TOKEN"
+    echo ""
+else
+    # Already initialized — just unseal if sealed
+    IS_SEALED=$(echo "$INIT_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sealed',True))" 2>/dev/null || echo "True")
+    if [ "$IS_SEALED" = "True" ]; then
+        if [ -f "$INIT_FILE" ]; then
+            UNSEAL_KEY=$(python3 -c "import json; d=json.load(open('$INIT_FILE')); print(d['unseal_keys_b64'][0])")
+            echo "🔓 Vault is sealed — unsealing..."
+            vault operator unseal "$UNSEAL_KEY" >/dev/null
+            echo "   ✅ Vault unsealed"
+        else
+            echo "❌ Vault is sealed but $INIT_FILE not found. Cannot auto-unseal."
+            echo "   Run: vault operator unseal <your-unseal-key>"
+            exit 1
+        fi
+    else
+        echo "✅ Vault is already initialized and unsealed"
+    fi
+fi
 
 # ── Enable KV v2 secrets engine (idempotent) ────────────────
 echo ""
@@ -68,9 +115,13 @@ fi
 echo ""
 echo "📥 Reading secrets from $ENV_FILE..."
 
-# Parse .env: skip comments, blank lines, and lines without '='
-KV_ARGS=""
+# Build a JSON payload — handles values with spaces/special chars
+VAULT_JSON_FILE=$(mktemp)
+trap 'rm -f "$VAULT_JSON_FILE"' EXIT
+echo "{" > "$VAULT_JSON_FILE"
+
 COUNT=0
+FIRST=true
 while IFS= read -r line || [ -n "$line" ]; do
     # Skip comments and empty lines
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -92,8 +143,6 @@ while IFS= read -r line || [ -n "$line" ]; do
     [ -z "$VALUE" ] && continue
 
     # Only store actual secrets (API keys, passwords, tokens)
-    # Infrastructure URLs (DATABASE_URL, REDIS_URL) are NOT secrets —
-    # they differ between host and Docker and are set via compose env.
     case "$KEY" in
         POSTGRES_PASSWORD|DISCORD_BOT_TOKEN|DISCORD_WEBHOOK|\
         DISCORD_ALERT_CHANNEL_ID|DISCORD_OPS_CHANNEL_ID|\
@@ -101,16 +150,26 @@ while IFS= read -r line || [ -n "$line" ]; do
         POLYGON_API_KEY|REDDIT_CLIENT_ID|REDDIT_CLIENT_SECRET|\
         POSTGRES_USER|\
         GROQ_API_KEY|OPENAI_API_KEY|E2B_API_KEY|CUGA_SECRET_KEY|\
+        ALPACA_API_KEY|ALPACA_SECRET_KEY|EDGAR_USER_AGENT|\
         LANGFUSE_PUBLIC_KEY|LANGFUSE_SECRET_KEY|NEXTAUTH_SECRET|ENCRYPTION_KEY)
-            KV_ARGS="$KV_ARGS ${KEY}=${VALUE}"
+            if [ "$FIRST" = true ]; then
+                FIRST=false
+            else
+                echo "," >> "$VAULT_JSON_FILE"
+            fi
+            # Escape backslashes and double quotes in value for valid JSON
+            ESCAPED_VALUE=$(printf '%s' "$VALUE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+            printf '  "%s": "%s"' "$KEY" "$ESCAPED_VALUE" >> "$VAULT_JSON_FILE"
             COUNT=$((COUNT + 1))
             echo "   ✓ $KEY"
             ;;
         *)
-            # Non-secrets (thresholds, tunables) stay in .env
             ;;
     esac
 done < "$ENV_FILE"
+
+echo "" >> "$VAULT_JSON_FILE"
+echo "}" >> "$VAULT_JSON_FILE"
 
 if [ "$COUNT" -eq 0 ]; then
     echo ""
@@ -123,7 +182,7 @@ fi
 echo ""
 echo "🔐 Writing $COUNT secret(s) to Vault at $VAULT_PATH..."
 
-vault kv put "$VAULT_PATH" $KV_ARGS
+vault kv put "$VAULT_PATH" @"$VAULT_JSON_FILE"
 
 echo ""
 echo "✅ All $COUNT secrets written to Vault"

@@ -15,6 +15,9 @@ from models import Signal, Snapshot
 VIX_EXTREME_THRESHOLD: float = float(os.getenv("VIX_EXTREME_THRESHOLD", "35.0"))
 VIX_ELEVATED_THRESHOLD: float = float(os.getenv("VIX_ELEVATED_THRESHOLD", "25.0"))
 
+# Import normalize_score for harmonizing macro scores
+from normalizers import normalize_score  # noqa: E402
+
 
 def _safe_float(value: float | None) -> float | None:
     """Return value if finite, else None."""
@@ -54,7 +57,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="fred",
                     type="macro_risk_off",
-                    score=3.0,
+                    score=normalize_score(3.0, 0.0, 3.0),
                     confidence=0.95,
                     reason=f"VIX extreme at {vix:.1f}",
                     raw=raw_results,
@@ -65,7 +68,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="fred",
                     type="macro_risk_off",
-                    score=2.0,
+                    score=normalize_score(2.0, 0.0, 3.0),
                     confidence=0.85,
                     reason=f"VIX elevated at {vix:.1f}",
                     raw=raw_results,
@@ -78,7 +81,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             Signal(
                 source="fred",
                 type="macro_risk_off",
-                score=1.5,
+                score=normalize_score(1.5, 0.0, 3.0),
                 confidence=0.8,
                 reason=f"Yield curve inverted: {curve_slope:.0f}bps",
                 raw=raw_results,
@@ -91,7 +94,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             Signal(
                 source="fred",
                 type="macro_risk_off",
-                score=1.0,
+                score=normalize_score(1.0, 0.0, 3.0),
                 confidence=0.7,
                 reason="FRED risk-on flag is False",
                 raw=raw_results,

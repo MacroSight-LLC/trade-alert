@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections import defaultdict
 
@@ -83,8 +84,26 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
                 best[key] = sig
         deduped = list(best.values())
 
+        # Pre-LLM filter: drop symbols with < 2 distinct signal types.
+        # Single-source symbols can never pass the SA >= 3 gate, so
+        # sending them to the LLM wastes tokens.
+        unique_types = {s.type for s in deduped}
+        if len(unique_types) < 2:
+            logger.debug(
+                "Merger pre-filter: dropping %s (%d signal type(s))",
+                symbol,
+                len(unique_types),
+            )
+            continue
+
         # Aggregate strength = sum of abs(score) * confidence
-        aggregate_strength = sum(abs(s.score) * s.confidence for s in deduped)
+        raw_strength = sum(abs(s.score) * s.confidence for s in deduped)
+
+        # Diversity multiplier: rewards breadth across different signal
+        # types.  3 signals from 3 types ranks higher than 5 of 1 type.
+        # Formula: raw_strength * sqrt(unique_types / total_signals)
+        diversity = math.sqrt(len(unique_types) / max(len(deduped), 1))
+        aggregate_strength = raw_strength * diversity
 
         merged_snap = Snapshot(
             symbol=symbol,

@@ -33,6 +33,8 @@ class Signal(BaseModel):
         "insider_activity",
         "relative_strength",
         "macro_risk_off",
+        "catalyst_event",
+        "short_interest",
     ]
     score: float
     confidence: float

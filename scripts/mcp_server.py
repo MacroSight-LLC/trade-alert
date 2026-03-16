@@ -41,9 +41,12 @@ PORT_TO_MODULE: dict[int, str] = {
     8003: "discord_mcp",
     8004: "finnhub_mcp",
     8005: "rot",
+    8006: "edgar_mcp",
+    8007: "yfinance_mcp",
     8008: "trading",
     8009: "fred",
     8010: "spamshield",
+    8011: "alpaca_mcp",
 }
 
 

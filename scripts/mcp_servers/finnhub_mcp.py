@@ -224,7 +224,55 @@ async def news_symbol(params: dict[str, Any]) -> dict:
         return {"articles": []}
 
 
+async def earnings_calendar(params: dict[str, Any]) -> dict:
+    """Fetch upcoming earnings dates for a batch of symbols.
+
+    Uses the free-tier /calendar/earnings endpoint.
+
+    Params:
+        symbols: list[str] — tickers to check.
+        days_ahead: int — lookahead window (default 7).
+
+    Returns:
+        {"results": [{"symbol": str, "date": str, "epsEstimate": float|None,
+                       "revenueEstimate": float|None, "hour": str}, ...]}
+    """
+    symbols: list[str] = params.get("symbols", [])
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",")]
+    days_ahead = int(params.get("days_ahead", 7))
+    wanted = {s.upper() for s in symbols}
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    to_date = (datetime.now(timezone.utc) + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    results: list[dict] = []
+    try:
+        data = await _get(
+            "/calendar/earnings",
+            {"from": today, "to": to_date},
+        )
+        for item in (data or {}).get("earningsCalendar", []):
+            sym = (item.get("symbol") or "").upper()
+            if wanted and sym not in wanted:
+                continue
+            results.append(
+                {
+                    "symbol": sym,
+                    "date": item.get("date", ""),
+                    "epsEstimate": item.get("epsEstimate"),
+                    "revenueEstimate": item.get("revenueEstimate"),
+                    "hour": item.get("hour", ""),
+                }
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("Finnhub earnings_calendar error: %s", exc)
+
+    return {"results": results}
+
+
 TOOLS: dict[str, Any] = {
     "sentiment": sentiment,
     "news_symbol": news_symbol,
+    "earnings_calendar": earnings_calendar,
 }

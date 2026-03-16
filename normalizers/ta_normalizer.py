@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import safe_float
+from normalizers import normalize_score, safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -63,11 +63,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
         score = max(-3.0, min(3.0, float(rating)))
         confidence = min(abs(rating) / 3.0, 1.0)
+        # Harmonize TA score from [-3, +3] → [-1, +1]
+        harmonized_score = normalize_score(score, -3.0, 3.0)
 
         signal = Signal(
             source="tradingview",
             type="technical_trend",
-            score=score,
+            score=harmonized_score,
             confidence=confidence,
             reason="; ".join(reasons),
             raw=data,

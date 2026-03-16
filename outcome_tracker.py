@@ -23,9 +23,19 @@ from models import PlaybookAlert  # noqa: F401 — required project import
 logger = logging.getLogger(__name__)
 
 PRICE_POLL_INTERVAL_SECONDS: int = int(os.getenv("PRICE_POLL_INTERVAL", "60"))
-OUTCOME_WINDOW_HOURS: int = int(os.getenv("OUTCOME_WINDOW_HOURS", "4"))
+OUTCOME_WINDOW_HOURS: int = int(os.getenv("OUTCOME_WINDOW_HOURS", "4"))  # default fallback
 PRICE_FETCH_MAX_RETRIES: int = int(os.getenv("PRICE_FETCH_MAX_RETRIES", "3"))
 PRICE_FETCH_TIMEOUT: float = float(os.getenv("PRICE_FETCH_TIMEOUT", "10.0"))
+
+# Per-timeframe outcome expiry windows (hours)
+# 15m alerts should resolve faster than 1h alerts.
+_TIMEFRAME_EXPIRY_HOURS: dict[str, int] = {
+    "5m": 1,
+    "15m": 2,
+    "1h": 6,
+    "4h": 16,
+    "1D": 48,
+}
 
 _http_client: httpx.Client | None = None
 
@@ -83,7 +93,11 @@ def _finnhub_quote(symbol: str) -> float | None:
 def get_current_price(symbol: str) -> float | None:
     """Fetch latest price using a multi-source fallback chain.
 
-    Equities: Polygon prev-day close → Finnhub /quote → None
+    Equities: Finnhub /quote (real-time) → Polygon prev-day close → None
+
+    Finnhub is primary because it returns the *current* market price,
+    whereas Polygon free-tier only provides the previous-day close —
+    which can misclassify WIN/LOSS on intraday 15m alerts.
 
     Args:
         symbol: Ticker symbol (e.g. ``"AAPL"``).
@@ -91,7 +105,7 @@ def get_current_price(symbol: str) -> float | None:
     Returns:
         Latest price, or ``None`` if all sources fail.
     """
-    chain = [_polygon_prev_close, _finnhub_quote]
+    chain = [_finnhub_quote, _polygon_prev_close]
 
     for fetcher in chain:
         fetcher_name = getattr(fetcher, "__name__", repr(fetcher))
@@ -115,13 +129,20 @@ def get_current_price(symbol: str) -> float | None:
     return None
 
 
-def evaluate_outcome(alert_row: dict, current_price: float) -> str | None:
+def evaluate_outcome(
+    alert_row: dict,
+    current_price: float,
+    *,
+    timeframe: str | None = None,
+) -> str | None:
     """Determine outcome for an alert given the current market price.
 
     Args:
         alert_row: Dict with keys ``direction``, ``entry_level``,
             ``stop_level``, ``target_level``, ``fired_at`` (datetime).
         current_price: Latest market price for the symbol.
+        timeframe: Alert timeframe for per-timeframe expiry windows.
+            Falls back to ``OUTCOME_WINDOW_HOURS`` env var if not given.
 
     Returns:
         ``"WIN"``, ``"LOSS"``, ``"EXPIRED"``, or ``None`` (still open).
@@ -146,10 +167,11 @@ def evaluate_outcome(alert_row: dict, current_price: float) -> str | None:
             logger.warning("Unknown direction '%s' — cannot evaluate outcome", direction)
             return None
 
-        # Check expiry window
+        # Check expiry window (per-timeframe if available)
+        expiry_hours = _TIMEFRAME_EXPIRY_HOURS.get(timeframe or "", OUTCOME_WINDOW_HOURS)
         now = datetime.now(timezone.utc)
         if isinstance(fired_at, datetime):
-            deadline = fired_at + timedelta(hours=OUTCOME_WINDOW_HOURS)
+            deadline = fired_at + timedelta(hours=expiry_hours)
             if now >= deadline:
                 return "EXPIRED"
 
@@ -214,7 +236,11 @@ def run_tracker_cycle() -> int:
             if price is None:
                 continue
 
-            outcome = evaluate_outcome(mapped, price)
+            outcome = evaluate_outcome(
+                mapped,
+                price,
+                timeframe=row.get("timeframe"),
+            )
             if outcome is None:
                 continue
 

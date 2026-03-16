@@ -12,7 +12,7 @@ from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
 from normalizers import clamp as _clamp
-from normalizers import safe_float
+from normalizers import normalize_score, safe_float
 
 _log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="finnhub",
                     type="sentiment_bull" if score > 0 else "sentiment_bear",
-                    score=score,
+                    score=normalize_score(score, -2.5, 2.5),
                     confidence=confidence,
                     reason=f"Finnhub aggregate sentiment {fh_score:+.2f}",
                     raw=data,
@@ -88,7 +88,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         ],
                         rot_type,
                     ),
-                    score=rot_score,
+                    score=normalize_score(rot_score, -2.5, 2.5),
                     confidence=rot_conf,
                     reason=f"ROT social signal: {rot_signal}",
                     raw=data,
@@ -124,7 +124,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="rot",
                     type="options_flow",
-                    score=flow_score,
+                    score=normalize_score(flow_score, -3.0, 3.0),
                     confidence=flow_conf,
                     reason=f"Options sweep: {sweep_type} {strike} {contracts} contracts ${premium:,.0f}",
                     raw=flow_item,

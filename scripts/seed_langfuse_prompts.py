@@ -45,7 +45,14 @@ QUALITY RULES — follow these strictly:
    - Never exceed 0.95 — no setup is certain
 6. sources_agree = count of DISTINCT independent signal groups pointing same direction
    Valid groups: technical_trend, volume_spike, sentiment_bull/bear,
-   options_flow, insider_activity, relative_strength, macro_risk_off
+   options_flow, insider_activity, relative_strength, macro_risk_off,
+   catalyst_event, short_interest
+   - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
+     Positive score = catalyst imminent. Higher score = closer/more impactful.
+     Use to gauge volatility risk and event-driven opportunity.
+   - short_interest: Short interest as % of float from FINRA data.
+     Positive score = high short interest (squeeze potential).
+     Combine with volume_spike for short-squeeze conviction.
 7. ENTRY LEVEL RULES:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
@@ -65,12 +72,18 @@ QUALITY RULES — follow these strictly:
    - Insider buying + bearish technical = potential divergence — treat with caution
    - Volume_spike without directional technical confirmation = noise, not signal
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
+
+RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
+{{performance_context}}
+If the actual win-rate for your EP bucket is below 50%, lower your EP estimates.
+
 {{extra_rules}}"""
 
 USER_PROMPT = """\
 Timeframe: {{timeframe}}
 Macro Regime: {{macro_summary}}
-VIX: {{vix}} | Yield Curve: {{yc}}bps
+VIX: {{vix}} | Yield Curve: {{yc}}bps | Data: {{data_freshness}}
+Snapshot age: oldest={{snapshot_age_oldest}}s, newest={{snapshot_age_newest}}s
 
 Evaluate these {{n}} symbols and their signals:
 
@@ -95,13 +108,13 @@ Output format — a JSON array (may be empty []):
     "edge_probability": 0.78,
     "confidence": 0.80,
     "timeframe": "{{timeframe}}",
-    "thesis": "Bollinger squeeze resolving upward with 2.8x avg volume. Unusual options activity: large $185c sweep, 500+ contracts. Retail sentiment turned bullish in last 2h. Classic breakout pattern with volume confirmation.",
+    "thesis": "Bollinger squeeze resolving upward with 2.8x avg volume. Unusual options activity: large $185c sweep, 500+ contracts. Retail sentiment turned bullish in last 2h. Earnings in 2 days (BMO) adds catalyst urgency. SI at 8% with 4.2 DTC provides squeeze fuel. Classic breakout pattern with multi-source confirmation.",
     "entry": {"level": 185.00, "stop": 182.00, "target": 192.00},
     "timeframe_rationale": "15m breakout aligning with 1h uptrend — momentum expected to persist 2-4 candles.",
     "sentiment_context": "ROT: strong_bullish (0.82 conf), Finnhub aggregate +0.6. Institutional flow neutral.",
-    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts"],
+    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential"],
     "macro_regime": "Risk-on. VIX 14.2, curve +18bps. No headwinds.",
-    "sources_agree": 4
+    "sources_agree": 6
   }
 ]
 
@@ -112,6 +125,8 @@ CRITICAL CHECKS before outputting each alert:
 4. If any required field would be vague or uncertain, do NOT include that alert
 
 {{extra_rules}}
+
+{{few_shot_examples}}
 
 Return [] if no symbols meet ALL requirements.
 Return ONLY the JSON array. No other text."""

@@ -98,16 +98,23 @@ def fetch_latest_trace(session_id: str) -> dict | None:
 
 
 def _sum_tokens(observations: list[dict]) -> int:
-    """Sum total tokens across all observations in a trace.
+    """Sum total tokens across GENERATION observations in a trace.
+
+    Only counts observations of type GENERATION (LLM calls), not
+    spans or other observation types, to avoid inflating token counts.
 
     Args:
         observations: List of observation dicts from ``TraceWithFullDetails``.
 
     Returns:
-        Total token count across all observations.
+        Total token count across generation observations.
     """
     total = 0
     for obs in observations:
+        # Only count GENERATION-type observations (actual LLM calls)
+        obs_type = obs.get("type") if isinstance(obs, dict) else getattr(obs, "type", None)
+        if obs_type and str(obs_type).upper() != "GENERATION":
+            continue
         usage = obs.get("usage") if isinstance(obs, dict) else getattr(obs, "usage", None)
         if usage is None:
             continue
@@ -115,6 +122,23 @@ def _sum_tokens(observations: list[dict]) -> int:
         if tok:
             total += int(tok)
     return total
+
+
+def _count_llm_calls(observations: list[dict]) -> int:
+    """Count only GENERATION observations (actual LLM calls).
+
+    Args:
+        observations: List of observation dicts.
+
+    Returns:
+        Number of GENERATION-type observations.
+    """
+    count = 0
+    for obs in observations:
+        obs_type = obs.get("type") if isinstance(obs, dict) else getattr(obs, "type", None)
+        if obs_type and str(obs_type).upper() == "GENERATION":
+            count += 1
+    return count
 
 
 def check_output_validity(trace: dict) -> list[str]:
@@ -518,7 +542,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
 
     # observations is a list of ObservationsView dicts from fetch_trace()
     observations = trace.get("observations") or []
-    llm_calls = len(observations)
+    llm_calls = _count_llm_calls(observations)
     total_tokens = _sum_tokens(observations)
 
     # Compute health score: 1.0 = perfect, deduct 0.20 per issue, floor 0.0
@@ -546,20 +570,81 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Failed to post tokens_per_candidate score: %s", exc)
 
-    # Cost efficiency: cost per alert
-    output = trace.get("output")
-    if isinstance(output, dict) and cost:
-        try:
-            from pipeline_tracing import add_score
+    # Prompt/completion token ratio: tracks input vs output token balance.
+    # With 5939:4 ratios, this flags prompt bloat over time.
+    try:
+        from pipeline_tracing import add_score
 
+        prompt_tokens = 0
+        completion_tokens = 0
+        for obs in observations:
+            obs_type = obs.get("type") if isinstance(obs, dict) else getattr(obs, "type", None)
+            if obs_type and str(obs_type).upper() != "GENERATION":
+                continue
+            usage = obs.get("usage") if isinstance(obs, dict) else getattr(obs, "usage", None)
+            if usage is None:
+                continue
+            inp = (usage.get("input") if isinstance(usage, dict) else getattr(usage, "input", None)) or 0
+            out = (usage.get("output") if isinstance(usage, dict) else getattr(usage, "output", None)) or 0
+            prompt_tokens += int(inp)
+            completion_tokens += int(out)
+
+        if prompt_tokens > 0:
+            ratio = prompt_tokens / max(completion_tokens, 1)
             add_score(
                 trace_id,
-                "cost_per_alert",
-                cost / max(1, output.get("alerts_fired", 1)),
-                comment=f"${cost:.4f} total / alerts",
+                "prompt_token_ratio",
+                round(ratio, 1),
+                comment=f"input={prompt_tokens} output={completion_tokens} ratio={ratio:.1f}:1",
             )
-        except Exception:  # noqa: BLE001
-            pass
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Cost efficiency: cost per alert (only post when alerts actually fired)
+    output = trace.get("output")
+    alerts_fired = 0
+    if isinstance(output, dict):
+        alerts_fired = output.get("alerts_fired", 0)
+        if cost and alerts_fired > 0:
+            try:
+                from pipeline_tracing import add_score
+
+                add_score(
+                    trace_id,
+                    "cost_per_alert",
+                    cost / alerts_fired,
+                    comment=f"${cost:.4f} / {alerts_fired} alerts",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Run quality score: fires every run (even empty ones).
+    # Measures signal diversity — fraction of symbols with >= 3 signal types.
+    try:
+        from pipeline_tracing import add_score
+
+        if isinstance(output, dict) and n_candidates > 0:
+            # We can't access raw snapshots here, but we can use
+            # candidates and alerts_fired as a proxy signal.
+            # Signal diversity = candidates that survived pre-LLM filter / total pre-filter
+            # Since merger already filters < 2 types, all candidates have >= 2.
+            # score = 1.0 if alerts fired, 0.5 if candidates existed but no alerts,
+            # 0.0 if no candidates at all.
+            if alerts_fired > 0:
+                run_quality = 1.0
+            else:
+                run_quality = 0.5  # candidates existed but LLM found nothing viable
+        else:
+            run_quality = 0.0  # no candidates at all — thin signal environment
+
+        add_score(
+            trace_id,
+            "run_quality",
+            run_quality,
+            comment=f"candidates={n_candidates} alerts={alerts_fired}",
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     # Send rich embed to ops channel (both healthy and unhealthy)
     try:

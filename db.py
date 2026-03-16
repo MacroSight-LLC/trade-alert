@@ -325,10 +325,10 @@ def get_summary_stats() -> dict:
     sql = """
         SELECT
             COUNT(*) AS total_alerts,
-            SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
-            SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) AS losses,
-            SUM(CASE WHEN outcome = 'SCRATCH' THEN 1 ELSE 0 END) AS scratches,
+            COALESCE(SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END), 0) AS resolved,
+            COALESCE(SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END), 0) AS wins,
+            COALESCE(SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END), 0) AS losses,
+            COALESCE(SUM(CASE WHEN outcome = 'SCRATCH' THEN 1 ELSE 0 END), 0) AS scratches,
             ROUND(
                 CASE WHEN SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) > 0
                 THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END)
@@ -337,8 +337,8 @@ def get_summary_stats() -> dict:
             ) AS overall_winrate,
             ROUND(AVG(edge_probability)::numeric, 4) AS avg_edge,
             ROUND(AVG(outcome_pnl)::numeric, 4) AS avg_pnl,
-            SUM(CASE WHEN DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
-                THEN 1 ELSE 0 END) AS alerts_today
+            COALESCE(SUM(CASE WHEN DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
+                THEN 1 ELSE 0 END), 0) AS alerts_today
         FROM alerts
     """
     sql_kpi = """

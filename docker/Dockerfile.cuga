@@ -49,7 +49,11 @@ COPY pipeline_runner.py /app/pipeline_runner.py
 COPY alert_quality.py /app/alert_quality.py
 COPY chart_gen.py /app/chart_gen.py
 COPY langfuse_datasets.py /app/langfuse_datasets.py
+COPY validate_and_filter.py /app/validate_and_filter.py
+COPY decision_helpers.py /app/decision_helpers.py
+COPY winrate_injector.py /app/winrate_injector.py
 COPY vault_env_loader.py /app/vault_env_loader.py
+COPY discord_bot.py /app/discord_bot.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 COPY schema.sql /app/schema.sql

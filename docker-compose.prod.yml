@@ -12,10 +12,16 @@ services:
     cap_add:
       - IPC_LOCK
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-dev-root-token}
-      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+    entrypoint: ["/bin/sh", "/vault/config/entrypoint.sh"]
     ports:
       - "8200:8200"
+    volumes:
+      - vault-data:/vault/file
+      - ./deployment/vault-config.hcl:/vault/config/vault.hcl:ro
+      - ./deployment/vault-entrypoint.sh:/vault/config/entrypoint.sh:ro
+      - ./.vault-init.json:/vault/config/init.json:ro
     healthcheck:
       test:
         ["CMD-SHELL", "wget -qO- http://0.0.0.0:8200/v1/sys/health || exit 1"]
@@ -320,6 +326,78 @@ services:
       - trade-net
     restart: unless-stopped
 
+  edgar-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8006"]
+    ports:
+      - "8006:8006"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8006/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  yfinance-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8007"]
+    ports:
+      - "8007:8007"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8007/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  alpaca-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8011"]
+    ports:
+      - "8011:8011"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8011/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
   # --- Application ---
 
   cuga:
@@ -358,7 +436,11 @@ services:
       - ./alert_quality.py:/app/alert_quality.py
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
+      - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./decision_helpers.py:/app/decision_helpers.py
+      - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./discord_bot.py:/app/discord_bot.py
       - ./logs:/app/logs
       - ./tests:/app/tests
     env_file:
@@ -404,6 +486,9 @@ services:
       - ./alert_quality.py:/app/alert_quality.py
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
+      - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./decision_helpers.py:/app/decision_helpers.py
+      - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
       - ./tests:/app/tests
@@ -427,6 +512,61 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
+      TZ: America/New_York
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  # --- Discord Bot (manual trigger) ---
+
+  discord-bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuga
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["python", "discord_bot.py"]
+    volumes:
+      - ./workflows:/app/workflows
+      - ./normalizers:/app/normalizers
+      - ./models.py:/app/models.py
+      - ./merger.py:/app/merger.py
+      - ./db.py:/app/db.py
+      - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./healthcheck.py:/app/healthcheck.py
+      - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./trace_analyzer.py:/app/trace_analyzer.py
+      - ./langfuse_client.py:/app/langfuse_client.py
+      - ./prompt_manager.py:/app/prompt_manager.py
+      - ./pipeline_tracing.py:/app/pipeline_tracing.py
+      - ./pipeline_runner.py:/app/pipeline_runner.py
+      - ./alert_quality.py:/app/alert_quality.py
+      - ./chart_gen.py:/app/chart_gen.py
+      - ./langfuse_datasets.py:/app/langfuse_datasets.py
+      - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./decision_helpers.py:/app/decision_helpers.py
+      - ./winrate_injector.py:/app/winrate_injector.py
+      - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./discord_bot.py:/app/discord_bot.py
+      - ./logs:/app/logs
+    env_file:
+      - path: .env
+      - path: .env.secrets
+        required: false
+      - path: .env.vault
+        required: false
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse:3000
       TZ: America/New_York
     networks:
       - trade-net
@@ -486,6 +626,7 @@ services:
 volumes:
   redis-data:
   langfuse-data:
+  vault-data:
 
 networks:
   trade-net:
