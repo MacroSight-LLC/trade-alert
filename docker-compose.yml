@@ -107,7 +107,7 @@ services:
       - trade-net
     restart: unless-stopped
 
-  # --- MCP Services (ports 8001-8010, SSOT §3) ---
+  # --- MCP Services (ports 8001-8011, SSOT §3) ---
   # All share one image built from docker/Dockerfile.mcp (live API integrations).
   # Activate with: docker compose --profile mcp up -d
 
@@ -301,6 +301,78 @@ services:
         [
           "CMD-SHELL",
           'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8010/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  edgar-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8006"]
+    ports:
+      - "8006:8006"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8006/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  yfinance-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8007"]
+    ports:
+      - "8007:8007"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8007/health'')"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trade-net
+    restart: unless-stopped
+
+  alpaca-mcp:
+    image: trade-alert-mcp:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8011"]
+    ports:
+      - "8011:8011"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8011/health'')"',
         ]
       interval: 15s
       timeout: 5s

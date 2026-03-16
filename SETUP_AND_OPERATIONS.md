@@ -226,14 +226,14 @@ docker compose -f docker-compose.prod.yml --profile mcp down -v
 
 The Discord bot runs in the `discord-bot` container, polling the **ops channel** for commands:
 
-| Command       | Description                                        |
-| ------------- | -------------------------------------------------- |
-| `!scan`       | Run the 15m pipeline now                           |
-| `!scan 1h`    | Run the 1h pipeline now                            |
-| `!scan 15m`   | Run the 15m pipeline (explicit)                    |
-| `!status`     | Show pipeline health, Redis snapshot counts, MCP status |
-| `!last`       | Show the most recent fired alert from Postgres     |
-| `!help`       | Show available commands                            |
+| Command     | Description                                             |
+| ----------- | ------------------------------------------------------- |
+| `!scan`     | Run the 15m pipeline now                                |
+| `!scan 1h`  | Run the 1h pipeline now                                 |
+| `!scan 15m` | Run the 15m pipeline (explicit)                         |
+| `!status`   | Show pipeline health, Redis snapshot counts, MCP status |
+| `!last`     | Show the most recent fired alert from Postgres          |
+| `!help`     | Show available commands                                 |
 
 **Channel routing:**
 - **Ops channel** (`DISCORD_OPS_CHANNEL_ID`): Bot listens here for commands

@@ -79,7 +79,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 8 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 11 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
 
 Output per alert:
 
@@ -126,16 +126,19 @@ Use the existing architecture diagram as the canonical visual reference. It MUST
 
 All MCP services run in Docker, expose `/health`, and are wired into CUGA via its MCP client tooling.[web:81]
 
-| Port | Service Name       | Key Tools (examples)               | Role & Integration Notes                                                                                                                                      |
-| ---- | ------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8001 | TradingView MCP    | `bollinger_scan`, `rsi_scan`       | Primary TA: uses tradingview-ta (scraping, no API key). Rate-limited to ~10 req/min; use 8–10s inter-symbol delay, max 8 symbols per batch, 15 min cache TTL. |
-| 8002 | Polygon MCP        | `unusual_activity`, `aggs`         | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                                      |
-| 8003 | Discord MCP        | `send_rich_embed`                  | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                                          |
-| 8004 | Finnhub MCP        | `sentiment`, `news_symbol`         | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                                   |
-| 8005 | ROT MCP            | `trending_tickers`, `options_flow` | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.                      |
-| 8008 | trading‑mcp server | `screen`, `insiders`               | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal.             |
-| 8009 | FRED bundle MCP    | `vix_level`, `yield_curve`         | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                                       |
-| 8010 | SpamShieldpro MCP  | `classify_text`                    | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                                     |
+| Port | Service Name       | Key Tools (examples)                                   | Role & Integration Notes                                                                                                                                      |
+| ---- | ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 8001 | TradingView MCP    | `bollinger_scan`, `rsi_scan`                           | Primary TA: uses tradingview-ta (scraping, no API key). Rate-limited to ~10 req/min; use 8–10s inter-symbol delay, max 8 symbols per batch, 15 min cache TTL. |
+| 8002 | Polygon MCP        | `unusual_activity`, `aggs`                             | US equities/ETFs: unusual options, volume spikes, aggregate bars. Use symbol batches and query only the screener subset.                                      |
+| 8003 | Discord MCP        | `send_rich_embed`                                      | All user‑visible alerts; use a dedicated bot token and channel. Provide structured embed fields, not raw text blobs.                                          |
+| 8004 | Finnhub MCP        | `sentiment`, `news_symbol`                             | News + social sentiment by ticker. Prefer their aggregate scores instead of raw headlines for the ensemble.                                                   |
+| 8005 | ROT MCP            | `trending_tickers`, `options_flow`                     | Retail options intelligence from Reddit/social. Use their structured outputs (tickers, flow metrics) as signals; do not fetch raw posts.                      |
+| 8008 | trading‑mcp server | `screen`, `insiders`                                   | Stock screening, fundamental filters, and insider trades. Use to create a daily/rolling candidate universe and as context, not as a final signal.             |
+| 8009 | FRED bundle MCP    | `vix_level`, `yield_curve`                             | Macro regime: volatility, curve slope, risk‑on/off flags. Use in both collectors (macro snapshot) and decision prompts.                                       |
+| 8010 | SpamShieldpro MCP  | `classify_text`                                        | Generic spam/bot filter. Apply to any raw text (if ever needed) before sentiment analysis; skip items classified as spam.                                     |
+| 8006 | EDGAR MCP          | `form4_filings`, `material_events`                     | SEC EDGAR: Form 4 insider filings and 8-K material events. Feeds `insider_activity` clustering and `catalyst_event` signals via events collector.             |
+| 8007 | YFinance MCP       | `short_interest`, `options_chain`, `earnings_calendar` | Yahoo Finance: short interest ratios, options chain snapshots, earnings dates. Feeds `short_interest` and `catalyst_event` signals.                           |
+| 8011 | Alpaca MCP         | `intraday_bars`, `volume_profile`                      | Alpaca Markets: real-time intraday bars and volume acceleration. Complements Polygon for `volume_spike` signals.                                              |
 
 **Integration Best Practices (all MCPs)**
 
@@ -165,7 +168,9 @@ class Signal(BaseModel):
         'options_flow',
         'insider_activity',
         'relative_strength',
-        'macro_risk_off'
+        'macro_risk_off',
+        'catalyst_event',
+        'short_interest'
     ]
     score: float          # -3.0 (strong negative) to +3.0 (strong positive)
     confidence: float     # 0.0 (low) to 1.0 (high)
@@ -221,7 +226,7 @@ class PlaybookAlert(BaseModel):
 Key points:
 
 - Redis and Postgres services as described in v1.1.
-- 8 MCP services bound to ports 8001–8005, 8008–8010.
+- 11 MCP services bound to ports 8001–8011 (8001–8005 original, 8006 EDGAR, 8007 YFinance, 8008 Trading, 8009 FRED, 8010 SpamShield, 8011 Alpaca).
 - `cuga` service built from `docker/Dockerfile.cuga`, mounting:
     - `./workflows` → `/app/workflows`
     - `./normalizers` → `/app/normalizers`
@@ -329,8 +334,19 @@ Each normalizer MUST:
         - `score = clamp(sentiment * 2.0, -2.0, +2.0)` with `sentiment_bull` or `sentiment_bear`.
     - ROT’s “strong bullish” / “strong bearish” flags can map to ±2.5.
 - **FRED bundle → `macro_risk_off` signals:**
-    - If VIX > threshold or curve inverted beyond threshold, add `macro_risk_off` with positive `score` for risk-off (i.e., “negative for risk‑on trades”).
-
+    - If VIX > threshold or curve inverted beyond threshold, add `macro_risk_off` with positive `score` for risk-off (i.e., “negative for risk‑on trades”).- **EDGAR MCP → `catalyst_event` signals (via events_normalizer):**
+    - Form 4 insider filings: cluster multiple filings for the same symbol within 5 days.
+      If ≥ 3 insiders buy → score +2.0 (conf 0.80). Single filing → score ±1.0 (conf 0.60).
+    - 8-K material events (e.g., acquisition, guidance revision): score ±2.0 (conf 0.75) based on event type.
+- **YFinance MCP → `short_interest` signals (via si_normalizer):**
+    - Short interest ratio thresholds:
+        - SI% ≥ 25% → score +2.5 (conf 0.85) — extreme squeeze potential.
+        - SI% ≥ 15% → score +2.0 (conf 0.75) — elevated squeeze potential.
+        - SI% ≥ 10% → score +1.0 (conf 0.60) — notable short interest.
+    - YFinance also feeds earnings calendar data to `catalyst_event` via events_normalizer.
+- **Alpaca MCP → complements `volume_spike` signals:**
+    - Intraday volume acceleration detected via real-time bars.
+    - Used by collector-events.yaml alongside Polygon for confirmation volume signals.
 If a normalizer cannot confidently determine a signal, it SHOULD omit it rather than fabricate.
 
 ---
@@ -362,6 +378,13 @@ Each collector follows the template from v1.1, but now with additional best‑pr
     - Either:
         - Emit per‑symbol snapshots with macro signals, or
         - Emit one global snapshot object keyed by a dummy symbol (e.g., `__GLOBAL_MACRO__`) that the decision engine can consume.
+- **collector‑events.yaml**
+    - Call EDGAR MCP for Form 4 insider filings and 8-K material events.
+    - Call YFinance MCP for short interest ratios, options chain, and earnings calendar.
+    - Call Alpaca MCP for intraday volume acceleration.
+    - Pass EDGAR + YFinance results to `events_normalizer.normalize` → `catalyst_event` signals.
+    - Pass YFinance short interest data to `si_normalizer.normalize` → `short_interest` signals.
+    - Write snapshots to `snapshots:15m` and `snapshots:1h`.
 
 Collectors MUST:
 
