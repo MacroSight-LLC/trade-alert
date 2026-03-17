@@ -1,4 +1,10 @@
-"""Full Langfuse inspection: traces, scores, generations, datasets, prompts."""
+"""Full Langfuse inspection via the Python SDK.
+
+Use this script for rich object-oriented access to traces, scores,
+generations, datasets, and prompts through the official Langfuse client.
+
+For raw REST API access (no SDK), see ``inspect_langfuse_deep.py`` instead.
+"""
 
 from __future__ import annotations
 

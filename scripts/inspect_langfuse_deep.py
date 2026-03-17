@@ -1,4 +1,10 @@
-"""Langfuse deep inspection: scores, datasets, cost analysis via REST API."""
+"""Langfuse deep inspection via REST API (no SDK dependency).
+
+Use this script when you need raw REST-level access to Langfuse data
+(scores, datasets, cost analysis) without the Python SDK.
+
+For SDK-based inspection, see ``inspect_langfuse_full.py`` instead.
+"""
 
 from __future__ import annotations
 

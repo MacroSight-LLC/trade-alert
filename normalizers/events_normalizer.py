@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import normalize_score
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -68,7 +67,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         Signal(
                             source="finnhub",
                             type="catalyst_event",
-                            score=normalize_score(raw_score, 0.0, 3.0),
+                            score=raw_score,
                             confidence=conf,
                             reason=reason,
                             raw=data,
@@ -86,7 +85,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="edgar",
                     type="catalyst_event",
-                    score=normalize_score(2.0, 0.0, 3.0),
+                    score=2.0,
                     confidence=0.80,
                     reason="8-K material event filed in last 24h",
                     raw=data,
@@ -97,7 +96,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="edgar",
                     type="catalyst_event",
-                    score=normalize_score(1.0, 0.0, 3.0),
+                    score=1.0,
                     confidence=0.60,
                     reason=f"{filing_count} material filings in last 7d",
                     raw=data,

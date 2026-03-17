@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import normalize_score, safe_float
+from normalizers import safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -36,16 +36,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         if vol_mult is not None:
             vol_mult = safe_float(vol_mult)
             if vol_mult >= 1.5:
-                # Continuous interpolation: avoids the 1.0→2.5 cliff at 3.0x
-                # 1.5x → 1.0, 3.0x → 2.0, 5.0x → 3.0 (linearly interpolated)
+                # Step-function scoring per SSOT §7
                 if vol_mult >= 5.0:
                     vol_score = 3.0
                 elif vol_mult >= 3.0:
-                    # Interpolate 3.0→5.0 mapping to 2.0→3.0
-                    vol_score = 2.0 + (vol_mult - 3.0) / 2.0
+                    vol_score = 2.5
                 else:
-                    # Interpolate 1.5→3.0 mapping to 1.0→2.0
-                    vol_score = 1.0 + (vol_mult - 1.5) / 1.5
+                    vol_score = 1.0
 
                 unusual: list[str] = data.get("unusual_options", [])
                 reason_parts = [f"volume {vol_mult:.1f}x avg"]
@@ -56,7 +53,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="polygon",
                         type="volume_spike",
-                        score=normalize_score(vol_score, 0.0, 3.0),
+                        score=vol_score,
                         confidence=min(vol_mult / 5.0, 1.0),
                         reason="; ".join(reason_parts),
                         raw=data,
@@ -77,7 +74,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="yfinance",
                         type="options_flow",
-                        score=normalize_score(flow_score, -3.0, 3.0),
+                        score=flow_score,
                         confidence=0.70,
                         reason=f"Call/put ratio {call_put_ratio:.1f}x"
                         + (" (unusual OI)" if unusual_oi else ""),
@@ -92,7 +89,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="yfinance",
                         type="options_flow",
-                        score=normalize_score(flow_score, -3.0, 3.0),
+                        score=flow_score,
                         confidence=0.70,
                         reason=f"Put-heavy ratio {call_put_ratio:.2f}x"
                         + (" (unusual OI)" if unusual_oi else ""),
@@ -110,7 +107,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="alpaca",
                         type="volume_spike",
-                        score=normalize_score(accel_score, 0.0, 3.0),
+                        score=accel_score,
                         confidence=min(vol_accel / 5.0, 1.0),
                         reason=f"Intraday volume acceleration {vol_accel:.1f}x (last 3 bars vs prior 3)",
                         raw=data,

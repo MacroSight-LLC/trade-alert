@@ -56,7 +56,7 @@ def _put_conn(conn: psycopg2.extensions.connection) -> None:
     try:
         _get_pool().putconn(conn)
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("Failed to return connection to pool", exc_info=True)
 
 
 def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:

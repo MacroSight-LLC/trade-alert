@@ -65,7 +65,7 @@ as the Python-importable boundary — not the collectors themselves.
 When using Claude Opus 4.6 or GitHub Copilot:
 
 - Always include:
-  > “Use `CUGA‑Trading‑Alert‑System‑SPEC‑v1.2.md` as the single source of truth. Do not add new concepts or deviate from its architecture, schemas, or filenames.”
+  > "Use `CUGA‑Trading‑Alert‑System‑SPEC‑v1.3.md` as the single source of truth. Do not add new concepts or deviate from its architecture, schemas, or filenames."
 
 - When generating or editing a file:
   1. Name the target file explicitly.
@@ -425,7 +425,7 @@ Decision workflows are where the ensemble is evaluated. They MUST:
 
 ### 10.2 decision‑15m.yaml
 
-The v1.1 decision prompt remains, but in v1.2:
+The v1.1 decision prompt remains, but in v1.3:
 
 - Add explicit requirement to **return the exact `PlaybookAlert` schema** including `sources_agree`.
 - Clarify how `edge_probability` is conceptually computed (e.g., from alignment and strength) while still allowing Sonnet to reason.
@@ -487,7 +487,7 @@ Guardrail: Only one embed per alert; no additional commentary.
 
 The `alerts` table includes `id` (SERIAL), `created_at`, `updated_at` (auto-set on outcome resolution), and all `PlaybookAlert` fields stored as native columns or JSONB.
 
-Analytics to plan for later (not required in v1.2 implementation, but guiding):
+Analytics to plan for later (not required in v1.3 implementation, but guiding):
 
 - Queries that compute:
     - Winrate by `edge_probability` bucket.
@@ -515,7 +515,7 @@ When working phase‑by‑phase:
 
 1. **Open SSOT in VS Code and pin it.**
 2. For each phase, use prompts of the form:
-    - “Claude, using `CUGA‑Trading‑Alert‑System‑SPEC‑v1.2.md` as SSOT, generate the file `normalizers/ta_normalizer.py` implementing the normalizer contract in section 8. Validate that the function `normalize` returns a list of `Snapshot` models.”
+    - "Claude, using `CUGA‑Trading‑Alert‑System‑SPEC‑v1.3.md` as SSOT, generate the file `normalizers/ta_normalizer.py` implementing the normalizer contract in section 8. Validate that the function `normalize` returns a list of `Snapshot` models."
 3. For Copilot Agent:
     - “Read `SSOT.md` in the root of this repo. For Phase 3 (collectors), help me fill in `workflows/collector-sentiment.yaml` exactly as described there. Do not change any other files.”
 4. After each file is generated:

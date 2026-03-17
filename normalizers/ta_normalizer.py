@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import normalize_score, safe_float
+from normalizers import safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -37,11 +37,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             bb_width = indicators.get("bb_width")
             bb_squeeze = indicators.get("bb_squeeze", False)
             if bb_width is not None or bb_squeeze:
-                # bb_width here is |bb_position - 0.5| * 2, range [0, 1]
-                # Map: 0 (at lower band) → -1.5, 0.5 (mid) → 0, 1 (at upper) → +1.5
-                raw_bb = indicators.get("bb_width", 0.0)
-                # Reconstruct bb_position: width = |pos - 0.5| * 2
-                # We can't recover direction from width alone; use squeeze as neutral signal
+                # Can't recover direction from BB width alone; use squeeze as neutral
                 rating = 0.0  # neutral fallback from BB-only
             else:
                 continue
@@ -63,13 +59,11 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
         score = max(-3.0, min(3.0, float(rating)))
         confidence = min(abs(rating) / 3.0, 1.0)
-        # Harmonize TA score from [-3, +3] → [-1, +1]
-        harmonized_score = normalize_score(score, -3.0, 3.0)
 
         signal = Signal(
             source="tradingview",
             type="technical_trend",
-            score=harmonized_score,
+            score=score,
             confidence=confidence,
             reason="; ".join(reasons),
             raw=data,

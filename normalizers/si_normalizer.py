@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp, normalize_score, safe_float
+from normalizers import clamp, safe_float
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -70,7 +70,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 Signal(
                     source="yfinance",
                     type="short_interest",
-                    score=normalize_score(raw_score, 0.0, 3.0),
+                    score=raw_score,
                     confidence=conf,
                     reason="; ".join(reason_parts),
                     raw=data,

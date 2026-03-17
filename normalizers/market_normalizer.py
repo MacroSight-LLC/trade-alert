@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import normalize_score
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -48,7 +47,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="trading",
                         type="technical_trend",
-                        score=normalize_score(score, -3.0, 3.0),
+                        score=score,
                         confidence=conf,
                         reason=f"24h change {change:+.1f}%",
                         raw=data,
@@ -67,7 +66,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     Signal(
                         source="polygon",
                         type="relative_strength",
-                        score=normalize_score(rs_score, -3.0, 3.0),
+                        score=rs_score,
                         confidence=min(abs_rs / 10.0, 1.0),
                         reason=f"RS vs SPY {rs:+.1f}% (sym {pct_change:+.1f}%, SPY {spy_change:+.1f}%)",
                         raw=data,
@@ -88,7 +87,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         Signal(
                             source="trading",
                             type="insider_activity",
-                            score=normalize_score(1.5, -3.0, 3.0),
+                            score=1.5,
                             confidence=0.75,
                             reason="Insider buying activity",
                             raw=data,
@@ -99,7 +98,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         Signal(
                             source="trading",
                             type="insider_activity",
-                            score=normalize_score(-1.5, -3.0, 3.0),
+                            score=-1.5,
                             confidence=0.75,
                             reason="Insider selling activity",
                             raw=data,
@@ -189,7 +188,7 @@ def _add_edgar_insider_signals(
         Signal(
             source="edgar",
             type="insider_activity",
-            score=normalize_score(raw_score, -3.0, 3.0),
+            score=raw_score,
             confidence=conf,
             reason=reason,
             raw=raw_data,
