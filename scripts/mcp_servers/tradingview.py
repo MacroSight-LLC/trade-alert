@@ -125,7 +125,6 @@ def _get_analysis(
                 _time.sleep(_RETRY_DELAY * (attempt + 1))
                 continue
             logger.warning("TradingView TA failed for %s: %s", symbol, exc)
-            _CACHE[cache_key] = (now, None)
             return None
     return None
 
@@ -151,7 +150,7 @@ async def ta_scan(params: dict[str, Any]) -> dict:
         cache_key = (sym, screener, exchange, timeframe)
         if i > 0 and cache_key not in _CACHE:
             await asyncio.sleep(9.0)  # Rate limit: ~10 req/min, 9s provides margin
-        analysis = _get_analysis(sym, screener=screener, exchange=exchange, interval=timeframe)
+        analysis = await asyncio.to_thread(_get_analysis, sym, screener, exchange, timeframe)
         if analysis is None:
             continue
         indicators = analysis.get("indicators", {})

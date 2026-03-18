@@ -51,22 +51,25 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         signals: list[Signal] = []
 
         # Finnhub sentiment (SSOT §7)
+        # Skip when finnhub_score is None (unavailable) or 0.0 (neutral
+        # produces a zero-score signal with zero confidence — no value).
         fh_score: float | None = data.get("finnhub_score")
         if fh_score is not None:
             fh_score = safe_float(fh_score)
-            score = _clamp(fh_score * 2.0, -2.0, 2.0)
-            confidence = min(abs(fh_score) * 1.5, 1.0)
+            if fh_score != 0.0:
+                score = _clamp(fh_score * 2.0, -2.0, 2.0)
+                confidence = min(abs(fh_score) * 1.5, 1.0)
 
-            signals.append(
-                Signal(
-                    source="finnhub",
-                    type="sentiment_bull" if score > 0 else "sentiment_bear",
-                    score=score,
-                    confidence=confidence,
-                    reason=f"Finnhub aggregate sentiment {fh_score:+.2f}",
-                    raw=data,
+                signals.append(
+                    Signal(
+                        source="finnhub",
+                        type="sentiment_bull" if score > 0 else "sentiment_bear",
+                        score=score,
+                        confidence=confidence,
+                        reason=f"Finnhub aggregate sentiment {fh_score:+.2f}",
+                        raw=data,
+                    )
                 )
-            )
 
         # ROT social signal (SSOT §7)
         rot_signal: str | None = data.get("rot_signal")
@@ -85,6 +88,8 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                             "insider_activity",
                             "relative_strength",
                             "macro_risk_off",
+                            "catalyst_event",
+                            "short_interest",
                         ],
                         rot_type,
                     ),
@@ -96,7 +101,12 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             )
 
         # ROT options flow → options_flow signal (SSOT §7)
-        rot_flow_items: list[dict] = data.get("rot_options_flow", [])
+        # Sort by magnitude (premium) descending so we take the largest sweep
+        rot_flow_items: list[dict] = sorted(
+            data.get("rot_options_flow", []),
+            key=lambda x: abs(x.get("premium", 0)),
+            reverse=True,
+        )
         for flow_item in rot_flow_items:
             premium = flow_item.get("premium", 0)
             contracts = flow_item.get("contracts", 0)

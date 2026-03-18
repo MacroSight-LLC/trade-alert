@@ -6,9 +6,11 @@ Implements SSOT §11/§12.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
+from datetime import timedelta
 from typing import Any
 
 import psycopg2
@@ -38,7 +40,16 @@ def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
             dsn=url,
             connect_timeout=30,
         )
+        atexit.register(_close_pool)
     return _pool
+
+
+def _close_pool() -> None:
+    """Close all connections in the pool at process exit."""
+    global _pool  # noqa: PLW0603
+    if _pool is not None and not _pool.closed:
+        _pool.closeall()
+        _pool = None
 
 
 def get_conn() -> psycopg2.extensions.connection:
@@ -177,7 +188,7 @@ def get_recent_winrate_summary(days: int = 7) -> dict[str, Any]:
             ROUND(AVG(edge_probability)::numeric, 4) AS avg_ep
         FROM alerts
         WHERE outcome IS NOT NULL
-          AND created_at >= NOW() - INTERVAL '%s days'
+          AND created_at >= NOW() - %s
     """
     sql_buckets = """
         SELECT
@@ -191,16 +202,17 @@ def get_recent_winrate_summary(days: int = 7) -> dict[str, Any]:
             ) AS actual_winrate
         FROM alerts
         WHERE outcome IS NOT NULL
-          AND created_at >= NOW() - INTERVAL '%s days'
+          AND created_at >= NOW() - %s
         GROUP BY bucket
         ORDER BY bucket DESC
     """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql_summary, (days,))
+            interval = timedelta(days=days)
+            cur.execute(sql_summary, (interval,))
             summary = dict(cur.fetchone())
-            cur.execute(sql_buckets, (days,))
+            cur.execute(sql_buckets, (interval,))
             buckets = [dict(row) for row in cur.fetchall()]
             summary["ep_calibration"] = buckets
             return summary
@@ -263,14 +275,14 @@ def get_alert_frequency(days: int = 30) -> list[dict]:
             SUM(CASE WHEN direction = 'SHORT' THEN 1 ELSE 0 END) AS shorts,
             SUM(CASE WHEN direction = 'WATCH' THEN 1 ELSE 0 END) AS watches
         FROM alerts
-        WHERE created_at >= NOW() - INTERVAL '%s days'
+        WHERE created_at >= NOW() - %s
         GROUP BY date
         ORDER BY date
     """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, (days,))
+            cur.execute(sql, (timedelta(days=days),))
             return [dict(row) for row in cur.fetchall()]
     finally:
         _put_conn(conn)

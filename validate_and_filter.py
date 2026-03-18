@@ -38,6 +38,7 @@ class GateRejection(str, Enum):
     CONF_THRESHOLD = "conf_threshold"
     RR_MINIMUM = "rr_minimum"
     RR_ZERO_RISK = "rr_zero_risk"
+    ENTRY_ORDER_INVALID = "entry_order_invalid"
     MACRO_VETO = "macro_veto"
     VIX_SOFT = "vix_soft"
 
@@ -77,9 +78,22 @@ def _load_ep_ceiling() -> dict[int, float]:
 EP_CEILING: dict[int, float] = _load_ep_ceiling()
 
 # Per-timeframe gate thresholds (SSOT §10.2 / §10.3)
-_GATE_EP: dict[str, float] = {"15m": 0.70, "1h": 0.75}
-_GATE_SA: int = 3
-_GATE_CONF: float = 0.75
+# Configurable via env vars: GATE_EP_15M, GATE_EP_1H, GATE_SA, GATE_CONF
+_GATE_EP: dict[str, float] = {
+    "15m": float(os.environ.get("GATE_EP_15M", "0.70")),
+    "1h": float(os.environ.get("GATE_EP_1H", "0.75")),
+}
+_GATE_SA: int = int(os.environ.get("GATE_SA", "3"))
+_GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
+
+# Macro veto bypass thresholds (configurable)
+_MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))
+_MACRO_VETO_EP: float = float(os.environ.get("MACRO_VETO_EP", "0.90"))
+
+# VIX soft-gate bypass thresholds (configurable)
+_VIX_SOFT_THRESHOLD: float = float(os.environ.get("VIX_SOFT_THRESHOLD", "25.0"))
+_VIX_SOFT_SA: int = int(os.environ.get("VIX_SOFT_SA", "4"))
+_VIX_SOFT_EP: float = float(os.environ.get("VIX_SOFT_EP", "0.80"))
 
 
 def _parse_snapshots(snapshots_json: str) -> list[dict[str, Any]]:
@@ -211,6 +225,33 @@ def validate_and_filter(
             logger.warning("PlaybookAlert validation failed for %s: %s", item, e)
             continue
 
+        # ── Entry-order validation (Gate 0) ──────────────────────
+        # LONG must have stop < level < target.
+        # SHORT must have target < level < stop.
+        # WATCH alerts are exempt.
+        if alert.direction == "LONG":
+            if not (alert.entry["stop"] < alert.entry["level"] < alert.entry["target"]):
+                logger.warning(
+                    "Entry order invalid: %s LONG stop=%.2f level=%.2f target=%.2f",
+                    alert.symbol,
+                    alert.entry["stop"],
+                    alert.entry["level"],
+                    alert.entry["target"],
+                )
+                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
+                continue
+        elif alert.direction == "SHORT":
+            if not (alert.entry["target"] < alert.entry["level"] < alert.entry["stop"]):
+                logger.warning(
+                    "Entry order invalid: %s SHORT target=%.2f level=%.2f stop=%.2f",
+                    alert.symbol,
+                    alert.entry["target"],
+                    alert.entry["level"],
+                    alert.entry["stop"],
+                )
+                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
+                continue
+
         # ── VIX universal hard gate ──────────────────────────────
         # When VIX > 30 the market is in extreme stress.  Reject ALL
         # directional signals (LONG/SHORT) regardless of risk_on flag
@@ -257,6 +298,13 @@ def validate_and_filter(
                     alert.sources_agree,
                     actual_sources,
                 )
+                if add_score_fn and trace_id:
+                    add_score_fn(
+                        trace_id,
+                        "sources_agree_override",
+                        float(sa_delta),
+                        comment=f"{alert.symbol}: claimed {alert.sources_agree}, actual {actual_sources}",
+                    )
                 alert.sources_agree = actual_sources
 
         # ── EP ceiling by actual source count ────────────────────
@@ -264,7 +312,12 @@ def validate_and_filter(
         # distinct signal types actually appear in the snapshot.
         # Prevents the LLM from assigning inflated confidence with
         # thin supporting evidence.
-        ceiling = EP_CEILING.get(min(actual_sources, 7), 0.95) if actual_sources > 0 else 0.95
+        # When actual_sources == 0, cap aggressively at 0.50 — no
+        # evidence should not yield a high-confidence alert.
+        if actual_sources == 0:
+            ceiling = 0.50
+        else:
+            ceiling = EP_CEILING.get(min(actual_sources, 7), 0.95)
         if alert.edge_probability > ceiling:
             original_ep = alert.edge_probability
             alert.edge_probability = ceiling
@@ -318,6 +371,17 @@ def validate_and_filter(
                 )
                 rejections.append((alert.symbol, GateRejection.RR_ZERO_RISK))
                 continue
+            # Reject unrealistic risk: stop so close to entry that R:R
+            # is meaningless (< 0.1% of entry price).
+            if risk < alert.entry["level"] * 0.001:
+                logger.warning(
+                    "R:R micro-risk rejected: %s risk=%.4f < 0.1%% of level=%.2f",
+                    alert.symbol,
+                    risk,
+                    alert.entry["level"],
+                )
+                rejections.append((alert.symbol, GateRejection.RR_ZERO_RISK))
+                continue
             if reward / risk < 2.0:
                 logger.info(
                     "Alert filtered: %s R:R %.1f:1 below 2:1 minimum",
@@ -330,7 +394,16 @@ def validate_and_filter(
         # ── 1h macro veto: strong macro_risk_off discounts longs ─
         # After score harmonization, macro_risk_off scores are in [-1, +1].
         # 0.30 corresponds to the old 2.0 on [0, 3] scale.
-        if timeframe == "1h" and alert.direction == "LONG" and macro_risk_off_score >= 0.30:
+        # High-conviction bypass: SA >= 6 AND EP >= 0.90 overrides macro veto.
+        _macro_high_conviction = (
+            alert.sources_agree >= _MACRO_VETO_SA and alert.edge_probability >= _MACRO_VETO_EP
+        )
+        if (
+            timeframe == "1h"
+            and alert.direction == "LONG"
+            and macro_risk_off_score >= 0.30
+            and not _macro_high_conviction
+        ):
             logger.info(
                 "Macro veto: %s LONG rejected (macro_risk_off score=%.2f)",
                 alert.symbol,
@@ -345,16 +418,18 @@ def validate_and_filter(
         # squeezes are common in volatile risk-on rebounds).
         # High-conviction setups (SA >= 4 AND EP >= 0.80) pass even
         # in elevated-VIX environments.
-        _high_conviction = alert.sources_agree >= 4 and alert.edge_probability >= 0.80
+        _high_conviction = alert.sources_agree >= _VIX_SOFT_SA and alert.edge_probability >= _VIX_SOFT_EP
         _vix_soft_triggered = False
-        if vix > 25 and not _high_conviction:
+        if vix > _VIX_SOFT_THRESHOLD and not _high_conviction:
             if risk_off and alert.direction == "LONG":
                 _vix_soft_triggered = True
             elif not risk_off and alert.direction == "SHORT":
                 _vix_soft_triggered = True
         if _vix_soft_triggered:
+            # VIX soft gate: elevated volatility + directional mismatch.
+            # These are borderline — log with REVIEW flag for manual inspection.
             logger.info(
-                "VIX gate: %s %s suppressed (VIX=%.1f, risk_off=%s, sa=%d, ep=%.2f)",
+                "VIX gate [REVIEW]: %s %s suppressed (VIX=%.1f, risk_off=%s, sa=%d, ep=%.2f)",
                 alert.symbol,
                 alert.direction,
                 vix,
@@ -368,6 +443,19 @@ def validate_and_filter(
         alerts.append(alert)
 
     logger.info("Decision-%s: %d alerts passed gates", timeframe, len(alerts))
+
+    # ── Log sample rejections per gate for debugging ──────────────
+    gate_samples: dict[str, list[str]] = {}
+    for sym, gate in rejections:
+        gate_samples.setdefault(gate.value, []).append(sym)
+    for gate_name, symbols in gate_samples.items():
+        sample = symbols[:3]  # cap at 3 examples per gate
+        logger.info(
+            "Gate %s rejected %d alerts (sample: %s)",
+            gate_name,
+            len(symbols),
+            ", ".join(sample),
+        )
 
     # ── Structured gate telemetry ─────────────────────────────────
     if add_score_fn and trace_id:

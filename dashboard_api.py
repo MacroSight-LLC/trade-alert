@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -113,7 +114,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("DASHBOARD_CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["GET"],
     allow_headers=["*"],
 )

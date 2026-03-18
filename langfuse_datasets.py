@@ -91,10 +91,13 @@ def capture_decision_run(
 
     try:
         # Parse alerts for the expected output
-        try:
-            parsed_alerts = json.loads(alerts_json)
-        except (json.JSONDecodeError, TypeError):
-            parsed_alerts = []
+        if isinstance(alerts_json, list):
+            parsed_alerts = alerts_json
+        else:
+            try:
+                parsed_alerts = json.loads(alerts_json)
+            except (json.JSONDecodeError, TypeError):
+                parsed_alerts = []
 
         input_data = {
             "timeframe": timeframe,
@@ -124,6 +127,7 @@ def capture_decision_run(
             expected_output=expected_output,
             metadata=metadata,
         )
+        lf.flush()
         logger.info(
             "Captured decision run to dataset '%s': %s (%d alerts)",
             DATASET_NAME,

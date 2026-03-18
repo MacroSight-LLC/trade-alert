@@ -5,10 +5,13 @@ Transforms earnings proximity and 8-K filings into ``catalyst_event`` signals.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
+
+_log = logging.getLogger(__name__)
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -74,7 +77,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         )
                     )
             except (ValueError, TypeError):
-                pass  # Unparseable date — skip
+                _log.warning("Unparseable earnings date for %s: %r", symbol, earnings_date_str)
 
         # 8-K / material filing scoring
         recent_8k: bool = data.get("recent_8k", False)
@@ -86,7 +89,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     source="edgar",
                     type="catalyst_event",
                     score=2.0,
-                    confidence=0.80,
+                    confidence=0.75,
                     reason="8-K material event filed in last 24h",
                     raw=data,
                 )

@@ -9,7 +9,7 @@
 #
 # Falls back silently if Vault is not configured or unreachable.
 # ──────────────────────────────────────────────────────────────
-set -e
+set -euo pipefail
 
 if [ -n "$VAULT_ADDR" ] && [ -n "$VAULT_TOKEN" ]; then
     echo "[entrypoint] Loading secrets from Vault ($VAULT_ADDR)..."

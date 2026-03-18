@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,7 +27,7 @@ REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
 REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
-# SSOT §3: all 8 MCP services with /health endpoints
+# SSOT §3: all 11 MCP services with /health endpoints
 # Uses env-var overrides matching pipeline_runner.py pattern
 MCP_SERVICES: list[tuple[str, str]] = [
     ("tradingview-mcp", os.getenv("TRADINGVIEW_MCP_URL", "http://tradingview-mcp:8001") + "/health"),
@@ -34,9 +35,12 @@ MCP_SERVICES: list[tuple[str, str]] = [
     ("discord-mcp", os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003") + "/health"),
     ("finnhub-mcp", os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004") + "/health"),
     ("rot-mcp", os.getenv("ROT_MCP_URL", "http://rot-mcp:8005") + "/health"),
+    ("edgar-mcp", os.getenv("EDGAR_MCP_URL", "http://edgar-mcp:8006") + "/health"),
+    ("yfinance-mcp", os.getenv("YFINANCE_MCP_URL", "http://yfinance-mcp:8007") + "/health"),
     ("trading-mcp", os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008") + "/health"),
     ("fred-mcp", os.getenv("FRED_MCP_URL", "http://fred-mcp:8009") + "/health"),
     ("spamshield-mcp", os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010") + "/health"),
+    ("alpaca-mcp", os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011") + "/health"),
 ]
 
 
@@ -183,20 +187,34 @@ def check_mcps(timeout: float | None = None) -> tuple[list[str], list[str]]:
     """
     if timeout is None:
         timeout = MCP_HEALTH_TIMEOUT
+    max_retries = int(os.getenv("MCP_HEALTH_RETRIES", "2"))
     healthy: list[str] = []
     unhealthy: list[str] = []
     for name, url in MCP_SERVICES:
-        try:
-            resp = httpx.get(url, timeout=timeout)
-            if resp.status_code == 200:
-                healthy.append(name)
-                logger.info("Healthcheck: MCP %s OK", name)
-            else:
-                unhealthy.append(name)
-                logger.warning("Healthcheck: MCP %s returned %d", name, resp.status_code)
-        except httpx.HTTPError as exc:
+        ok = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = httpx.get(url, timeout=timeout)
+                if resp.status_code == 200:
+                    healthy.append(name)
+                    logger.info("Healthcheck: MCP %s OK", name)
+                    ok = True
+                    break
+                logger.warning(
+                    "Healthcheck: MCP %s returned %d (attempt %d/%d)",
+                    name,
+                    resp.status_code,
+                    attempt,
+                    max_retries,
+                )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Healthcheck: MCP %s unreachable (attempt %d/%d) — %s", name, attempt, max_retries, exc
+                )
+            if attempt < max_retries:
+                time.sleep(1.0)
+        if not ok:
             unhealthy.append(name)
-            logger.warning("Healthcheck: MCP %s unreachable — %s", name, exc)
     return healthy, unhealthy
 
 

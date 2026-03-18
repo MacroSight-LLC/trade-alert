@@ -217,8 +217,8 @@ class TestAnalyzePipelineTrace:
             "total_cost": 0.10,
             "latency": 30.0,
             "observations": [
-                {"usage": {"total": 2500}},
-                {"usage": {"total": 2500}},
+                {"type": "GENERATION", "usage": {"total": 2500}},
+                {"type": "GENERATION", "usage": {"total": 2500}},
             ],
         }
         result = analyze_pipeline_trace("15m")

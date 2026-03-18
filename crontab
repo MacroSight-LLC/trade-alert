@@ -3,6 +3,8 @@
 # Uses pipeline_runner.py to interpret YAML workflow DSL.
 # Container TZ=America/New_York — all times are ET (DST-aware).
 
+TZ=America/New_York
+
 # ── 15m pipeline — US market hours Mon-Fri 9:30-16:00 ET ────────────────────
 30,45 9 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
 */15 10-15 * * 1-5 cd /app && python pipeline_runner.py workflows/orchestrator-15m.yaml >> /app/logs/cron.log 2>&1
@@ -14,5 +16,8 @@
 # ── Outcome tracker — extended hours for position resolution ─────────────────
 */15 9-18 * * 1-5 flock -n /tmp/outcome-tracker.lock -c 'cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1'
 
-# ── Healthcheck — 24/7 ──────────────────────────────────────────────────────
-0 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1
+# ── Healthcheck — every 15 min, 24/7 ────────────────────────────────────────────
+*/15 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1
+
+# ── Log rotation — daily at midnight, keep last 7 days ────────────────────────
+0 0 * * * cd /app/logs && tail -50000 health.jsonl > health.jsonl.tmp && mv health.jsonl.tmp health.jsonl 2>/dev/null; tail -50000 cron.log > cron.log.tmp && mv cron.log.tmp cron.log 2>/dev/null

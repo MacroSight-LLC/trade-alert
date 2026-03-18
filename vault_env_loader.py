@@ -100,6 +100,12 @@ def load_vault_secrets() -> int:
                 # Vault field names are UPPER_CASE env var names by convention.
                 env_key = key.upper()
                 if value is not None:
+                    existing = os.environ.get(env_key)
+                    if existing is not None:
+                        logger.info(
+                            "Vault → os.environ[%s] (overwriting existing value)",
+                            env_key,
+                        )
                     os.environ[env_key] = str(value)
                     count += 1
                     logger.debug("Vault → os.environ[%s]", env_key)

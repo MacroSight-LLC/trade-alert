@@ -59,6 +59,9 @@ MCP_ENDPOINTS: dict[str, str] = {
 _workflow_mcp_endpoints: dict[str, str] = {}
 
 MCP_TIMEOUT = float(os.environ.get("MCP_TIMEOUT", "150"))
+if MCP_TIMEOUT <= 0:
+    logger.warning("MCP_TIMEOUT=%s invalid, falling back to 150s", MCP_TIMEOUT)
+    MCP_TIMEOUT = 150.0
 
 
 def _new_http_client() -> httpx.AsyncClient:
@@ -327,8 +330,15 @@ def _llm_call(
     *,
     trace_id: str | None = None,
     step_name: str = "llm-call",
+    max_retries: int = 3,
 ) -> str:
-    """Call the LLM via litellm.completion with Langfuse tracing."""
+    """Call the LLM via litellm.completion with Langfuse tracing.
+
+    Retries transient failures with exponential backoff + jitter
+    (SSOT §0.1: all external calls must have retries).
+    """
+    import random
+
     import litellm
 
     # Parse SYSTEM: ... USER: ... format if present
@@ -367,17 +377,41 @@ def _llm_call(
         lf_metadata["prompt_version"] = get_prompt_version()
         lf_metadata["prompt_source"] = get_prompt_source()
         lf_metadata["gates"] = get_gate_defaults()
-    except Exception:  # noqa: BLE001
+    except (ImportError, AttributeError, TypeError):
         pass
 
-    response = litellm.completion(
-        model=litellm_model,
-        messages=messages,
-        max_tokens=4096,
-        temperature=0.2,
-        metadata=lf_metadata,
-    )
-    return response.choices[0].message.content
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = litellm.completion(
+                model=litellm_model,
+                messages=messages,
+                max_tokens=4096,
+                temperature=0.2,
+                timeout=120,
+                metadata=lf_metadata,
+            )
+            return response.choices[0].message.content
+        except (
+            litellm.exceptions.RateLimitError,
+            litellm.exceptions.ServiceUnavailableError,
+            litellm.exceptions.APIConnectionError,
+            litellm.exceptions.Timeout,
+        ) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                backoff = (2**attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "LLM call attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt,
+                    max_retries,
+                    type(exc).__name__,
+                    backoff,
+                )
+                time.sleep(backoff)
+            else:
+                logger.error("LLM call failed after %d attempts: %s", max_retries, exc)
+    raise last_exc  # type: ignore[misc]
 
 
 # ── Step executors ───────────────────────────────────────────────────
@@ -392,11 +426,72 @@ def _exec_code_step(
 
     The code block can set ``result`` to return a value. It has access
     to ``steps`` (prior results) and ``mcp_call`` function.
+
+    __builtins__ is restricted to a safe subset to limit the attack
+    surface of exec(), while preserving the builtins that workflow
+    code blocks actually need.
     """
+    import builtins as _builtins_mod
+
+    _ALLOWED_BUILTINS = {
+        "__build_class__",
+        "__name__",
+        "__import__",
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "dict",
+        "enumerate",
+        "filter",
+        "float",
+        "frozenset",
+        "getattr",
+        "hasattr",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "next",
+        "print",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "type",
+        "zip",
+        "True",
+        "False",
+        "None",
+        "KeyError",
+        "ValueError",
+        "TypeError",
+        "IndexError",
+        "AttributeError",
+        "Exception",
+        "RuntimeError",
+        "StopIteration",
+        "NotImplementedError",
+    }
+    restricted_builtins = {
+        k: getattr(_builtins_mod, k) for k in _ALLOWED_BUILTINS if hasattr(_builtins_mod, k)
+    }
+
     local_ns: dict[str, Any] = {
         "steps": steps,
         "mcp_call": mcp_call,
         "inputs": extra_vars or {},
+        "__builtins__": restricted_builtins,
     }
     if extra_vars:
         local_ns.update(extra_vars)
@@ -443,7 +538,14 @@ def _exec_parallel_tool_calls(
         loop.close()
     for i, r in enumerate(raw):
         if isinstance(r, Exception):
-            logger.warning("Parallel tool call %d failed: %s", i, r)
+            call_info = calls[i] if i < len(calls) else {}
+            logger.warning(
+                "Parallel tool call %d failed: tool=%s method=%s error=%s",
+                i,
+                call_info.get("tool", "?"),
+                call_info.get("method", "?"),
+                r,
+            )
             results[i] = {"error": str(r)}
         else:
             results[i] = r

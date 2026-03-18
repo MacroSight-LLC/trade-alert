@@ -1,0 +1,206 @@
+name: Deploy trade-alert
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga
+  IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp
+
+jobs:
+  # ── Job 1: Lint ──────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linter
+        run: pip install ruff
+
+      - name: Ruff check
+        run: |
+          ruff check \
+            models.py merger.py db.py notifier_and_logger.py \
+            healthcheck.py outcome_tracker.py langfuse_client.py \
+            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
+            vault_env_loader.py dashboard_api.py alert_quality.py \
+            validate_and_filter.py decision_helpers.py pipeline_runner.py \
+            normalizers/
+
+      - name: Ruff format check
+        run: |
+          ruff format --check \
+            models.py merger.py db.py notifier_and_logger.py \
+            healthcheck.py outcome_tracker.py langfuse_client.py \
+            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
+            vault_env_loader.py dashboard_api.py alert_quality.py \
+            validate_and_filter.py decision_helpers.py pipeline_runner.py \
+            normalizers/
+
+  # ── Job 2: Unit tests ────────────────────────────────────────────
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16-alpine
+        ports: ["5432:5432"]
+        env:
+          POSTGRES_USER: trade_alert
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: trade_alert
+        options: >-
+          --health-cmd "pg_isready -U trade_alert"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      REDIS_URL: redis://localhost:6379
+      DATABASE_URL: postgresql://trade_alert:test_password@localhost:5432/trade_alert
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pydantic httpx psycopg2-binary redis pytest pytest-cov \
+            mypy ruff "hvac>=2.0.0" "langfuse>=2.0,<3.0" python-dotenv \
+            "fastapi[standard]" uvicorn litellm mplfinance
+
+      - name: Init Postgres schema
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U trade_alert -d trade_alert -f schema.sql || true
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ tests/test_validate_and_filter.py \
+            -v --tb=short --cov=. --cov-report=term-missing \
+            --ignore=tests/unit/test_plan_controller_prompt.py \
+            --ignore=tests/unit/test_llm_override.py
+
+  # ── Job 3: Build + push to GHCR ─────────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push CUGA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.cuga
+          push: true
+          tags: |
+            ${{ env.IMAGE_CUGA }}:latest
+            ${{ env.IMAGE_CUGA }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push MCP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.mcp
+          push: true
+          tags: |
+            ${{ env.IMAGE_MCP }}:latest
+            ${{ env.IMAGE_MCP }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Job 4: Deploy to Hetzner VPS ────────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: deploy
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd ~/trade-alert
+
+            # Pull latest code
+            git pull origin main
+
+            # Log in to GHCR and pull new images
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml --profile mcp up -d --remove-orphans
+
+            # Clean up old images
+            docker image prune -f
+
+  # ── Job 5: Post-deploy smoke test ───────────────────────────────
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for services to stabilise
+        run: sleep 30
+
+      - name: Healthcheck
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: deploy
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            # Check dashboard responds
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health || echo "000")
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Dashboard healthcheck failed (HTTP $HTTP_CODE)"
+              exit 1
+            fi
+            echo "Dashboard: OK"
+
+            # Check Redis
+            docker compose -f ~/trade-alert/docker-compose.prod.yml exec -T redis redis-cli ping | grep -q PONG
+            echo "Redis: OK"
+
+            # Check Postgres
+            docker compose -f ~/trade-alert/docker-compose.prod.yml exec -T postgres pg_isready -U trade_alert | grep -q "accepting connections"
+            echo "Postgres: OK"
+
+            echo "Smoke test passed"

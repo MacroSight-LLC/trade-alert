@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 PRICE_POLL_INTERVAL_SECONDS: int = int(os.getenv("PRICE_POLL_INTERVAL", "60"))
 OUTCOME_WINDOW_HOURS: int = int(os.getenv("OUTCOME_WINDOW_HOURS", "4"))  # default fallback
+OUTCOME_OPEN_ALERT_LIMIT: int = int(os.getenv("OUTCOME_OPEN_ALERT_LIMIT", "200"))
+STALE_ALERT_DAYS: int = int(os.getenv("STALE_ALERT_DAYS", "7"))
 PRICE_FETCH_MAX_RETRIES: int = int(os.getenv("PRICE_FETCH_MAX_RETRIES", "3"))
 PRICE_FETCH_TIMEOUT: float = float(os.getenv("PRICE_FETCH_TIMEOUT", "10.0"))
 
@@ -216,7 +218,7 @@ def run_tracker_cycle() -> int:
     """
     resolved = 0
     try:
-        rows = get_recent_alerts(limit=50)
+        rows = get_recent_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
     except Exception as exc:
         logger.error("Failed to fetch recent alerts: %s", exc)
         return 0
@@ -277,6 +279,34 @@ def run_tracker_cycle() -> int:
     return resolved
 
 
+def _expire_stale_alerts() -> int:
+    """Auto-expire open alerts older than STALE_ALERT_DAYS.
+
+    Returns:
+        Number of alerts expired this cycle.
+    """
+    expired = 0
+    try:
+        rows = get_recent_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            if row.get("outcome") is not None:
+                continue
+            created = row.get("created_at")
+            if isinstance(created, datetime) and (now - created).days >= STALE_ALERT_DAYS:
+                update_outcome(row["id"], "SCRATCH", 0.0)
+                logger.info(
+                    "Expired stale alert %s (id=%s, age=%dd)",
+                    row.get("symbol"),
+                    row["id"],
+                    (now - created).days,
+                )
+                expired += 1
+    except Exception as exc:
+        logger.error("Stale alert cleanup failed: %s", exc)
+    return expired
+
+
 def run_tracker_loop() -> None:
     """Continuous polling loop for standalone deployment.
 
@@ -290,7 +320,8 @@ def run_tracker_loop() -> None:
     try:
         while True:
             resolved = run_tracker_cycle()
-            logger.info("Tracker cycle complete: %d outcomes resolved", resolved)
+            stale = _expire_stale_alerts()
+            logger.info("Tracker cycle complete: %d outcomes resolved, %d stale expired", resolved, stale)
             time.sleep(PRICE_POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         logger.info("Outcome tracker stopped.")

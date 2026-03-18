@@ -44,15 +44,24 @@ QUALITY RULES — follow these strictly:
    - 0.86-0.95: Exceptional confluence across 4+ sources, textbook setup
    - Never exceed 0.95 — no setup is certain
 6. sources_agree = count of DISTINCT independent signal groups pointing same direction
-   Valid groups: technical_trend, volume_spike, sentiment_bull/bear,
+   Valid groups: technical_trend, volume_spike, sentiment_bull, sentiment_bear,
    options_flow, insider_activity, relative_strength, macro_risk_off,
    catalyst_event, short_interest
+   - sentiment_bull and sentiment_bear are SEPARATE groups — never merge them.
+     If a symbol has both, they represent conflicting signals from different sources.
    - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
      Positive score = catalyst imminent. Higher score = closer/more impactful.
      Use to gauge volatility risk and event-driven opportunity.
    - short_interest: Short interest as % of float from FINRA data.
      Positive score = high short interest (squeeze potential).
      Combine with volume_spike for short-squeeze conviction.
+   - insider_activity: SEC Form 4 cluster buys/sells from EDGAR.
+     Recent insider buys with score > 1.0 = strong conviction signal.
+   WEIGHTING GUIDANCE:
+   - technical_trend + volume_spike together are stronger than either alone
+   - options_flow large sweeps (high score) outweigh small mixed flow
+   - insider_activity is a slow but reliable signal — weight highly for 1h timeframe
+   - short_interest alone is not actionable; it amplifies existing bullish signals
 7. ENTRY LEVEL RULES:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
@@ -67,10 +76,16 @@ QUALITY RULES — follow these strictly:
    - Weight higher-confidence signals more heavily in your assessment
    - If the strongest signal has score < 1.0, the setup is likely not tradeable
 10. CONTRADICTION HANDLING:
-   - If sentiment_bull AND sentiment_bear both present, they cancel — treat as neutral
+   - If sentiment_bull AND sentiment_bear both present for the same symbol,
+     compare their confidence scores: the higher-confidence one wins but
+     reduce net sentiment conviction by 30%. If both are within 0.05 confidence,
+     treat sentiment as fully neutral — do not count either toward sources_agree.
    - If technical_trend conflicts with options_flow direction, downgrade edge_probability
-   - Insider buying + bearish technical = potential divergence — treat with caution
-   - Volume_spike without directional technical confirmation = noise, not signal
+     by at least 0.05 and note the divergence in thesis.
+   - Insider buying + bearish technical = potential bottom — weight insider signal
+     more heavily at 1h but treat with caution at 15m.
+   - Volume_spike without directional technical confirmation = noise, not signal.
+     Do not count it toward sources_agree unless another directional source confirms.
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):

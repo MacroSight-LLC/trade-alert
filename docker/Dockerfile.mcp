@@ -23,6 +23,9 @@ COPY scripts/mcp_server.py /app/mcp_server.py
 COPY scripts/mcp_servers/ /app/mcp_servers/
 COPY vault_env_loader.py /app/vault_env_loader.py
 
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
 EXPOSE 8001-8011
 
 ENTRYPOINT ["python", "mcp_server.py"]

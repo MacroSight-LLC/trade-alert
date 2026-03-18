@@ -14,6 +14,7 @@ import os
 from collections import defaultdict
 
 import redis
+from pydantic import ValidationError
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from models import Signal, Snapshot
@@ -24,6 +25,21 @@ REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
 _raw_top_n = int(os.getenv("MERGER_TOP_N", "20"))
 MERGER_TOP_N: int = _raw_top_n if _raw_top_n > 0 else 20
 REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
+
+# Module-level Redis connection pool (reused across merge() calls)
+_redis_pool: redis.ConnectionPool | None = None
+
+
+def _get_redis() -> redis.Redis:
+    """Return a Redis client backed by a module-level connection pool."""
+    global _redis_pool  # noqa: PLW0603
+    if _redis_pool is None:
+        _redis_pool = redis.ConnectionPool.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=REDIS_SOCKET_TIMEOUT,
+        )
+    return redis.Redis(connection_pool=_redis_pool)
 
 
 def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
@@ -43,7 +59,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         limit = MERGER_TOP_N
 
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        r = _get_redis()
         raw_entries: list[str] = r.lrange(f"snapshots:{timeframe}", 0, -1)
     except redis.RedisError as exc:
         logger.error("Redis read failed for snapshots:%s — %s", timeframe, exc)
@@ -57,7 +73,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
     for entry in raw_entries:
         try:
             snapshots.append(Snapshot.model_validate_json(entry))
-        except Exception as exc:  # noqa: BLE001
+        except (ValidationError, ValueError) as exc:
             logger.warning("Skipping malformed snapshot entry — %s", exc)
 
     # Filter pseudo-symbols (e.g. __GLOBAL_MACRO__) that are not real tickers
@@ -76,19 +92,21 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         for snap in group:
             all_signals.extend(snap.signals)
 
-        # Deduplicate: same (source, type) → keep highest abs(score)
-        best: dict[tuple[str, str], Signal] = {}
+        # Deduplicate: same (source, type, sign) → keep highest abs(score).
+        # Using sign-aware keys so a bearish -2.5 and bullish +2.0 from
+        # the same source+type are both preserved (not silently replaced).
+        best: dict[tuple[str, str, bool], Signal] = {}
         for sig in all_signals:
-            key = (sig.source, sig.type)
+            key = (sig.source, sig.type, sig.score >= 0)
             if key not in best or abs(sig.score) > abs(best[key].score):
                 best[key] = sig
         deduped = list(best.values())
 
-        # Pre-LLM filter: drop symbols with < 2 distinct signal types.
-        # Single-source symbols can never pass the SA >= 3 gate, so
-        # sending them to the LLM wastes tokens.
+        # Pre-LLM filter: drop symbols with < 3 distinct signal types.
+        # The SA >= 3 gate requires at least 3 aligned sources, so
+        # sending symbols with fewer types wastes LLM tokens.
         unique_types = {s.type for s in deduped}
-        if len(unique_types) < 2:
+        if len(unique_types) < 3:
             logger.debug(
                 "Merger pre-filter: dropping %s (%d signal type(s))",
                 symbol,
@@ -124,17 +142,18 @@ def get_macro_regime() -> dict:
 
     Returns:
         Parsed dict from ``macro:regime`` key, or
-        ``{"risk_on": True}`` if the key is missing or on error.
+        ``{"risk_on": True, "is_stale": True}`` if the key is
+        missing or on error.
     """
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        r = _get_redis()
         raw: str | None = r.get("macro:regime")
         if raw is None:
-            return {"risk_on": True}
+            return {"risk_on": True, "is_stale": True}
         return json.loads(raw)
     except (redis.RedisError, json.JSONDecodeError) as exc:
         logger.warning("Failed to read macro:regime — %s", exc)
-        return {"risk_on": True}
+        return {"risk_on": True, "is_stale": True}
 
 
 if __name__ == "__main__":

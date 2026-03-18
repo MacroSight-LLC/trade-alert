@@ -31,6 +31,24 @@ MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
 
 _discord_client: httpx.Client | None = None
 
+# Module-level Redis connection pool (reused across dedup calls)
+_redis_pool: _redis.ConnectionPool | None = None
+
+
+def _get_redis() -> _redis.Redis:
+    """Return a Redis client backed by a module-level connection pool."""
+    global _redis_pool  # noqa: PLW0603
+    if _redis_pool is None:
+        _redis_pool = _redis.ConnectionPool.from_url(
+            os.getenv("REDIS_URL", "redis://redis:6379"),
+            decode_responses=True,
+            socket_timeout=float(os.getenv("REDIS_DEDUP_TIMEOUT", "5.0")),
+        )
+    return _redis.Redis(connection_pool=_redis_pool)
+
+
+_discord_client: httpx.Client | None = None
+
 
 def _get_discord_client() -> httpx.Client:
     """Return a module-level HTTP client for Discord API calls."""
@@ -133,7 +151,7 @@ def format_embed(alert: PlaybookAlert) -> dict:
     """
     rr = compute_rr(alert.entry)
     unusual = (
-        "\n".join(f"  \u2022 {a}" for a in alert.unusual_activity)
+        "\n".join(f"  \u2022 {a}" for a in alert.unusual_activity if a)
         if alert.unusual_activity
         else "_None detected_"
     )
@@ -399,18 +417,14 @@ def _is_duplicate_alert(
     dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}:{thesis_hash}"
     thesis_key = f"alert:thesis:{symbol}:{direction}:{timeframe}"
     try:
-        r = _redis.from_url(
-            os.getenv("REDIS_URL", "redis://redis:6379"),
-            decode_responses=True,
-            socket_timeout=5.0,
-        )
+        r = _get_redis()
         # Atomic SET NX+EX eliminates the TOCTOU race between EXISTS and
         # SETEX — a concurrent pipeline tick can no longer slip between
         # the read and the write, which previously allowed duplicate
         # Discord sends for the same signal.
         was_set = r.set(dedup_key, "1", nx=True, ex=DEDUP_WINDOW_SECONDS)
         if was_set:
-            # First time seeing this key — store thesis for similarity checks
+            # First time seeing this key — store thesis atomically
             if thesis:
                 r.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
             return False
@@ -427,8 +441,11 @@ def _is_duplicate_alert(
                     direction,
                     timeframe,
                 )
-                r.set(dedup_key, "1", ex=DEDUP_WINDOW_SECONDS)
-                r.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
+                # Update both keys atomically with a pipeline
+                pipe = r.pipeline()
+                pipe.set(dedup_key, "1", ex=DEDUP_WINDOW_SECONDS)
+                pipe.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
+                pipe.execute()
                 return False
         logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
         return True

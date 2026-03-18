@@ -117,7 +117,7 @@ def get_winrate_context(
     for key, count in bucket_total.items():
         if count >= min_sample:
             wins = bucket_wins.get(key, 0)
-            buckets[key] = round(wins / count, 2)
+            buckets[key] = round(wins / count, 2) if count > 0 else 0.0
             bucket_counts[key] = count
 
     return {

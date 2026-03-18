@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME = "SEC EDGAR MCP"
 
 _USER_AGENT: str = os.getenv("EDGAR_USER_AGENT", "trade-alert admin@localhost")
+if _USER_AGENT == "trade-alert admin@localhost":
+    logger.warning(
+        "EDGAR_USER_AGENT not set — using default '%s'. "
+        "SEC may rate-limit requests without a valid contact email.",
+        _USER_AGENT,
+    )
 _BASE_URL = "https://efts.sec.gov/LATEST"
 _TIMEOUT = 12.0
 

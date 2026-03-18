@@ -192,8 +192,9 @@ class TestAtomicDedup:
 
         # First call: SET NX succeeds (returns True) → not a duplicate
         # Second call: SET NX fails (returns None) → is a duplicate
+        # get() returns same thesis → high similarity → suppressed as dupe
         mock_redis.set.side_effect = [True, None, None]
-        mock_redis.get.return_value = "same thesis text"
+        mock_redis.get.return_value = "some thesis"
 
         with patch("notifier_and_logger._redis") as mock_redis_mod:
             mock_redis_mod.from_url.return_value = mock_redis

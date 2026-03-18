@@ -47,15 +47,24 @@ QUALITY RULES — follow these strictly:
    - 0.86-0.95: Exceptional confluence across 4+ sources, textbook setup
    - Never exceed 0.95 — no setup is certain
 6. sources_agree = count of DISTINCT independent signal groups pointing same direction
-   Valid groups: technical_trend, volume_spike, sentiment_bull/bear,
+   Valid groups: technical_trend, volume_spike, sentiment_bull, sentiment_bear,
    options_flow, insider_activity, relative_strength, macro_risk_off,
    catalyst_event, short_interest
+   - sentiment_bull and sentiment_bear are SEPARATE groups — never merge them.
+     If a symbol has both, they represent conflicting signals from different sources.
    - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
      Positive score = catalyst imminent. Higher score = closer/more impactful.
      Use to gauge volatility risk and event-driven opportunity.
    - short_interest: Short interest as % of float from FINRA data.
      Positive score = high short interest (squeeze potential).
      Combine with volume_spike for short-squeeze conviction.
+   - insider_activity: SEC Form 4 cluster buys/sells from EDGAR.
+     Recent insider buys with score > 1.0 = strong conviction signal.
+   WEIGHTING GUIDANCE:
+   - technical_trend + volume_spike together are stronger than either alone
+   - options_flow large sweeps (high score) outweigh small mixed flow
+   - insider_activity is a slow but reliable signal — weight highly for 1h timeframe
+   - short_interest alone is not actionable; it amplifies existing bullish signals
 7. ENTRY LEVEL RULES:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
@@ -70,10 +79,16 @@ QUALITY RULES — follow these strictly:
    - Weight higher-confidence signals more heavily in your assessment
    - If the strongest signal has score < 1.0, the setup is likely not tradeable
 10. CONTRADICTION HANDLING:
-   - If sentiment_bull AND sentiment_bear both present, they cancel — treat as neutral
+   - If sentiment_bull AND sentiment_bear both present for the same symbol,
+     compare their confidence scores: the higher-confidence one wins but
+     reduce net sentiment conviction by 30%. If both are within 0.05 confidence,
+     treat sentiment as fully neutral — do not count either toward sources_agree.
    - If technical_trend conflicts with options_flow direction, downgrade edge_probability
-   - Insider buying + bearish technical = potential divergence — treat with caution
-   - Volume_spike without directional technical confirmation = noise, not signal
+     by at least 0.05 and note the divergence in thesis.
+   - Insider buying + bearish technical = potential bottom — weight insider signal
+     more heavily at 1h but treat with caution at 15m.
+   - Volume_spike without directional technical confirmation = noise, not signal.
+     Do not count it toward sources_agree unless another directional source confirms.
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
@@ -203,7 +218,7 @@ def format_winrate_context() -> str:
             if t >= 2 and wr is not None:
                 lines.append(f"  EP {b:.1f}: {t} alerts, actual win-rate {wr:.0%}")
         return "\n".join(lines)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "No recent outcome data available yet."
 
 
@@ -220,8 +235,6 @@ def format_golden_examples() -> str:
         if not examples:
             return ""
 
-        import json
-
         lines = [
             "REFERENCE EXAMPLES (high-quality alerts from production — "
             "match this specificity and calibration):",
@@ -232,7 +245,7 @@ def format_golden_examples() -> str:
                 lines.append(f"\nExample {i}:")
                 lines.append(json.dumps(alerts[0], indent=2))
         return "\n".join(lines)
-    except Exception:  # noqa: BLE001
+    except (ImportError, json.JSONDecodeError, TypeError, KeyError):
         return ""
 
 
@@ -298,7 +311,7 @@ def get_quality_escalation_rules(timeframe: str) -> str:
                 "- Ensure every thesis is specific and causal, not generic"
             )
         return ""
-    except Exception:  # noqa: BLE001
+    except (ImportError, AttributeError, TypeError, ValueError):
         return ""
 
 
@@ -348,6 +361,9 @@ _PROMPT_CACHE_TTL: float = 300.0  # seconds
 def _compile_template(template: str, variables: dict[str, Any]) -> str:
     """Replace ``{{var}}`` placeholders with values from *variables*.
 
+    Variable values are sanitized to prevent template injection:
+    ``}}`` sequences in values are escaped to ``} }``.
+
     Args:
         template: Prompt template with ``{{key}}`` placeholders.
         variables: Mapping of placeholder name → replacement value.
@@ -357,25 +373,27 @@ def _compile_template(template: str, variables: dict[str, Any]) -> str:
     """
     result = template
     for key, value in variables.items():
-        result = result.replace("{{" + key + "}}", str(value))
+        safe_value = str(value).replace("}}", "} }")
+        result = result.replace("{{" + key + "}}", safe_value)
     return result
 
 
 def _check_unresolved_placeholders(text: str, label: str) -> None:
-    """Warn if any ``{{...}}`` placeholders remain after compilation.
+    """Raise if any ``{{...}}`` placeholders remain after compilation.
 
     Args:
         text: Compiled prompt text.
-        label: Human-readable label for the log message (e.g. ``"system"``).
+        label: Human-readable label for the error (e.g. ``"system"``).
+
+    Raises:
+        ValueError: If unresolved placeholders are found.
     """
     import re
 
     remaining = re.findall(r"\{\{(\w+)\}\}", text)
     if remaining:
-        logger.warning(
-            "Unresolved placeholders in %s prompt: %s",
-            label,
-            ", ".join(f"{{{{{v}}}}}" for v in remaining),
+        raise ValueError(
+            f"Unresolved placeholders in {label} prompt: " + ", ".join(f"{{{{{v}}}}}" for v in remaining)
         )
 
 
@@ -464,10 +482,12 @@ def get_decision_prompts(
         ts, sys_obj, usr_obj = cached
         if (_time.monotonic() - ts) < _PROMPT_CACHE_TTL:
             try:
+                # Validate version hasn't changed before using cache
+                cached_version = str(getattr(sys_obj, "version", "unknown"))
                 system = sys_obj.compile(**merged)
                 user = usr_obj.compile(**merged)
                 _last_source = "langfuse"
-                _last_version = str(getattr(sys_obj, "version", "unknown"))
+                _last_version = cached_version
                 if _warnings:
                     system = "\n".join(_warnings) + "\n\n" + system
                 _check_unresolved_placeholders(system, "system")

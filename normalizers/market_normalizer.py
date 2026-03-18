@@ -55,20 +55,19 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 )
 
         # Relative strength vs SPY (SSOT §7)
-        pct_change: float | None = data.get("price_change_24h")
         spy_change: float | None = data.get("spy_pct_change")
-        if pct_change is not None and spy_change is not None:
-            rs = pct_change - spy_change
+        if change is not None and spy_change is not None:
+            rs = change - spy_change
             abs_rs = abs(rs)
             if abs_rs >= 2.0:
-                rs_score = min(abs_rs / 2.0, 3.0) if rs > 0 else max(-abs_rs / 2.0, -3.0)
+                rs_score = min(rs, 3.0) if rs > 0 else max(rs, -3.0)
                 signals.append(
                     Signal(
                         source="polygon",
                         type="relative_strength",
                         score=rs_score,
                         confidence=min(abs_rs / 10.0, 1.0),
-                        reason=f"RS vs SPY {rs:+.1f}% (sym {pct_change:+.1f}%, SPY {spy_change:+.1f}%)",
+                        reason=f"RS vs SPY {rs:+.1f}% (sym {change:+.1f}%, SPY {spy_change:+.1f}%)",
                         raw=data,
                     )
                 )
@@ -88,7 +87,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                             source="trading",
                             type="insider_activity",
                             score=1.5,
-                            confidence=0.75,
+                            confidence=0.70,
                             reason="Insider buying activity",
                             raw=data,
                         )
@@ -99,7 +98,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                             source="trading",
                             type="insider_activity",
                             score=-1.5,
-                            confidence=0.75,
+                            confidence=0.70,
                             reason="Insider selling activity",
                             raw=data,
                         )
@@ -128,6 +127,7 @@ def _add_edgar_insider_signals(
     sell_value = 0.0
     buy_count = 0
     insiders_buying: set[str] = set()
+    insiders_selling: set[str] = set()
 
     for f in filings:
         txn = (f.get("transaction_type") or "").lower()
@@ -140,9 +140,7 @@ def _add_edgar_insider_signals(
             insiders_buying.add(insider_name)
         elif txn in ("sale", "sell", "s", "disposition"):
             sell_value += value
-        else:
-            # "filing" type from EDGAR search (buy/sell unknown) — count insiders
-            insiders_buying.add(insider_name)
+            insiders_selling.add(insider_name)
 
     # Score by dollar value when available, otherwise by filing count
     total_filings = len(filings)
@@ -179,8 +177,8 @@ def _add_edgar_insider_signals(
     else:
         return  # No filings
 
-    # Cluster boost: 3+ distinct insiders filing in window
-    if len(insiders_buying) >= 3 and raw_score > 0:
+    # Cluster boost: 3+ distinct insiders buying AND no mixed selling
+    if len(insiders_buying) >= 3 and raw_score > 0 and not insiders_selling:
         raw_score = min(raw_score + 0.5, 3.0)
         reason += f" (cluster: {len(insiders_buying)} insiders)"
 

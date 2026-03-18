@@ -64,38 +64,40 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         call_put_ratio: float | None = data.get("call_put_ratio")
         if call_put_ratio is not None:
             call_put_ratio = safe_float(call_put_ratio)
-            unusual_oi: bool = data.get("unusual_oi", False)
+            # Skip invalid ratios: negative or zero (NaN/division-by-zero)
+            if call_put_ratio > 0:
+                unusual_oi: bool = data.get("unusual_oi", False)
 
-            if call_put_ratio > 2.0:
-                flow_score = 1.5
-                if unusual_oi:
-                    flow_score = 2.0
-                signals.append(
-                    Signal(
-                        source="yfinance",
-                        type="options_flow",
-                        score=flow_score,
-                        confidence=0.70,
-                        reason=f"Call/put ratio {call_put_ratio:.1f}x"
-                        + (" (unusual OI)" if unusual_oi else ""),
-                        raw=data,
+                if call_put_ratio > 2.0:
+                    flow_score = 1.5
+                    if unusual_oi:
+                        flow_score = 2.0
+                    signals.append(
+                        Signal(
+                            source="yfinance",
+                            type="options_flow",
+                            score=flow_score,
+                            confidence=0.70,
+                            reason=f"Call/put ratio {call_put_ratio:.1f}x"
+                            + (" (unusual OI)" if unusual_oi else ""),
+                            raw=data,
+                        )
                     )
-                )
-            elif call_put_ratio < 0.5 and call_put_ratio > 0:
-                flow_score = -1.5
-                if unusual_oi:
-                    flow_score = -2.0
-                signals.append(
-                    Signal(
-                        source="yfinance",
-                        type="options_flow",
-                        score=flow_score,
-                        confidence=0.70,
-                        reason=f"Put-heavy ratio {call_put_ratio:.2f}x"
-                        + (" (unusual OI)" if unusual_oi else ""),
-                        raw=data,
+                elif call_put_ratio < 0.5:
+                    flow_score = -1.5
+                    if unusual_oi:
+                        flow_score = -2.0
+                    signals.append(
+                        Signal(
+                            source="yfinance",
+                            type="options_flow",
+                            score=flow_score,
+                            confidence=0.70,
+                            reason=f"Put-heavy ratio {call_put_ratio:.2f}x"
+                            + (" (unusual OI)" if unusual_oi else ""),
+                            raw=data,
+                        )
                     )
-                )
 
         # Enhanced intraday volume from Alpaca
         vol_accel: float | None = data.get("volume_acceleration")

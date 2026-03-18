@@ -111,11 +111,12 @@ def score_thesis_quality(thesis: str) -> float:
         score += 0.25
 
     # Contains specific technical terms (module-level constant)
-    term_count = sum(1 for t in _TECHNICAL_TERMS if t in thesis.lower())
+    # Use word boundaries to avoid substring false positives (e.g. "rsi" in "risk")
+    thesis_lower = thesis.lower()
+    term_count = sum(1 for t in _TECHNICAL_TERMS if re.search(rf'\b{re.escape(t)}\b', thesis_lower))
     score += min(term_count * 0.1, 0.25)
 
     # Penalize vague phrases
-    thesis_lower = thesis.lower()
     vague_count = sum(1 for p in _VAGUE_PHRASES if p in thesis_lower)
     score -= vague_count * 0.15
 
@@ -308,7 +309,7 @@ def score_batch(alerts: list[PlaybookAlert]) -> dict[str, float]:
     """
     if not alerts:
         return {
-            "batch_diversity": 1.0,
+            "batch_diversity": 0.0,
             "batch_concentration": 0.0,
             "batch_avg_quality": 0.0,
             "overlapping_entries": 0,
@@ -328,9 +329,18 @@ def score_batch(alerts: list[PlaybookAlert]) -> dict[str, float]:
     unique_ratio = len(set(symbols)) / len(symbols)
 
     # Overlapping entry zones — flag when 2+ entries are within 2% of each other
-    actionable_entries = sorted(
-        a.entry.get("level", 0) for a in alerts if a.direction != "WATCH" and a.entry.get("level", 0) > 0
-    )
+    # Deduplicate by (symbol, level) to avoid counting the same alert twice
+    seen_entry_pairs: set[tuple[str, float]] = set()
+    deduped_entries: list[float] = []
+    for a in alerts:
+        if a.direction != "WATCH":
+            lvl = a.entry.get("level", 0)
+            if lvl > 0:
+                pair = (a.symbol, lvl)
+                if pair not in seen_entry_pairs:
+                    seen_entry_pairs.add(pair)
+                    deduped_entries.append(lvl)
+    actionable_entries = sorted(deduped_entries)
     overlap_count = sum(
         1
         for i in range(1, len(actionable_entries))

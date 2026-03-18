@@ -110,6 +110,11 @@ def _run_pipeline(timeframe: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, summary_message).
     """
+    # Whitelist to prevent path traversal
+    allowed_timeframes = {"15m", "1h"}
+    if timeframe not in allowed_timeframes:
+        return False, f"Invalid timeframe: {timeframe}. Allowed: {', '.join(sorted(allowed_timeframes))}"
+
     workflow = f"workflows/orchestrator-{timeframe}.yaml"
     if not Path(workflow).exists():
         return False, f"Workflow not found: {workflow}"
@@ -159,6 +164,7 @@ def _get_status() -> str:
     lines: list[str] = ["**Pipeline Status**\n"]
 
     # Redis snapshot counts
+    r = None
     try:
         r = _redis.from_url(
             os.getenv("REDIS_URL", "redis://redis:6379"),
@@ -185,6 +191,9 @@ def _get_status() -> str:
                     lines.append(f"    {t}: {c}")
     except Exception as exc:
         lines.append(f"  Redis: error — {exc}")
+    finally:
+        if r is not None:
+            r.close()
 
     # MCP health
     lines.append("\n**MCP Servers:**")
@@ -272,7 +281,10 @@ def _send_last_alert(channel_id: str) -> None:
     try:
         import psycopg2
 
-        db_url = os.getenv("DATABASE_URL", "postgresql://trade_alert:@postgres:5432/trade_alert")
+        db_url = os.getenv("DATABASE_URL", "")
+        if not db_url:
+            logger.error("DATABASE_URL not set")
+            return
         conn = psycopg2.connect(db_url, connect_timeout=5)
         try:
             with conn.cursor() as cur:

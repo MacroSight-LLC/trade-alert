@@ -5,6 +5,7 @@ Transforms raw TradingView MCP results into ``technical_trend`` Signals.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
@@ -29,21 +30,25 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     now = datetime.now(timezone.utc).isoformat()
 
     for symbol, data in raw_results.items():
-        rating = data.get("rating")
+        raw_rating = data.get("rating")
         indicators: dict[str, Any] = data.get("indicators", {})
 
         # Fallback: derive rating from BB position when RSI-based rating is absent
-        if rating is None:
+        if raw_rating is None:
             bb_width = indicators.get("bb_width")
             bb_squeeze = indicators.get("bb_squeeze", False)
             if bb_width is not None or bb_squeeze:
                 # Can't recover direction from BB width alone; use squeeze as neutral
-                rating = 0.0  # neutral fallback from BB-only
+                raw_rating = 0.0  # neutral fallback from BB-only
             else:
                 continue
 
-        rating = safe_float(rating)
-        if rating == 0.0 and data.get("rating") not in (0, 0.0, None):
+        rating = safe_float(raw_rating)
+        # Skip when safe_float defaulted from non-numeric or non-finite input.
+        # A genuine TA neutral (0.0) from a finite numeric source is valid.
+        if rating == 0.0 and (
+            not isinstance(raw_rating, (int, float)) or math.isnan(raw_rating) or math.isinf(raw_rating)
+        ):
             continue
 
         patterns: list[str] = data.get("patterns", [])

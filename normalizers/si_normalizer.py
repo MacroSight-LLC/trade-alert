@@ -48,12 +48,12 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             conf = 0.85
             reason_parts.append(f"SI {si_pct:.0%} of float (very high)")
         elif si_pct >= 0.15:
-            raw_score = 1.5
-            conf = 0.70
+            raw_score = 2.0
+            conf = 0.75
             reason_parts.append(f"SI {si_pct:.0%} of float (elevated)")
         elif si_pct >= 0.10:
-            raw_score = 0.8
-            conf = 0.55
+            raw_score = 1.0
+            conf = 0.60
             reason_parts.append(f"SI {si_pct:.0%} of float (notable)")
 
         if raw_score is not None:

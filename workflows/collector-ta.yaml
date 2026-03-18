@@ -34,6 +34,8 @@ steps:
   # Step 2 -- TradingView ta_scan for equities (15m)
   # SSOT S3: TradingView MCP -- batch symbols/timeframes to respect rate limits (max 20 per call)
   # Uses ta_scan to fetch RSI + Bollinger in a single analysis call per symbol.
+  # NOTE: tradingview.py caps at 8 symbols per call (symbols[:8]).
+  #       Sending 10 is safe — the extra 2 are silently dropped server-side.
   - name: fetch-tv-eq-ta
     type: tool_call
     tool: tradingview-mcp

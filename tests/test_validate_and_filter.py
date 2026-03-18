@@ -409,6 +409,156 @@ class TestVixSoftShort:
         results, _ = _run([a], vix=26.0, macro={"risk_on": True})
         assert len(results) == 1
 
+
+# ── Entry-Order Validation Tests (Gate 0) ──────────────────────────
+
+
+class TestEntryOrderValidation:
+    """LONG must have stop < level < target; SHORT must have target < level < stop."""
+
+    def test_long_valid_order_passes(self) -> None:
+        """LONG with stop < level < target → passes Gate 0."""
+        a = _alert(direction="LONG", entry={"level": 185.0, "stop": 182.0, "target": 195.0})
+        results, _ = _run([a])
+        assert len(results) == 1
+
+    def test_long_stop_above_entry_rejected(self) -> None:
+        """LONG with stop > level → rejected."""
+        a = _alert(direction="LONG", entry={"level": 185.0, "stop": 190.0, "target": 195.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_long_target_below_entry_rejected(self) -> None:
+        """LONG with target < level → rejected."""
+        a = _alert(direction="LONG", entry={"level": 185.0, "stop": 182.0, "target": 180.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_long_stop_equals_entry_rejected(self) -> None:
+        """LONG with stop == level → rejected (strict inequality)."""
+        a = _alert(direction="LONG", entry={"level": 185.0, "stop": 185.0, "target": 195.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_short_valid_order_passes(self) -> None:
+        """SHORT with target < level < stop → passes Gate 0."""
+        a = _alert(direction="SHORT", entry={"level": 185.0, "stop": 190.0, "target": 175.0})
+        results, _ = _run([a])
+        assert len(results) == 1
+
+    def test_short_stop_below_entry_rejected(self) -> None:
+        """SHORT with stop < level → rejected."""
+        a = _alert(direction="SHORT", entry={"level": 185.0, "stop": 180.0, "target": 175.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_short_target_above_entry_rejected(self) -> None:
+        """SHORT with target > level → rejected."""
+        a = _alert(direction="SHORT", entry={"level": 185.0, "stop": 190.0, "target": 195.0})
+        results, _ = _run([a])
+        assert len(results) == 0
+
+    def test_watch_exempt_from_order_check(self) -> None:
+        """WATCH alerts skip entry-order validation."""
+        a = _alert(
+            direction="WATCH",
+            entry={"level": 185.0, "stop": 185.0, "target": 185.0},
+        )
+        results, _ = _run([a])
+        assert len(results) == 1
+
+
+# ── Macro Veto Bypass Tests ────────────────────────────────────────
+
+
+class TestMacroVetoBypass:
+    """High-conviction (SA >= 6, EP >= 0.90) bypasses 1h macro veto."""
+
+    def _macro_snaps(self, macro_score: float = -2.5) -> list[dict]:
+        """Build snapshots with a strong macro_risk_off signal."""
+        return [
+            {
+                "symbol": "AAPL",
+                "timeframe": "1h",
+                "timestamp": "2026-03-12T14:00:00Z",
+                "signals": [
+                    {
+                        "source": "tv",
+                        "type": "technical_trend",
+                        "score": 1.5,
+                        "confidence": 0.8,
+                        "reason": "t",
+                    },
+                    {"source": "pg", "type": "volume_spike", "score": 1.5, "confidence": 0.8, "reason": "t"},
+                    {
+                        "source": "fh",
+                        "type": "sentiment_bull",
+                        "score": 1.5,
+                        "confidence": 0.8,
+                        "reason": "t",
+                    },
+                    {"source": "rot", "type": "options_flow", "score": 1.5, "confidence": 0.8, "reason": "t"},
+                    {
+                        "source": "ed",
+                        "type": "insider_activity",
+                        "score": 1.0,
+                        "confidence": 0.8,
+                        "reason": "t",
+                    },
+                    {
+                        "source": "yf",
+                        "type": "catalyst_event",
+                        "score": 1.0,
+                        "confidence": 0.8,
+                        "reason": "t",
+                    },
+                    {
+                        "source": "fred",
+                        "type": "macro_risk_off",
+                        "score": macro_score,
+                        "confidence": 0.9,
+                        "reason": "t",
+                    },
+                ],
+            },
+        ]
+
+    def test_high_conviction_bypasses_macro_veto(self) -> None:
+        """SA=6, EP=0.90 in 1h with strong risk-off → LONG passes."""
+        a = _alert(
+            direction="LONG",
+            timeframe="1h",
+            sources_agree=6,
+            edge_probability=0.90,
+            confidence=0.90,
+        )
+        results, _ = _run([a], snaps=self._macro_snaps(), timeframe="1h")
+        assert len(results) == 1
+
+    def test_low_conviction_still_vetoed(self) -> None:
+        """SA=5, EP=0.85 in 1h with strong risk-off → LONG vetoed."""
+        a = _alert(
+            direction="LONG",
+            timeframe="1h",
+            sources_agree=5,
+            edge_probability=0.85,
+            confidence=0.85,
+        )
+        results, _ = _run([a], snaps=self._macro_snaps(), timeframe="1h")
+        assert len(results) == 0
+
+    def test_macro_veto_only_applies_1h(self) -> None:
+        """15m timeframe with same risk-off → LONG passes (no macro veto on 15m)."""
+        a = _alert(
+            direction="LONG",
+            timeframe="15m",
+            sources_agree=4,
+            edge_probability=0.80,
+        )
+        snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+        results, _ = _run([a], snaps=snaps, timeframe="15m")
+        assert len(results) == 1
+
     def test_short_ok_in_risk_off(self) -> None:
         """SHORT in risk-off + VIX=26 → allowed (shorts are natural in risk-off)."""
         a = _alert(
@@ -519,7 +669,9 @@ class TestGateTelemetry:
 
         alerts = [
             _alert(direction="LONG"),  # will hit VIX hard gate
-            _alert(symbol="MSFT", direction="SHORT"),  # also VIX hard gate
+            _alert(
+                symbol="MSFT", direction="SHORT", entry={"level": 185.0, "stop": 188.0, "target": 175.0}
+            ),  # also VIX hard gate
         ]
         snaps = [
             _snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"]),
@@ -558,6 +710,7 @@ class TestGateRejectionEnum:
             "conf_threshold",
             "rr_minimum",
             "rr_zero_risk",
+            "entry_order_invalid",
             "macro_veto",
             "vix_soft",
         }

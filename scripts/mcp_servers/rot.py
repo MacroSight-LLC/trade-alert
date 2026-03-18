@@ -360,6 +360,9 @@ def _classify_sentiment(posts: list[dict], ticker: str) -> str:
     return "neutral"
 
 
+_SUBREDDITS: list[str] = ["/r/wallstreetbets/hot", "/r/stocks/hot", "/r/options/hot"]
+
+
 async def trending_tickers(params: dict[str, Any]) -> list[dict]:
     """Fetch trending tickers from Reddit (r/wallstreetbets, r/stocks).
 
@@ -372,7 +375,7 @@ async def trending_tickers(params: dict[str, Any]) -> list[dict]:
     limit = int(params.get("limit", 20))
     all_posts: list[dict] = []
 
-    for sub in ["/r/wallstreetbets/hot", "/r/stocks/hot", "/r/options/hot"]:
+    for sub in _SUBREDDITS:
         try:
             posts = await _reddit_get(sub)
             all_posts.extend(posts)
@@ -380,6 +383,10 @@ async def trending_tickers(params: dict[str, Any]) -> list[dict]:
             logger.warning("Reddit fetch failed for %s: %s", sub, exc)
 
     if not all_posts:
+        logger.error(
+            "All %d subreddit fetches failed — returning empty trending results",
+            len(_SUBREDDITS),
+        )
         return {"results": []}
 
     ticker_counts = _extract_tickers(all_posts)

@@ -22,7 +22,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${1:-$REPO_ROOT/.env.secrets}"
 VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
-VAULT_TOKEN="${VAULT_TOKEN:-dev-root-token}"
+VAULT_TOKEN="${VAULT_TOKEN:-}"
+if [ -z "$VAULT_TOKEN" ]; then
+  echo "ERROR: VAULT_TOKEN must be set (do not use a default root token)" >&2
+  exit 1
+fi
 VAULT_PATH="secret/trade-alert"
 
 export VAULT_ADDR VAULT_TOKEN

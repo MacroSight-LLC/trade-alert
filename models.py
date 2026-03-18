@@ -116,6 +116,30 @@ class PlaybookAlert(BaseModel):
     macro_regime: str
     sources_agree: int
 
+    @field_validator("edge_probability")
+    @classmethod
+    def validate_edge_probability(cls, v: float) -> float:
+        """Enforce edge_probability within [0.0, 1.0]."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"edge_probability must be between 0.0 and 1.0, got {v}")
+        return v
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        """Enforce confidence within [0.0, 1.0]."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {v}")
+        return v
+
+    @field_validator("sources_agree")
+    @classmethod
+    def validate_sources_agree(cls, v: int) -> int:
+        """Enforce sources_agree is non-negative."""
+        if v < 0:
+            raise ValueError(f"sources_agree must be >= 0, got {v}")
+        return v
+
     @field_validator("entry")
     @classmethod
     def validate_entry_keys(cls, v: dict[str, float]) -> dict[str, float]:

@@ -3,6 +3,7 @@
 Tools: classify_text
 Uses simple heuristic classifier. No external API required.
 """
+
 from __future__ import annotations
 
 import logging
@@ -62,7 +63,8 @@ async def classify_text(params: dict[str, Any]) -> dict:
     if word_count > 0 and link_count / word_count > 0.3:
         spam_score += 1.0
 
-    confidence = min(spam_score / (total_patterns * 0.4), 1.0)
+    denom = total_patterns * 0.4
+    confidence = min(spam_score / denom, 1.0) if denom > 0 else 0.0
     is_spam = confidence >= 0.5
 
     return {

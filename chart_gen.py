@@ -94,6 +94,8 @@ def _fetch_candles(symbol: str, timeframe: str) -> pd.DataFrame:
     try:
         client = _get_chart_client()
         data: dict = {}
+        # Build safe params (without API key for logging)
+        log_params = {k: v for k, v in params.items() if k != "apiKey"}
         for attempt in range(_MAX_RETRIES + 1):
             resp = client.get(url, params=params)
             if resp.status_code == 429 and attempt < _MAX_RETRIES:
@@ -104,7 +106,7 @@ def _fetch_candles(symbol: str, timeframe: str) -> pd.DataFrame:
             data = resp.json()
             break
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Chart candle fetch failed for %s: %s", symbol, exc)
+        logger.warning("Chart candle fetch failed for %s (params=%s): %s", symbol, log_params, exc)
         return pd.DataFrame()
 
     bars = data.get("results", [])
@@ -200,6 +202,7 @@ def generate_chart(
     tf_label = f"{multiplier}{span[0].upper()}" if span != "day" else "D"
 
     buf = io.BytesIO()
+    fig = None
     try:
         fig, axes = mpf.plot(
             df,
@@ -238,14 +241,16 @@ def generate_chart(
                 )
 
         fig.savefig(buf, format="png", dpi=120, facecolor="#2C2F33")
-        import matplotlib.pyplot as plt
-
-        plt.close(fig)
+        chart_bytes = buf.getvalue()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chart rendering failed for %s: %s", symbol, exc)
         return None
+    finally:
+        if fig is not None:
+            import matplotlib.pyplot as plt
 
-    buf.seek(0)
-    chart_bytes = buf.read()
+            plt.close(fig)
+        buf.close()
+
     logger.info("Generated %s chart for %s (%d bytes)", tf_label, symbol, len(chart_bytes))
     return chart_bytes

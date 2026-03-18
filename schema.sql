@@ -59,6 +59,29 @@ CREATE INDEX IF NOT EXISTS idx_alerts_direction ON alerts(direction);
 -- Timeframe filter for per-timeframe analytics
 CREATE INDEX IF NOT EXISTS idx_alerts_timeframe ON alerts(timeframe);
 
+-- Partial index for open alerts (outcome not yet resolved)
+CREATE INDEX IF NOT EXISTS idx_alerts_open_symbol
+    ON alerts(symbol, created_at DESC) WHERE outcome IS NULL;
+
+-- Partial index for recent unresolved alerts (outcome tracker queries)
+CREATE INDEX IF NOT EXISTS idx_alerts_open_created
+    ON alerts(created_at DESC) WHERE outcome IS NULL;
+
+-- CHECK constraints: edge_probability and confidence must be in [0, 1]
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD CONSTRAINT chk_edge_probability
+        CHECK (edge_probability >= 0 AND edge_probability <= 1);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD CONSTRAINT chk_confidence
+        CHECK (confidence >= 0 AND confidence <= 1);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- View: winrate by edge_probability bucket
 CREATE OR REPLACE VIEW winrate_by_bucket AS
 SELECT

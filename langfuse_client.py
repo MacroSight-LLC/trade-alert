@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _client: Langfuse | None = None
 _initialised: bool = False
+_lock = threading.Lock()
 
 
 def get_langfuse_client() -> Langfuse | None:
@@ -37,34 +39,53 @@ def get_langfuse_client() -> Langfuse | None:
     """
     global _client, _initialised  # noqa: PLW0603
 
-    if _initialised:
-        return _client
+    with _lock:
+        if _initialised:
+            return _client
 
-    _initialised = True
+        _initialised = True
 
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
-    host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
+        host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
 
-    if not public_key or not secret_key:
-        logger.info("Langfuse credentials not set — client disabled")
-        return None
+        if not public_key or not secret_key:
+            logger.info("Langfuse credentials not set — client disabled")
+            return None
 
-    try:
-        from langfuse import Langfuse
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                from langfuse import Langfuse
 
-        _client = Langfuse(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=host,
-        )
-        atexit.register(_shutdown_client)
-        logger.info("Langfuse client initialised (host=%s)", host)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to initialise Langfuse client: %s", exc)
+                _client = Langfuse(
+                    public_key=public_key,
+                    secret_key=secret_key,
+                    host=host,
+                )
+                atexit.register(_shutdown_client)
+                logger.info("Langfuse client initialised (host=%s)", host)
+                return _client
+            except ImportError:
+                logger.warning("langfuse package not installed — client disabled")
+                return None
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt < 3:
+                    import time
+
+                    backoff = 2**attempt
+                    logger.warning(
+                        "Langfuse init attempt %d/3 failed (%s), retrying in %ds",
+                        attempt,
+                        exc,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+
+        logger.warning("Failed to initialise Langfuse client after 3 attempts: %s", last_exc)
         _client = None
-
-    return _client
+        return _client
 
 
 def _shutdown_client() -> None:

@@ -28,11 +28,15 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Maximum request body size (10 MB)
+_MAX_BODY_BYTES = 10 * 1024 * 1024
 
 # Map port → handler module name (relative to scripts.mcp_servers)
 PORT_TO_MODULE: dict[int, str] = {
@@ -61,6 +65,18 @@ def create_app(port: int) -> FastAPI:
     tools: dict[str, Any] = getattr(mod, "TOOLS")
 
     app = FastAPI(title=service_name)
+
+    class _LimitBodyMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > _MAX_BODY_BYTES:
+                return JSONResponse(
+                    {"error": "Request body too large"},
+                    status_code=413,
+                )
+            return await call_next(request)
+
+    app.add_middleware(_LimitBodyMiddleware)
 
     @app.get("/health")
     async def health() -> JSONResponse:

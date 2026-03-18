@@ -92,7 +92,8 @@ steps:
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
 
       # Unpack parallel results (indices match call order above)
-      raw_data = steps.get("fetch-events-data", [])
+      # Use `or []` to guard against None when the entire parallel step fails
+      raw_data = steps.get("fetch-events-data") or []
       earnings_data = raw_data[0] if len(raw_data) > 0 else {"results": []}
       insider_data = raw_data[1] if len(raw_data) > 1 else {"results": []}
       filings_data = raw_data[2] if len(raw_data) > 2 else {"results": []}

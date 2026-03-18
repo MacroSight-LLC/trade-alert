@@ -221,3 +221,101 @@ class TestPlaybookAlert:
         json_str = alert.model_dump_json()
         restored = PlaybookAlert.model_validate_json(json_str)
         assert restored == alert
+
+    # ── Parametrized edge cases (Item 71) ──
+
+    @pytest.mark.parametrize(
+        "ep",
+        [0.0, 0.5, 1.0],
+        ids=["ep_zero", "ep_mid", "ep_max"],
+    )
+    def test_edge_probability_valid_bounds(self, alert_data: dict, ep: float) -> None:
+        alert_data["edge_probability"] = ep
+        alert = PlaybookAlert(**alert_data)
+        assert alert.edge_probability == ep
+
+    @pytest.mark.parametrize("ep", [-0.01, 1.01, 2.0])
+    def test_edge_probability_out_of_range(self, alert_data: dict, ep: float) -> None:
+        alert_data["edge_probability"] = ep
+        with pytest.raises(ValueError, match="edge_probability"):
+            PlaybookAlert(**alert_data)
+
+    @pytest.mark.parametrize(
+        "conf",
+        [0.0, 0.5, 1.0],
+        ids=["conf_zero", "conf_mid", "conf_max"],
+    )
+    def test_confidence_valid_bounds(self, alert_data: dict, conf: float) -> None:
+        alert_data["confidence"] = conf
+        alert = PlaybookAlert(**alert_data)
+        assert alert.confidence == conf
+
+    @pytest.mark.parametrize("conf", [-0.1, 1.1])
+    def test_confidence_out_of_range(self, alert_data: dict, conf: float) -> None:
+        alert_data["confidence"] = conf
+        with pytest.raises(ValueError, match="confidence"):
+            PlaybookAlert(**alert_data)
+
+    @pytest.mark.parametrize("sa", [0, 1, 5, 10])
+    def test_sources_agree_valid(self, alert_data: dict, sa: int) -> None:
+        alert_data["sources_agree"] = sa
+        alert = PlaybookAlert(**alert_data)
+        assert alert.sources_agree == sa
+
+    def test_sources_agree_negative(self, alert_data: dict) -> None:
+        alert_data["sources_agree"] = -1
+        with pytest.raises(ValueError, match="sources_agree"):
+            PlaybookAlert(**alert_data)
+
+    def test_empty_string_optional_fields(self, alert_data: dict) -> None:
+        alert_data["sentiment_context"] = ""
+        alert_data["macro_regime"] = ""
+        alert_data["timeframe_rationale"] = ""
+        alert = PlaybookAlert(**alert_data)
+        assert alert.sentiment_context == ""
+
+
+class TestSignalEdgeCases:
+    """Parametrized edge cases for Signal model."""
+
+    @pytest.mark.parametrize("score", [-3.0, -1.5, 0.0, 1.5, 3.0])
+    def test_valid_score_range(self, score: float) -> None:
+        s = Signal(
+            source="test",
+            type="technical_trend",
+            score=score,
+            confidence=0.5,
+            reason="x",
+        )
+        assert s.score == score
+
+    @pytest.mark.parametrize("conf", [0.0, 0.5, 1.0])
+    def test_valid_confidence_range(self, conf: float) -> None:
+        s = Signal(
+            source="test",
+            type="technical_trend",
+            score=0.0,
+            confidence=conf,
+            reason="x",
+        )
+        assert s.confidence == conf
+
+    def test_empty_reason(self) -> None:
+        s = Signal(
+            source="test",
+            type="technical_trend",
+            score=0.0,
+            confidence=0.5,
+            reason="",
+        )
+        assert s.reason == ""
+
+    def test_empty_raw(self) -> None:
+        s = Signal(
+            source="test",
+            type="technical_trend",
+            score=0.0,
+            confidence=0.5,
+            reason="x",
+        )
+        assert s.raw == {}

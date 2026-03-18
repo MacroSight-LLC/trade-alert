@@ -31,10 +31,13 @@ def merge_snapshots(
     _inp_macro = inputs.get("merged_macro") if inputs else None
     _inp_n = inputs.get("merged_n") if inputs else None
 
-    if _inp_json and _inp_n:
+    if _inp_json and _inp_n is not None:
         snapshots_json = _inp_json
         macro = _inp_macro or {}
-        n = int(_inp_n)
+        try:
+            n = int(_inp_n)
+        except (ValueError, TypeError):
+            n = 0
         logger.info("Decision-%s: using %d pre-merged symbols from orchestrator", timeframe, n)
         return {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
 
@@ -78,8 +81,10 @@ def build_prompt(
     snapshots_json = merge_result["snapshots_json"]
     n = merge_result["n"]
 
-    vix = fred_results[0].get("vix_level") or fred_results[0].get("value", "N/A")
-    yc = fred_results[1].get("spread_bps") or fred_results[1].get("value", "N/A")
+    _fred_vix = fred_results[0] if len(fred_results) > 0 else {}
+    _fred_yc = fred_results[1] if len(fred_results) > 1 else {}
+    vix = _fred_vix.get("vix_level") or _fred_vix.get("value", "N/A")
+    yc = _fred_yc.get("spread_bps") or _fred_yc.get("value", "N/A")
 
     _fred_live = vix != "N/A" and yc != "N/A"
     data_freshness = "LIVE" if _fred_live else "CACHED (stale — FRED unavailable)"

@@ -234,10 +234,8 @@ class TestSentimentNormalizer:
     def test_nan_finnhub_score_treated_as_zero(self) -> None:
         raw = {"X": {"finnhub_score": float("nan"), "spam_filtered": False}}
         result = sentiment_normalize(raw, timeframe="15m")
-        # safe_float converts NaN → 0.0, so score = clamp(0.0 * 2.0, ...) = 0.0
-        # type will be sentiment_bear (score <= 0), score = 0.0
-        assert len(result) == 1
-        assert result[0].signals[0].score == 0.0
+        # safe_float converts NaN → 0.0, then 0.0 is filtered (no signal value)
+        assert len(result) == 0
 
 
 # ── Market Normalizer ───────────────────────────────────────────

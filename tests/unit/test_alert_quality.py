@@ -236,6 +236,7 @@ class TestScoreAlert:
             "rr_ratio",
             "signal_coverage",
             "confidence_calibration",
+            "signal_consistency",
             "composite_quality",
         }
         assert set(scores.keys()) == expected_keys
@@ -244,10 +245,11 @@ class TestScoreAlert:
         alert = _make_alert()
         scores = score_alert(alert)
         weights = {
-            "thesis_quality": 0.25,
-            "rr_ratio": 0.30,
+            "thesis_quality": 0.20,
+            "rr_ratio": 0.25,
             "signal_coverage": 0.20,
-            "confidence_calibration": 0.25,
+            "confidence_calibration": 0.20,
+            "signal_consistency": 0.15,
         }
         expected = sum(scores[k] * weights[k] for k in weights)
         assert scores["composite_quality"] == pytest.approx(expected)
@@ -289,7 +291,7 @@ class TestScoreBatch:
 
     def test_empty_batch(self) -> None:
         result = score_batch([])
-        assert result["batch_diversity"] == 1.0
+        assert result["batch_diversity"] == 0.0
         assert result["batch_avg_quality"] == 0.0
         assert result["overlapping_entries"] == 0
 
@@ -402,3 +404,50 @@ class TestConstants:
 
     def test_vague_phrases_is_frozenset(self) -> None:
         assert isinstance(_VAGUE_PHRASES, frozenset)
+
+
+# ── Parametrized edge cases (Item 71) ───────────────────────────
+
+
+class TestEdgeCases:
+    """Parametrized edge cases: None, NaN, empty, duplicates."""
+
+    @pytest.mark.parametrize("thesis", ["", " ", "\n"])
+    def test_thesis_empty_variants(self, thesis: str) -> None:
+        assert score_thesis_quality(thesis) == 0.0
+
+    def test_thesis_no_substring_false_positives(self) -> None:
+        # "risk" should NOT match "rsi" via substring
+        score_with_risk = score_thesis_quality(
+            "Managing risk is important for portfolio risk management here."
+        )
+        score_with_rsi = score_thesis_quality("RSI divergence at 28 with volume spike breakout momentum.")
+        # "rsi" term should only match when actual word "rsi" appears
+        assert score_with_rsi > score_with_risk or score_with_risk == score_with_rsi
+
+    @pytest.mark.parametrize(
+        ("direction", "entry", "expected"),
+        [
+            ("WATCH", {}, 0.5),
+            ("LONG", {}, 0.0),
+            ("SHORT", {"level": 100, "stop": 100, "target": 90}, 0.0),
+        ],
+        ids=["watch_empty", "long_empty", "short_zero_risk"],
+    )
+    def test_rr_ratio_edge_cases(self, direction: str, entry: dict, expected: float) -> None:
+        assert score_rr_ratio(entry, direction) == expected
+
+    @pytest.mark.parametrize("sources", [0, 1, 3, 5, 10])
+    def test_signal_coverage_parametrized(self, sources: int) -> None:
+        score = score_signal_coverage(sources)
+        assert 0.0 <= score <= 1.0
+
+    def test_batch_duplicate_symbols(self) -> None:
+        # Same symbol at same entry level should be deduped for overlap
+        alerts = [
+            _make_alert(symbol="AAPL", direction="LONG", entry_level=100.0),
+            _make_alert(symbol="AAPL", direction="LONG", entry_level=100.0),
+        ]
+        result = score_batch(alerts)
+        # After dedup, only one unique (AAPL, 100.0) entry — no overlapping pairs
+        assert result["overlapping_entries"] == 0

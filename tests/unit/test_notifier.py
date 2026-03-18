@@ -354,7 +354,7 @@ class TestNotify:
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert", side_effect=Exception("DB down"))
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
-    def test_db_error_still_counts_send(
+    def test_db_error_skips_discord_send(
         self,
         _send: MagicMock,
         _insert: MagicMock,
@@ -364,7 +364,9 @@ class TestNotify:
     ) -> None:
         alerts_json = json.dumps([sample_alert.model_dump()])
         count = notify(alerts_json)
-        assert count == 1
+        # Persist-first ordering: DB failure → skip Discord entirely
+        assert count == 0
+        _send.assert_not_called()
 
     @patch("notifier_and_logger.generate_chart", return_value=None)
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
@@ -550,26 +552,27 @@ class TestThesisSimilarity:
 class TestContentAwareDedup:
     """Tests for _is_duplicate_alert with thesis similarity."""
 
-    @patch("notifier_and_logger._redis")
-    def test_first_alert_not_duplicate(self, mock_redis_mod: MagicMock) -> None:
+    @patch("notifier_and_logger._get_redis")
+    def test_first_alert_not_duplicate(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
         mock_conn = MagicMock()
         mock_conn.exists.return_value = False
-        mock_redis_mod.from_url.return_value = mock_conn
+        mock_get_redis.return_value = mock_conn
 
         result = _is_duplicate_alert("AAPL", "LONG", "15m", "RSI breakout")
         assert result is False
-        mock_conn.setex.assert_called()
+        mock_conn.set.assert_called()
 
-    @patch("notifier_and_logger._redis")
-    def test_exact_duplicate_suppressed(self, mock_redis_mod: MagicMock) -> None:
+    @patch("notifier_and_logger._get_redis")
+    def test_exact_duplicate_suppressed(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
         mock_conn = MagicMock()
-        mock_conn.exists.return_value = True
+        # NX=True SET returns None when key already exists
+        mock_conn.set.return_value = None
         mock_conn.get.return_value = "RSI breakout above support with volume"
-        mock_redis_mod.from_url.return_value = mock_conn
+        mock_get_redis.return_value = mock_conn
 
         result = _is_duplicate_alert(
             "AAPL",
@@ -579,14 +582,14 @@ class TestContentAwareDedup:
         )
         assert result is True
 
-    @patch("notifier_and_logger._redis")
-    def test_different_thesis_allowed_through(self, mock_redis_mod: MagicMock) -> None:
+    @patch("notifier_and_logger._get_redis")
+    def test_different_thesis_allowed_through(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
         mock_conn = MagicMock()
-        mock_conn.exists.return_value = True
+        mock_conn.set.return_value = None  # key already exists
         mock_conn.get.return_value = "RSI breakout above support with volume"
-        mock_redis_mod.from_url.return_value = mock_conn
+        mock_get_redis.return_value = mock_conn
 
         # Completely different thesis → similarity < 0.5 → allow through
         result = _is_duplicate_alert(
@@ -597,26 +600,25 @@ class TestContentAwareDedup:
         )
         assert result is False
 
-    @patch("notifier_and_logger._redis")
-    def test_no_thesis_defaults_to_suppress(self, mock_redis_mod: MagicMock) -> None:
+    @patch("notifier_and_logger._get_redis")
+    def test_no_thesis_defaults_to_suppress(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
         mock_conn = MagicMock()
-        mock_conn.exists.return_value = True
-        mock_redis_mod.from_url.return_value = mock_conn
+        mock_conn.set.return_value = None  # key already exists
+        mock_get_redis.return_value = mock_conn
 
         # No thesis → suppress as normal dedup
         result = _is_duplicate_alert("AAPL", "LONG", "15m")
         assert result is True
 
-    @patch("notifier_and_logger._redis")
-    def test_redis_error_allows_through(self, mock_redis_mod: MagicMock) -> None:
+    @patch("notifier_and_logger._get_redis")
+    def test_redis_error_allows_through(self, mock_get_redis: MagicMock) -> None:
         import redis as _test_redis
 
         from notifier_and_logger import _is_duplicate_alert
 
-        mock_redis_mod.from_url.side_effect = _test_redis.RedisError("gone")
-        mock_redis_mod.RedisError = _test_redis.RedisError
+        mock_get_redis.side_effect = _test_redis.RedisError("gone")
 
         result = _is_duplicate_alert("AAPL", "LONG", "15m", "thesis")
         assert result is False

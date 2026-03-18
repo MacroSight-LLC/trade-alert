@@ -44,6 +44,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     networks:
       - trade-net
     restart: unless-stopped
@@ -65,6 +70,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
     networks:
       - trade-net
     restart: unless-stopped
@@ -107,7 +117,7 @@ services:
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: "admin@trade-alert.local"
       LANGFUSE_INIT_USER_NAME: "admin"
-      LANGFUSE_INIT_USER_PASSWORD: "admin-trade-alert"
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
     ports:
       - "3000:3000"
     healthcheck:
@@ -468,7 +478,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.cuga
     depends_on:
-      - cuga
+      cuga:
+        condition: service_healthy
     volumes:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers

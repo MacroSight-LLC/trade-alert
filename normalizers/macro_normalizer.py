@@ -6,6 +6,7 @@ Transforms VIX, yield-curve, and risk-on/off data into
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
@@ -14,16 +15,17 @@ from models import Signal, Snapshot
 
 VIX_EXTREME_THRESHOLD: float = float(os.getenv("VIX_EXTREME_THRESHOLD", "35.0"))
 VIX_ELEVATED_THRESHOLD: float = float(os.getenv("VIX_ELEVATED_THRESHOLD", "25.0"))
+CURVE_INVERSION_THRESHOLD: float = float(os.getenv("CURVE_INVERSION_THRESHOLD", "-50.0"))
 
 from normalizers import safe_float  # noqa: E402
 
 
-def _safe_float(value: float | None) -> float | None:
-    """Return *value* if finite, else ``None``."""
+def _safe_float(value: Any) -> float | None:
+    """Return *value* as float if finite, else ``None``."""
     if value is None:
         return None
     result = safe_float(value, default=float("nan"))
-    return result if result == result else None  # NaN ≠ NaN
+    return None if math.isnan(result) else result
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -72,7 +74,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             )
 
     # Yield curve inversion (SSOT §7)
-    if curve_slope is not None and curve_slope < -50:
+    if curve_slope is not None and curve_slope < CURVE_INVERSION_THRESHOLD:
         signals.append(
             Signal(
                 source="fred",

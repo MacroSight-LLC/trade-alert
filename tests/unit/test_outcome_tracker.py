@@ -188,13 +188,15 @@ class TestGetCurrentPrice:
     @patch("outcome_tracker.PRICE_FETCH_MAX_RETRIES", 3)
     @patch("outcome_tracker.time.sleep")
     @patch("outcome_tracker._polygon_prev_close")
-    def test_retries_on_failure(self, mock_poly: MagicMock, mock_sleep: MagicMock) -> None:
+    @patch("outcome_tracker._finnhub_quote", return_value=None)
+    def test_retries_on_failure(self, _fh: MagicMock, mock_poly: MagicMock, mock_sleep: MagicMock) -> None:
         """Verify retry logic with exponential backoff."""
         mock_poly.side_effect = [None, None, 190.0]
         result = get_current_price("AAPL")
         assert result == pytest.approx(190.0)
         assert mock_poly.call_count == 3
-        assert mock_sleep.call_count == 2
+        # 2 sleeps from finnhub retries (attempts 0,1 of 3) + 2 from polygon retries
+        assert mock_sleep.call_count == 4
 
 
 # ── run_tracker_cycle ───────────────────────────────────────────

@@ -240,7 +240,7 @@ async def earnings_calendar(params: dict[str, Any]) -> dict:
     symbols: list[str] = params.get("symbols", [])
     if isinstance(symbols, str):
         symbols = [s.strip() for s in symbols.split(",")]
-    days_ahead = int(params.get("days_ahead", 7))
+    days_ahead = max(1, min(int(params.get("days_ahead", 7)), 90))
     wanted = {s.upper() for s in symbols}
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

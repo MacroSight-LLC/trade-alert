@@ -13,11 +13,11 @@ class TestCheckMcps:
     """Tests for the check_mcps() function."""
 
     def test_all_healthy(self) -> None:
-        """All 8 MCPs return 200."""
+        """All 11 MCPs return 200."""
         mock_resp = MagicMock(status_code=200)
         with patch.object(httpx, "get", return_value=mock_resp):
             healthy, unhealthy = check_mcps()
-        assert len(healthy) == 8
+        assert len(healthy) == 11
         assert unhealthy == []
 
     def test_all_unreachable(self) -> None:
@@ -25,7 +25,7 @@ class TestCheckMcps:
         with patch.object(httpx, "get", side_effect=httpx.ConnectError("refused")):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 8
+        assert len(unhealthy) == 11
 
     def test_partial_failure(self) -> None:
         """Some MCPs healthy, some not."""
@@ -40,7 +40,7 @@ class TestCheckMcps:
         assert len(unhealthy) == 2
         assert "tradingview-mcp" in unhealthy
         assert "polygon-mcp" in unhealthy
-        assert len(healthy) == 6
+        assert len(healthy) == 9
 
     def test_non_200_counted_as_unhealthy(self) -> None:
         """Non-200 status codes count as unhealthy."""
@@ -48,14 +48,14 @@ class TestCheckMcps:
         with patch.object(httpx, "get", return_value=mock_resp):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 8
+        assert len(unhealthy) == 11
 
     def test_timeout_counted_as_unhealthy(self) -> None:
         """Timeout errors count as unhealthy."""
         with patch.object(httpx, "get", side_effect=httpx.ReadTimeout("timeout")):
             healthy, unhealthy = check_mcps()
         assert healthy == []
-        assert len(unhealthy) == 8
+        assert len(unhealthy) == 11
 
     def test_custom_timeout_passed(self) -> None:
         """Custom timeout is forwarded to httpx.get."""
@@ -66,8 +66,8 @@ class TestCheckMcps:
             assert call.kwargs.get("timeout") == 2.0 or call[1].get("timeout") == 2.0
 
     def test_mcp_services_has_10_entries(self) -> None:
-        """SSOT §3 defines exactly 10 MCP services."""
-        assert len(MCP_SERVICES) == 8
+        """SSOT §3 defines exactly 11 MCP services."""
+        assert len(MCP_SERVICES) == 11
 
     def test_mcp_ports_match_ssot(self) -> None:
         """Verify port assignments match SSOT §3."""
@@ -77,9 +77,12 @@ class TestCheckMcps:
             "discord-mcp": 8003,
             "finnhub-mcp": 8004,
             "rot-mcp": 8005,
+            "edgar-mcp": 8006,
+            "yfinance-mcp": 8007,
             "trading-mcp": 8008,
             "fred-mcp": 8009,
             "spamshield-mcp": 8010,
+            "alpaca-mcp": 8011,
         }
         for name, url in MCP_SERVICES:
             port = int(url.split(":")[-1].split("/")[0])
@@ -111,6 +114,8 @@ class TestRunHealthcheck:
         assert "fred-mcp" in msg
         assert "discord-mcp" in msg
 
+    @patch("healthcheck.check_redis_snapshot_staleness", return_value="")
+    @patch("healthcheck.check_langfuse", return_value="OK")
     @patch("healthcheck.check_recent_alerts", return_value=True)
     @patch("healthcheck.check_mcps", return_value=(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], []))
     @patch("healthcheck.check_postgres", return_value=True)
@@ -123,6 +128,8 @@ class TestRunHealthcheck:
         mock_pg: MagicMock,
         mock_mcps: MagicMock,
         mock_alerts: MagicMock,
+        mock_langfuse: MagicMock,
+        mock_stale: MagicMock,
     ) -> None:
         """All green should NOT trigger an ops alert."""
         from healthcheck import run_healthcheck
