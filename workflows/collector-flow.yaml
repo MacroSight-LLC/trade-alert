@@ -57,7 +57,9 @@ steps:
 
   # Step 3 -- Code agent: merge polygon results, normalize, push to Redis
   # SSOT S7 Flow: volume_multiple scoring -- 1.5-3 => 1.0, 3-5 => 2.5, >=5 => 3.0
-  # Redis key: snapshots:15m, TTL 900s
+  # Pushes to BOTH snapshots:15m and snapshots:1h intentionally so the 1h
+  # decision engine has fresh volume context even when 1h-specific collectors
+  # haven't run yet (volume spikes are time-sensitive).  TTL 900s.
   - name: normalize-and-store-snapshots
     type: code
     code: |

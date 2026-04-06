@@ -66,7 +66,7 @@ def _put_conn(conn: psycopg2.extensions.connection) -> None:
     """Return a connection to the pool."""
     try:
         _get_pool().putconn(conn)
-    except Exception:  # noqa: BLE001
+    except (psycopg2.Error, RuntimeError):
         logger.debug("Failed to return connection to pool", exc_info=True)
 
 
@@ -216,7 +216,7 @@ def get_recent_winrate_summary(days: int = 7) -> dict[str, Any]:
             buckets = [dict(row) for row in cur.fetchall()]
             summary["ep_calibration"] = buckets
             return summary
-    except Exception as exc:
+    except psycopg2.Error as exc:
         logger.warning("get_recent_winrate_summary failed: %s", exc)
         return {
             "total_resolved": 0,
@@ -382,6 +382,6 @@ if __name__ == "__main__":
         conn = get_conn()
         _put_conn(conn)
         print("DB connection successful ✅")
-    except Exception as e:
+    except (psycopg2.Error, RuntimeError) as e:
         print(f"DB not available (expected in dev): {e}")
         print("db.py structure valid ✅")

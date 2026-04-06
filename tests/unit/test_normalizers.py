@@ -1,12 +1,14 @@
-"""Unit tests for all 5 normalizers (SSOT §7)."""
+"""Unit tests for all 7 normalizers (SSOT §7)."""
 
 from __future__ import annotations
 
 from normalizers import safe_float
+from normalizers.events_normalizer import normalize as events_normalize
 from normalizers.flow_normalizer import normalize as flow_normalize
 from normalizers.macro_normalizer import normalize as macro_normalize
 from normalizers.market_normalizer import normalize as market_normalize
 from normalizers.sentiment_normalizer import normalize as sentiment_normalize
+from normalizers.si_normalizer import normalize as si_normalize
 from normalizers.ta_normalizer import normalize as ta_normalize
 
 # ── safe_float utility ──────────────────────────────────────────
@@ -415,3 +417,178 @@ class TestMacroNormalizer:
         raw = {"vix": 15.0, "yield_curve_slope": float("inf"), "risk_on": True}
         result = macro_normalize(raw, timeframe="15m")
         assert len(result) == 0
+
+
+# ── Events Normalizer ───────────────────────────────────────────
+
+
+class TestEventsNormalizer:
+    """Tests for events_normalizer.normalize."""
+
+    def test_earnings_tomorrow(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        raw = {"AAPL": {"earnings_date": tomorrow, "hour": "bmo"}}
+        result = events_normalize(raw, timeframe="15m")
+        assert len(result) == 1
+        sig = result[0].signals[0]
+        assert sig.type == "catalyst_event"
+        assert sig.score == 2.5
+        assert sig.confidence == 0.90
+        assert "[BMO]" in sig.reason
+
+    def test_earnings_in_3_days(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        dt = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%d")
+        raw = {"TSLA": {"earnings_date": dt}}
+        result = events_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 1.5
+        assert sig.confidence == 0.75
+
+    def test_earnings_in_5_days(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        dt = (datetime.now(timezone.utc) + timedelta(days=5)).strftime("%Y-%m-%d")
+        raw = {"MSFT": {"earnings_date": dt}}
+        result = events_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 0.5
+        assert sig.confidence == 0.50
+
+    def test_earnings_too_far(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        dt = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d")
+        raw = {"GOOG": {"earnings_date": dt}}
+        result = events_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_recent_8k(self) -> None:
+        raw = {"AMZN": {"recent_8k": True}}
+        result = events_normalize(raw, timeframe="1h")
+        assert len(result) == 1
+        sig = result[0].signals[0]
+        assert sig.type == "catalyst_event"
+        assert sig.source == "edgar"
+        assert sig.score == 2.0
+        assert sig.confidence == 0.75
+
+    def test_multiple_filings(self) -> None:
+        raw = {"META": {"filing_count": 3}}
+        result = events_normalize(raw, timeframe="15m")
+        assert len(result) == 1
+        sig = result[0].signals[0]
+        assert sig.score == 1.0
+        assert sig.confidence == 0.60
+
+    def test_single_filing_ignored(self) -> None:
+        raw = {"NVDA": {"filing_count": 1}}
+        result = events_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_empty_input(self) -> None:
+        result = events_normalize({}, timeframe="15m")
+        assert len(result) == 0
+
+    def test_bad_earnings_date_skipped(self) -> None:
+        raw = {"BAD": {"earnings_date": "not-a-date"}}
+        result = events_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_eps_estimate_in_reason(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        raw = {"AAPL": {"earnings_date": tomorrow, "eps_estimate": 1.52}}
+        result = events_normalize(raw, timeframe="15m")
+        assert "EPS est $1.52" in result[0].signals[0].reason
+
+
+# ── SI Normalizer ───────────────────────────────────────────────
+
+
+class TestSiNormalizer:
+    """Tests for si_normalizer.normalize."""
+
+    def test_extreme_si(self) -> None:
+        raw = {"GME": {"si_pct_float": 0.30}}
+        result = si_normalize(raw, timeframe="15m")
+        assert len(result) == 1
+        sig = result[0].signals[0]
+        assert sig.type == "short_interest"
+        assert sig.score == 2.5
+        assert sig.confidence == 0.85
+
+    def test_elevated_si(self) -> None:
+        raw = {"AMC": {"si_pct_float": 0.18}}
+        result = si_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 2.0
+        assert sig.confidence == 0.75
+
+    def test_notable_si(self) -> None:
+        raw = {"BBBY": {"si_pct_float": 0.12}}
+        result = si_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 1.0
+        assert sig.confidence == 0.60
+
+    def test_below_threshold_ignored(self) -> None:
+        raw = {"AAPL": {"si_pct_float": 0.05}}
+        result = si_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_short_ratio_boost(self) -> None:
+        raw = {"GME": {"si_pct_float": 0.25, "short_ratio": 7.0}}
+        result = si_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 3.0  # 2.5 + 0.5 boost
+        assert "days-to-cover" in sig.reason
+
+    def test_short_ratio_no_boost_below_5(self) -> None:
+        raw = {"AMC": {"si_pct_float": 0.25, "short_ratio": 3.0}}
+        result = si_normalize(raw, timeframe="15m")
+        sig = result[0].signals[0]
+        assert sig.score == 2.5  # no boost
+
+    def test_none_si_pct_skipped(self) -> None:
+        raw = {"AAPL": {"si_pct_float": None}}
+        result = si_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_nan_si_pct_skipped(self) -> None:
+        raw = {"AAPL": {"si_pct_float": float("nan")}}
+        result = si_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+    def test_empty_input(self) -> None:
+        result = si_normalize({}, timeframe="15m")
+        assert len(result) == 0
+
+    def test_timeframe_passed(self) -> None:
+        raw = {"GME": {"si_pct_float": 0.30}}
+        result = si_normalize(raw, timeframe="1h")
+        assert result[0].timeframe == "1h"
+
+    def test_shares_short_in_reason(self) -> None:
+        raw = {"GME": {"si_pct_float": 0.25, "shares_short": 12_000_000}}
+        result = si_normalize(raw, timeframe="15m")
+        assert "12,000,000 shares short" in result[0].signals[0].reason
+
+    def test_boundary_25_pct(self) -> None:
+        raw = {"X": {"si_pct_float": 0.25}}
+        result = si_normalize(raw, timeframe="15m")
+        assert result[0].signals[0].score == 2.5
+
+    def test_boundary_15_pct(self) -> None:
+        raw = {"X": {"si_pct_float": 0.15}}
+        result = si_normalize(raw, timeframe="15m")
+        assert result[0].signals[0].score == 2.0
+
+    def test_boundary_10_pct(self) -> None:
+        raw = {"X": {"si_pct_float": 0.10}}
+        result = si_normalize(raw, timeframe="15m")
+        assert result[0].signals[0].score == 1.0

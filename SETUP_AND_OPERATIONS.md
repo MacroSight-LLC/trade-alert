@@ -12,7 +12,8 @@
 5. [Discord Bot Commands](#discord-bot-commands)
 6. [Health Checks & Monitoring](#health-checks--monitoring)
 7. [Common Operations](#common-operations)
-8. [Troubleshooting](#troubleshooting)
+8. [Remote / VPS Deployment](#remote--vps-deployment)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -45,6 +46,25 @@
 | fred-mcp                  | ✅ Healthy | Macro data (VIX, yield curve, CPI) on :8009     |
 | spamshield-mcp            | ✅ Healthy | Duplicate/noise filtering on :8010              |
 | alpaca-mcp                | ✅ Healthy | Real-time quotes, market status on :8011        |
+
+---
+
+## Pipeline Tunables (Non-Secret Environment Variables)
+
+These `.env` variables control pipeline behavior and can be overridden without touching code:
+
+| Variable                    | Default | Description                                            |
+| --------------------------- | ------- | ------------------------------------------------------ |
+| `VIX_EXTREME_THRESHOLD`     | `35.0`  | VIX above this → `macro_risk_off` score 3.0            |
+| `VIX_ELEVATED_THRESHOLD`    | `25.0`  | VIX above this → `macro_risk_off` score 2.0            |
+| `CURVE_INVERSION_THRESHOLD` | `-50.0` | Yield curve below this (bps) → inversion signal        |
+| `GATE_EP_15M`               | `0.70`  | Minimum edge_probability for 15m alerts                |
+| `GATE_EP_1H`                | `0.75`  | Minimum edge_probability for 1h alerts                 |
+| `GATE_SA`                   | `3`     | Minimum sources_agree for any alert                    |
+| `GATE_CONF`                 | `0.75`  | Minimum average confidence for any alert               |
+| `MERGER_TOP_N`              | `20`    | Max symbols passed to the decision engine              |
+| `REDIS_SNAPSHOT_TTL`        | `900`   | TTL (seconds) for Redis snapshot queues                |
+| `OUTCOME_WINDOW_HOURS`      | `4`     | Default alert expiry window (fallback if no timeframe) |
 
 ---
 
@@ -368,6 +388,127 @@ docker compose -f docker-compose.prod.yml build
 # Restart with new builds
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+---
+
+## Remote / VPS Deployment
+
+When moving from localhost to a remote host (VPS, cloud VM, dedicated server),
+the codebase is **already parameterized** — you only need to change environment
+variables, not code. Here's what to configure:
+
+### 1. Port Security (Critical)
+
+By default, `docker-compose.prod.yml` binds internal services to **127.0.0.1**
+(loopback only). This includes Redis, Postgres, Vault, Langfuse-DB, and **MCP servers
+(8001-8011)** — they are NOT publicly accessible. Only containers on the
+same Docker network can reach them.
+
+Langfuse UI (:3000) and Dashboard (:8080) default to `0.0.0.0` for browser access.
+Protect them with a reverse proxy (nginx/caddy) + TLS in production.
+
+If you need remote access to a specific service (e.g., for external monitoring),
+override in `.env`:
+
+```bash
+# Only do this if you have a firewall / security group blocking external access:
+POSTGRES_BIND=0.0.0.0    # Expose Postgres externally (DANGEROUS without firewall)
+MCP_BIND=0.0.0.0         # Expose MCP servers externally (NOT recommended)
+
+# Restrict Langfuse/Dashboard to loopback (if behind a reverse proxy on the same host):
+LANGFUSE_BIND=127.0.0.1
+DASHBOARD_BIND=127.0.0.1
+```
+
+### 2. Langfuse Configuration
+
+**Self-hosted Langfuse on the same host (recommended):**
+
+```bash
+# .env — set NEXTAUTH_URL to your server's public URL:
+NEXTAUTH_URL=https://langfuse.yourdomain.com
+
+# docker-compose already sets LANGFUSE_HOST=http://langfuse:3000 for
+# inter-container communication. No change needed.
+```
+
+**Langfuse Cloud (managed):**
+
+```bash
+# .env.secrets — use Langfuse Cloud credentials:
+LANGFUSE_PUBLIC_KEY=pk-lf-xxxxxxxx
+LANGFUSE_SECRET_KEY=sk-lf-xxxxxxxx
+
+# .env — point to cloud:
+# (Not needed in docker-compose; override for the seed script)
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+When using Langfuse Cloud, you can remove the `langfuse` and `langfuse-db`
+services from docker-compose.prod.yml entirely.
+
+### 3. Seeding Prompts on a Remote Host
+
+```bash
+# From inside the container (self-hosted, inter-container DNS):
+docker compose -f docker-compose.prod.yml exec cuga \
+  python scripts/seed_langfuse_prompts.py
+
+# From the host machine (needs LANGFUSE_HOST set):
+LANGFUSE_HOST=http://localhost:3000 python scripts/seed_langfuse_prompts.py
+
+# Langfuse Cloud (from anywhere with credentials):
+python scripts/seed_langfuse_prompts.py --host https://cloud.langfuse.com
+
+# Update existing prompts (creates new version):
+python scripts/seed_langfuse_prompts.py --update
+```
+
+### 4. Reverse Proxy (Recommended)
+
+For production, place nginx or caddy in front of public-facing services:
+
+| Service     | Internal Port | Public Path                 |
+| ----------- | ------------- | --------------------------- |
+| Langfuse UI | 3000          | `langfuse.yourdomain.com`   |
+| Dashboard   | 8080          | `dash.yourdomain.com`       |
+| MCP servers | 8001-8011     | Not proxied (loopback only) |
+
+MCP servers are bound to `127.0.0.1` by default and should **never** be
+exposed publicly — they're called only by the cuga container over the Docker
+network.
+
+### 5. Vault on a Remote Host
+
+Vault configuration doesn't change — it uses the Docker network internally.
+Ensure `.vault-init.json` is securely transferred to the remote host and
+**never** committed to version control.
+
+```bash
+# On the remote host:
+scp .vault-init.json user@remote:/path/to/trade-alert/
+scp .env.secrets user@remote:/path/to/trade-alert/
+```
+
+### 6. TLS Considerations
+
+- **Langfuse:** Set `NEXTAUTH_URL` to `https://...` and terminate TLS at the proxy.
+- **Vault:** For production, enable TLS in `deployment/vault-config.hcl` and use
+  `VAULT_ADDR=https://vault:8200`. Place certs in `deployment/certs/`.
+- **Postgres:** Use `sslmode=require` in `DATABASE_URL` if Postgres is remote.
+
+### 7. Langfuse API — No Code Changes Needed
+
+The Langfuse Python SDK communicates via HTTP REST API. The connection is
+fully parameterized through environment variables:
+
+- `LANGFUSE_HOST` — SDK endpoint (default: `http://localhost:3000`)
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` — authentication
+
+Inside Docker Compose, these are set to internal DNS names. When running
+outside Docker or against Langfuse Cloud, just override the env vars.
+The SDK, prompt management, tracing, and dataset capture all work identically
+regardless of whether Langfuse is local, remote, or cloud-hosted.
 
 ---
 

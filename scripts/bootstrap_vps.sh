@@ -4,9 +4,10 @@
 #
 # What it does:
 #   1. Installs Docker CE + Docker Compose plugin (official apt repo)
-#   2. Configures UFW firewall (SSH, HTTP/S, MCP ports 8001-8011)
-#   3. Creates non-root 'deploy' user with Docker group access
-#   4. Hardens SSH (disable password auth, disable root login)
+#   2. Installs HashiCorp Vault CLI (for vault-init.sh)
+#   3. Configures UFW firewall (SSH, HTTP/S, MCP ports 8001-8011)
+#   4. Creates non-root 'deploy' user with Docker group access
+#   5. Hardens SSH (disable password auth, disable root login)
 #
 # Safe to re-run — all steps are idempotent.
 # No secrets are embedded in this script.
@@ -14,7 +15,7 @@ set -euo pipefail
 
 DEPLOY_USER="deploy"
 
-echo "==> [1/4] Installing Docker CE + Compose plugin"
+echo "==> [1/5] Installing Docker CE + Compose plugin"
 if ! command -v docker &>/dev/null; then
     apt-get update -qq
     apt-get install -y -qq ca-certificates curl gnupg lsb-release
@@ -38,7 +39,22 @@ else
     echo "    Docker already installed: $(docker --version)"
 fi
 
-echo "==> [2/4] Configuring UFW firewall"
+echo "==> [2/5] Installing HashiCorp Vault CLI"
+if ! command -v vault &>/dev/null; then
+    apt-get install -y -qq gpg
+    wget -qO- https://apt.releases.hashicorp.com/gpg \
+        | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+      https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+      | tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+    apt-get update -qq
+    apt-get install -y -qq vault
+    echo "    Vault CLI installed: $(vault version | head -1)"
+else
+    echo "    Vault CLI already installed: $(vault version | head -1)"
+fi
+
+echo "==> [3/5] Configuring UFW firewall"
 apt-get install -y -qq ufw
 ufw --force reset
 ufw default deny incoming
@@ -51,7 +67,7 @@ ufw allow 8080/tcp comment "Dashboard API"
 ufw --force enable
 echo "    UFW active — $(ufw status | grep -c ALLOW) rules configured"
 
-echo "==> [3/4] Creating deploy user"
+echo "==> [4/5] Creating deploy user"
 if ! id "$DEPLOY_USER" &>/dev/null; then
     adduser --disabled-password --gecos "Trade-Alert Deploy" "$DEPLOY_USER"
     usermod -aG docker "$DEPLOY_USER"
@@ -72,7 +88,7 @@ else
     echo "    User '$DEPLOY_USER' already exists (ensured docker group)"
 fi
 
-echo "==> [4/4] Hardening SSH"
+echo "==> [5/5] Hardening SSH"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 
 # Helper: ensure a directive is present with the desired value.

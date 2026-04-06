@@ -18,7 +18,7 @@
 | Phase 8  | Outcome tracker, winrate reporting                  | ✅ Done        | v0.8.0  |
 | Polish   | Docker fixes, CI, tests, env extraction             | ✅ Done        | v0.8.1  |
 | Phase 9  | Dashboard — analytics web UI                        | ✅ Done        | v0.9.0  |
-| Phase 10 | Pipeline hardening: Vault, data quality, gate fixes | 🔧 In Progress | v0.10.0 |
+| Phase 10 | Pipeline hardening: Vault, data quality, gate fixes | ✅ Done        | v0.10.0 |
 
 ### Architecture Notes
 

@@ -90,6 +90,32 @@ QUALITY RULES — follow these strictly:
    - Volume_spike without directional technical confirmation = noise, not signal.
      Do not count it toward sources_agree unless another directional source confirms.
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
+12. DE-DUPLICATION: Review {{recent_alerts_context}} before alerting.
+   - Do NOT re-alert on a symbol that was alerted in the last 2 hours
+     UNLESS significant new signals have appeared (new signal type, score
+     increase > 0.3, or direction reversal).
+   - If you would re-alert, explain what changed in the thesis.
+13. MARKET HOURS AWARENESS: Current status is {{market_hours_status}}.
+   - Pre-market / After-hours: volume signals are less reliable; require
+     sources_agree >= 4 and raise conviction bar.
+   - Market closed (weekend/holiday): do NOT generate LONG/SHORT alerts;
+     WATCH only.
+   - Regular Trading Hours: normal rules apply.
+
+Outputs MUST conform to this exact PlaybookAlert schema (all fields required
+except unusual_activity which defaults to []):
+  symbol: string (1-10 chars, uppercase ticker)
+  direction: "LONG" | "SHORT" | "WATCH"
+  edge_probability: float 0.50-0.95
+  confidence: float 0.50-1.00
+  timeframe: string (must match input timeframe)
+  thesis: string (min 50 chars, specific causal chain)
+  entry: {"level": float, "stop": float, "target": float}
+  timeframe_rationale: string
+  sentiment_context: string
+  unusual_activity: list[string] (may be empty)
+  macro_regime: string
+  sources_agree: int 3-10
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
 {{performance_context}}
@@ -99,9 +125,12 @@ If the actual win-rate for your EP bucket is below 50%, lower your EP estimates.
 
 _FALLBACK_USER = """\
 Timeframe: {{timeframe}}
+Market Hours: {{market_hours_status}}
 Macro Regime: {{macro_summary}}
 VIX: {{vix}} | Yield Curve: {{yc}}bps | Data: {{data_freshness}}
 Snapshot age: oldest={{snapshot_age_oldest}}s, newest={{snapshot_age_newest}}s
+
+Recent alerts (avoid duplicates): {{recent_alerts_context}}
 
 Evaluate these {{n}} symbols and their signals:
 
@@ -397,6 +426,95 @@ def _check_unresolved_placeholders(text: str, label: str) -> None:
         )
 
 
+def get_market_hours_status() -> str:
+    """Return a human-readable US equity market hours status.
+
+    Uses America/New_York rules:
+    - Pre-market:  04:00–09:30 ET
+    - Regular:     09:30–16:00 ET
+    - After-hours: 16:00–20:00 ET
+    - Closed:      otherwise / weekends / major holidays
+
+    Returns:
+        String like ``"Regular Trading Hours (14:32 ET)"``.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+    et = datetime.now(ZoneInfo("America/New_York"))
+    weekday = et.weekday()  # 0=Mon … 6=Sun
+
+    if weekday >= 5:
+        return f"Market Closed (weekend, {et.strftime('%A %H:%M')} ET)"
+
+    t = et.time()
+    from datetime import time as dt_time
+
+    if t < dt_time(4, 0):
+        return f"Market Closed (overnight, {et.strftime('%H:%M')} ET)"
+    if t < dt_time(9, 30):
+        return f"Pre-market ({et.strftime('%H:%M')} ET)"
+    if t < dt_time(16, 0):
+        return f"Regular Trading Hours ({et.strftime('%H:%M')} ET)"
+    if t < dt_time(20, 0):
+        return f"After-hours ({et.strftime('%H:%M')} ET)"
+    return f"Market Closed (post-session, {et.strftime('%H:%M')} ET)"
+
+
+def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
+    """Build a de-duplication context string from recent alerts.
+
+    Queries the alerts table for alerts fired within the look-back
+    window so the LLM can avoid duplicate alerting.
+
+    Args:
+        hours: Look-back window in hours.
+        limit: Maximum recent alerts to include.
+
+    Returns:
+        Human-readable summary, or ``"None in the last 2 hours."``
+        if no recent alerts exist.
+    """
+    try:
+        import psycopg2.extras
+
+        from db import _put_conn, get_conn
+
+        sql = """
+            SELECT symbol, direction, edge_probability, timeframe, created_at
+            FROM alerts
+            WHERE created_at >= NOW() - INTERVAL '%s hours'
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        conn = get_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (hours, limit))
+                rows = cur.fetchall()
+        finally:
+            _put_conn(conn)
+
+        if not rows:
+            return f"None in the last {hours} hours."
+
+        parts: list[str] = []
+        for r in rows:
+            age_min = int(
+                (datetime.now(timezone.utc) - r["created_at"].replace(tzinfo=timezone.utc)).total_seconds()
+                / 60
+            )
+            parts.append(
+                f"{r['symbol']} {r['direction']} (EP {r['edge_probability']:.2f}, "
+                f"{r['timeframe']}, {age_min}m ago)"
+            )
+        return "; ".join(parts)
+    except Exception:  # noqa: BLE001
+        return "Unable to fetch recent alerts."
+
+
 def get_decision_prompts(
     timeframe: str,
     variables: dict[str, Any],
@@ -428,6 +546,8 @@ def get_decision_prompts(
         "few_shot_examples": "",
         "snapshot_age_oldest": "0",
         "snapshot_age_newest": "0",
+        "market_hours_status": get_market_hours_status(),
+        "recent_alerts_context": get_recent_alerts_context(),
         **_GATE_DEFAULTS.get(timeframe, _GATE_DEFAULTS["15m"]),
         **variables,
     }

@@ -60,7 +60,12 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     )
                 )
 
-        # Enhanced options flow from yfinance chain data
+        # Enhanced options flow from yfinance chain data.
+        # NOTE: This uses call/put ratio as a *complementary* signal to the
+        # spec-compliant sweep-size thresholds (≥500 contracts / ≥$1M premium)
+        # which are implemented in sentiment_normalizer via ROT options flow.
+        # yfinance chain data lacks per-sweep contract/premium breakdown, so
+        # ratio-based scoring is the best available heuristic here.
         call_put_ratio: float | None = data.get("call_put_ratio")
         if call_put_ratio is not None:
             call_put_ratio = safe_float(call_put_ratio)

@@ -1,6 +1,12 @@
 """Events normalizer — earnings calendar and material filings (SSOT §7).
 
 Transforms earnings proximity and 8-K filings into ``catalyst_event`` signals.
+
+Note:
+    EDGAR Form 4 insider *clustering* (≥3 distinct insiders, dollar-value
+    scoring) is handled by ``market_normalizer._add_edgar_insider_signals``
+    which produces ``insider_activity`` signals.  This normalizer focuses on
+    8-K material events and earnings calendar → ``catalyst_event`` signals.
 """
 
 from __future__ import annotations

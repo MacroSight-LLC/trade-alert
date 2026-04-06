@@ -4,6 +4,12 @@
 #   docker compose -f docker-compose.prod.yml up -d                 # infra + app + cron
 #   docker compose -f docker-compose.prod.yml --profile mcp up -d   # full stack with MCPs
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # --- Infrastructure ---
 
@@ -16,7 +22,7 @@ services:
       VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
     entrypoint: ["/bin/sh", "/vault/config/entrypoint.sh"]
     ports:
-      - "8200:8200"
+      - "${VAULT_BIND:-127.0.0.1}:8200:8200"
     volumes:
       - vault-data:/vault/file
       - ./deployment/vault-config.hcl:/vault/config/vault.hcl:ro
@@ -28,6 +34,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -36,7 +43,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${REDIS_BIND:-127.0.0.1}:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -49,6 +56,7 @@ services:
         limits:
           memory: 512M
           cpus: "1.0"
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -56,17 +64,17 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_USER: ${POSTGRES_USER:-trade_alert}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: trade_alert
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5432:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trade_alert}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -75,6 +83,7 @@ services:
         limits:
           memory: 1G
           cpus: "2.0"
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -82,18 +91,19 @@ services:
   langfuse-db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: langfuse
-      POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: ${LANGFUSE_DB_NAME:-langfuse}
+      POSTGRES_USER: ${LANGFUSE_DB_USER:-langfuse}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
     volumes:
       - langfuse-data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "${LANGFUSE_DB_BIND:-127.0.0.1}:5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER:-langfuse}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -104,9 +114,9 @@ services:
       langfuse-db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       SALT: ${SALT:-defaultsalt}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       TELEMETRY_ENABLED: "false"
@@ -119,7 +129,7 @@ services:
       LANGFUSE_INIT_USER_NAME: "admin"
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
     ports:
-      - "3000:3000"
+      - "${LANGFUSE_BIND:-0.0.0.0}:3000:3000"
     healthcheck:
       test:
         [
@@ -130,6 +140,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -139,14 +150,14 @@ services:
   # Activate with: docker compose --profile mcp up -d
 
   tradingview-mcp:
-    build: &mcp-build
+    build:
       context: .
       dockerfile: docker/Dockerfile.mcp
     image: trade-alert-mcp:latest
     profiles: [mcp]
     command: ["8001"]
     ports:
-      - "8001:8001"
+      - "${MCP_BIND:-127.0.0.1}:8001:8001"
     environment: &mcp-env
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
@@ -155,7 +166,7 @@ services:
         required: false
       - path: .env.secrets
         required: false
-    healthcheck: &mcp-health
+    healthcheck:
       test:
         [
           "CMD-SHELL",
@@ -164,6 +175,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -176,7 +188,7 @@ services:
     profiles: [mcp]
     command: ["8002"]
     ports:
-      - "8002:8002"
+      - "${MCP_BIND:-127.0.0.1}:8002:8002"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -188,6 +200,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -200,7 +213,7 @@ services:
     profiles: [mcp]
     command: ["8003"]
     ports:
-      - "8003:8003"
+      - "${MCP_BIND:-127.0.0.1}:8003:8003"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -212,6 +225,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -224,7 +238,7 @@ services:
     profiles: [mcp]
     command: ["8004"]
     ports:
-      - "8004:8004"
+      - "${MCP_BIND:-127.0.0.1}:8004:8004"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -236,6 +250,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -248,7 +263,7 @@ services:
     profiles: [mcp]
     command: ["8005"]
     ports:
-      - "8005:8005"
+      - "${MCP_BIND:-127.0.0.1}:8005:8005"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -260,6 +275,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -272,7 +288,7 @@ services:
     profiles: [mcp]
     command: ["8008"]
     ports:
-      - "8008:8008"
+      - "${MCP_BIND:-127.0.0.1}:8008:8008"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -284,6 +300,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -296,7 +313,7 @@ services:
     profiles: [mcp]
     command: ["8009"]
     ports:
-      - "8009:8009"
+      - "${MCP_BIND:-127.0.0.1}:8009:8009"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -308,6 +325,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -320,7 +338,7 @@ services:
     profiles: [mcp]
     command: ["8010"]
     ports:
-      - "8010:8010"
+      - "${MCP_BIND:-127.0.0.1}:8010:8010"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -332,6 +350,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -344,7 +363,7 @@ services:
     profiles: [mcp]
     command: ["8006"]
     ports:
-      - "8006:8006"
+      - "${MCP_BIND:-127.0.0.1}:8006:8006"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -356,6 +375,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -368,7 +388,7 @@ services:
     profiles: [mcp]
     command: ["8007"]
     ports:
-      - "8007:8007"
+      - "${MCP_BIND:-127.0.0.1}:8007:8007"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -380,6 +400,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -392,7 +413,7 @@ services:
     profiles: [mcp]
     command: ["8011"]
     ports:
-      - "8011:8011"
+      - "${MCP_BIND:-127.0.0.1}:8011:8011"
     environment: *mcp-env
     env_file: *mcp-envfile
     healthcheck:
@@ -404,6 +425,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -411,10 +433,12 @@ services:
   # --- Application ---
 
   cuga:
-    build:
+    build: &cuga-build
       context: .
       dockerfile: docker/Dockerfile.cuga
     depends_on:
+      vault:
+        condition: service_healthy
       redis:
         condition: service_healthy
       postgres:
@@ -453,7 +477,7 @@ services:
       - ./discord_bot.py:/app/discord_bot.py
       - ./logs:/app/logs
       - ./tests:/app/tests
-    env_file:
+    env_file: &app-envfile
       - path: .env
       - path: .env.secrets
         required: false
@@ -463,20 +487,19 @@ services:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
 
   cron:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.cuga
+    build: *cuga-build
     depends_on:
       cuga:
         condition: service_healthy
@@ -507,23 +530,19 @@ services:
     # Cron scheduler — runs pipeline_runner.py on schedule via supercronic.
     # See crontab file for schedule definitions.
     command: ["supercronic", "/etc/crontabs/root"]
-    env_file:
-      - path: .env
-      - path: .env.secrets
-        required: false
-      - path: .env.vault
-        required: false
+    env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
       TZ: America/New_York
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -531,10 +550,10 @@ services:
   # --- Discord Bot (manual trigger) ---
 
   discord-bot:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.cuga
+    build: *cuga-build
     depends_on:
+      vault:
+        condition: service_healthy
       redis:
         condition: service_healthy
       postgres:
@@ -563,22 +582,18 @@ services:
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./discord_bot.py:/app/discord_bot.py
       - ./logs:/app/logs
-    env_file:
-      - path: .env
-      - path: .env.secrets
-        required: false
-      - path: .env.vault
-        required: false
+    env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://trade_alert:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       TZ: America/New_York
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped
@@ -590,6 +605,8 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on:
+      vault:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     env_file:
@@ -601,9 +618,9 @@ services:
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
     ports:
-      - "8080:8080"
+      - "${DASHBOARD_BIND:-0.0.0.0}:8080:8080"
     volumes:
       - ./dashboard_api.py:/app/dashboard_api.py
       - ./dashboard.html:/app/dashboard.html
@@ -630,6 +647,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    logging: *default-logging
     networks:
       - trade-net
     restart: unless-stopped

@@ -122,7 +122,13 @@ def _add_edgar_insider_signals(
     filings: list[dict],
     raw_data: dict,
 ) -> None:
-    """Score EDGAR Form 4 filings by dollar value and cluster density."""
+    """Score EDGAR Form 4 filings by dollar value and cluster density.
+
+    This is the authoritative implementation for SSOT §7 EDGAR insider
+    clustering (≥3 distinct insiders buy → score +2.0, conf 0.80).  The
+    companion ``events_normalizer`` handles 8-K catalysts and earnings
+    calendar → ``catalyst_event`` signals.
+    """
     buy_value = 0.0
     sell_value = 0.0
     buy_count = 0

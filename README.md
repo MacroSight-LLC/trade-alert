@@ -22,6 +22,9 @@
 
 **20 containers total** — all orchestrated via `docker-compose.prod.yml`.
 
+### Production Hardening (Phase 10 — Complete)
+Pydantic field validators, 7-gate validation hardening, NaN/Inf guards in all normalizers, exec sandbox with AST-based safe_eval, Redis connection pooling, persist-first ordering (DB before Discord), atomic SET NX deduplication, non-root Docker containers, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton, and 480+ unit tests.
+
 ## Quick Start
 
 ### 1. Prerequisites

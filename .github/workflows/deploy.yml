@@ -153,6 +153,7 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: deploy
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          script_stop: true
           script: |
             set -euo pipefail
             cd ~/trade-alert
@@ -160,14 +161,18 @@ jobs:
             # Pull latest code
             git pull origin main
 
-            # Log in to GHCR and pull new images
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Rebuild images from updated source
+            docker compose -f docker-compose.prod.yml build --parallel
 
-            docker compose -f docker-compose.prod.yml pull
+            # Rolling restart — infra first, then app, then MCPs
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             docker compose -f docker-compose.prod.yml --profile mcp up -d --remove-orphans
 
-            # Clean up old images
+            # Re-seed Langfuse prompts (idempotent — skips if unchanged)
+            docker compose -f docker-compose.prod.yml exec -T cuga \
+              python scripts/seed_langfuse_prompts.py --update --host http://langfuse:3000 || true
+
+            # Clean up dangling images
             docker image prune -f
 
   # ── Job 5: Post-deploy smoke test ───────────────────────────────
@@ -184,23 +189,40 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: deploy
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          script_stop: true
           script: |
             set -euo pipefail
+            DC="docker compose -f ~/trade-alert/docker-compose.prod.yml"
+            FAILED=0
 
-            # Check dashboard responds
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health || echo "000")
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "Dashboard healthcheck failed (HTTP $HTTP_CODE)"
+            check() {
+              local name="$1" cmd="$2"
+              if eval "$cmd" >/dev/null 2>&1; then
+                echo "✅ $name"
+              else
+                echo "❌ $name"
+                FAILED=$((FAILED + 1))
+              fi
+            }
+
+            # Infrastructure
+            check "Vault"    "curl -sf http://localhost:8200/v1/sys/health"
+            check "Redis"    "$DC exec -T redis redis-cli ping | grep -q PONG"
+            check "Postgres" "$DC exec -T postgres pg_isready -U trade_alert"
+            check "Langfuse" "curl -sf http://localhost:3000/api/public/health"
+
+            # Application
+            check "Dashboard" "curl -sf http://localhost:8080/api/summary"
+            check "Cuga"      "$DC ps cuga --format '{{.Health}}' | grep -q healthy"
+
+            # MCP spot-check (first 3)
+            for port in 8001 8002 8003; do
+              check "MCP:${port}" "curl -sf http://localhost:${port}/health"
+            done
+
+            echo ""
+            if [ "$FAILED" -gt 0 ]; then
+              echo "Smoke test: ${FAILED} check(s) failed"
               exit 1
             fi
-            echo "Dashboard: OK"
-
-            # Check Redis
-            docker compose -f ~/trade-alert/docker-compose.prod.yml exec -T redis redis-cli ping | grep -q PONG
-            echo "Redis: OK"
-
-            # Check Postgres
-            docker compose -f ~/trade-alert/docker-compose.prod.yml exec -T postgres pg_isready -U trade_alert | grep -q "accepting connections"
-            echo "Postgres: OK"
-
-            echo "Smoke test passed"
+            echo "Smoke test passed — all checks green"

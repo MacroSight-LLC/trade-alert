@@ -1,79 +1,123 @@
 {
-    "python.defaultInterpreterPath": ".venv/bin/python",
+    // ============================================================
+    // PYTHON INTERPRETER & ENVIRONMENT
+    // ============================================================
+    "python.defaultInterpreterPath": "/Users/taylordean/trade-alert/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.envFile": "${workspaceFolder}/.env",
+    // ============================================================
+    // PYLANCE / ANALYSIS
+    // ============================================================
     "python.analysis.extraPaths": [
         "${workspaceFolder}/src"
     ],
-    "python.analysis.diagnosticMode": "openFiles",
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.analysis.typeCheckingMode": "standard",
     "python.analysis.exclude": [
+        "**/node_modules",
+        "**/.venv",
         ".venv",
         "src/cuga",
-        "src/scripts",
-        "src/system_tests",
+        "src/cuga/**",
         "src/frontend_workspaces",
+        "src/system_tests",
+        "src/scripts",
+        "data",
+        "logs"
+    ],
+    "python.analysis.ignore": [
+        "**/node_modules",
+        "**/.venv",
+        ".venv/**",
+        "src/cuga/**",
+        "src/frontend_workspaces/**",
+        "src/system_tests/**",
+        "src/scripts/**"
+    ],
+    // ============================================================
+    // TESTING
+    // ============================================================
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
         "tests",
-        "docs",
-        "normalizers",
-        "run_stability_tests.py"
+        "-v",
+        "--tb=short"
     ],
-    "editor.rulers": [
-        88,
-        100,
-        120
-    ],
+    "python.testing.unittestEnabled": false,
+    // ============================================================
+    // EDITOR (project-specific overrides)
+    // ============================================================
+    "[python]": {
+        "editor.rulers": [
+            110
+        ]
+    },
+    // ============================================================
+    // YAML SCHEMAS
+    // ============================================================
     "yaml.validate": true,
     "yaml.schemas": {
-        "https://json.schemastore.org/github-workflow.json": ".github/workflows/*.yml",
-        "https://json.schemastore.org/github-action.json": "action.yml"
+        "https://json.schemastore.org/github-workflow.json": "${workspaceFolder}/.github/workflows/*.yml",
+        "https://json.schemastore.org/github-action.json": "${workspaceFolder}/action.yml"
     },
+    // ============================================================
+    // FILE ASSOCIATIONS
+    // ============================================================
     "files.associations": {
         "*.yaml": "yaml",
         "*.yml": "yaml",
         "*.md": "markdown"
     },
+    // ============================================================
+    // FILES: EXCLUDE FROM EXPLORER
+    // (build artifacts & caches only — never hide source folders)
+    // ============================================================
     "files.exclude": {
         "**/__pycache__": true,
         "**/.pytest_cache": true,
         "**/.mypy_cache": true,
         "**/.ruff_cache": true,
         "**/*.pyc": true,
-        "**/node_modules": true,
         "**/.DS_Store": true,
         "**/*.egg-info": true,
         ".venv": true,
-        "data/": true,
-        "docs/": true,
-        "logs/": true,
-        "tests/": true,
-        "src/scripts/": true,
-        "src/system_tests/": true,
-        "src/frontend_workspaces/": true,
-        "uv.lock": true,
-        ".env": true
+        "uv.lock": true
     },
-    "github.copilot.enable": {
-        "*": false,
-        "python": true,
-        "yaml": true,
-        "dockerfile": true,
-        "markdown": true,
-        "toml": true,
-        "shellscript": true
-    },
+    // ============================================================
+    // SEARCH: EXCLUDE FROM WORKSPACE SEARCH
+    // ============================================================
     "search.exclude": {
-        "**/node_modules": true,
-        "**/__pycache__": true,
         "**/.venv": true,
-        "**/output": true,
+        "**/__pycache__": true,
         "**/.mypy_cache": true,
         "**/.ruff_cache": true,
-        "data/": true,
-        "logs/": true
+        "**/node_modules": true,
+        "data/postgres": true,
+        "logs/": true,
+        "src/cuga/": true,
+        "src/frontend_workspaces/": true
     },
+    // ============================================================
+    // FILE WATCHER: EXCLUDE HEAVY DIRS
+    // ============================================================
+    "files.watcherExclude": {
+        "${workspaceFolder}/.venv/**": true,
+        "${workspaceFolder}/data/**": true,
+        "${workspaceFolder}/logs/**": true,
+        "${workspaceFolder}/src/cuga/**": true
+    },
+    // ============================================================
+    // REST CLIENT
+    // ============================================================
     "rest-client.environmentVariables": {
         "$shared": {},
         "local": {
             "baseUrl": "http://localhost:8000"
         }
     },
+    // ============================================================
+    // GIT
+    // ============================================================
     "git.defaultRemote": "origin"
 }

@@ -87,6 +87,32 @@ QUALITY RULES — follow these strictly:
    - Volume_spike without directional technical confirmation = noise, not signal.
      Do not count it toward sources_agree unless another directional source confirms.
 11. Output STRICT JSON only — no prose, no markdown, no explanation outside JSON
+12. DE-DUPLICATION: Review {{recent_alerts_context}} before alerting.
+   - Do NOT re-alert on a symbol that was alerted in the last 2 hours
+     UNLESS significant new signals have appeared (new signal type, score
+     increase > 0.3, or direction reversal).
+   - If you would re-alert, explain what changed in the thesis.
+13. MARKET HOURS AWARENESS: Current status is {{market_hours_status}}.
+   - Pre-market / After-hours: volume signals are less reliable; require
+     sources_agree >= 4 and raise conviction bar.
+   - Market closed (weekend/holiday): do NOT generate LONG/SHORT alerts;
+     WATCH only.
+   - Regular Trading Hours: normal rules apply.
+
+Outputs MUST conform to this exact PlaybookAlert schema (all fields required
+except unusual_activity which defaults to []):
+  symbol: string (1-10 chars, uppercase ticker)
+  direction: "LONG" | "SHORT" | "WATCH"
+  edge_probability: float 0.50-0.95
+  confidence: float 0.50-1.00
+  timeframe: string (must match input timeframe)
+  thesis: string (min 50 chars, specific causal chain)
+  entry: {"level": float, "stop": float, "target": float}
+  timeframe_rationale: string
+  sentiment_context: string
+  unusual_activity: list[string] (may be empty)
+  macro_regime: string
+  sources_agree: int 3-10
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
 {{performance_context}}
@@ -96,9 +122,12 @@ If the actual win-rate for your EP bucket is below 50%, lower your EP estimates.
 
 USER_PROMPT = """\
 Timeframe: {{timeframe}}
+Market Hours: {{market_hours_status}}
 Macro Regime: {{macro_summary}}
 VIX: {{vix}} | Yield Curve: {{yc}}bps | Data: {{data_freshness}}
 Snapshot age: oldest={{snapshot_age_oldest}}s, newest={{snapshot_age_newest}}s
+
+Recent alerts (avoid duplicates): {{recent_alerts_context}}
 
 Evaluate these {{n}} symbols and their signals:
 
@@ -147,8 +176,13 @@ Return [] if no symbols meet ALL requirements.
 Return ONLY the JSON array. No other text."""
 
 
-def seed() -> None:
-    """Create or update prompts in Langfuse."""
+def seed(*, update: bool = False) -> None:
+    """Create or update prompts in Langfuse.
+
+    Args:
+        update: If True and prompts already exist, create a new version
+            rather than skipping.
+    """
     lf = get_langfuse_client()
     if lf is None:
         logger.error(
@@ -169,12 +203,45 @@ def seed() -> None:
             )
             logger.info("Created prompt '%s' with label 'production'", name)
         except Exception as exc:
-            # If prompt already exists, Langfuse raises — log and continue
-            logger.warning("Prompt '%s' may already exist: %s", name, exc)
+            if update:
+                try:
+                    lf.create_prompt(
+                        name=name,
+                        prompt=text,
+                        labels=["production"],
+                        type="text",
+                        is_active=True,
+                    )
+                    logger.info("Updated prompt '%s' — new version created", name)
+                except Exception as update_exc:  # noqa: BLE001
+                    logger.warning("Failed to update prompt '%s': %s", name, update_exc)
+            else:
+                logger.warning(
+                    "Prompt '%s' already exists (use --update to create new version): %s",
+                    name,
+                    exc,
+                )
 
     lf.flush()
     logger.info("Done — prompts seeded in Langfuse")
 
 
 if __name__ == "__main__":
-    seed()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed Langfuse prompts for the decision engine")
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Create new prompt versions if prompts already exist",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Override LANGFUSE_HOST (e.g. https://cloud.langfuse.com)",
+    )
+    args = parser.parse_args()
+    if args.host:
+        os.environ["LANGFUSE_HOST"] = args.host
+    seed(update=args.update)
