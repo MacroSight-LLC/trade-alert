@@ -39,7 +39,7 @@ as the Python-importable boundary — not the collectors themselves.
    The high‑level flow defined here is immutable. You may only implement, refactor, or extend *within* this structure.
 
 2. **Do not modify CUGA core.**
-   Files under `src/cuga/` (or equivalent) from the official `cuga-agent` repo are treated as a library and MUST NOT be edited except for configuration hooks if absolutely necessary.[web:76][web:81]
+   Files under `src/cuga/` (or equivalent) from the official `cuga-agent` repo are treated as a library and MUST NOT be edited except for configuration hooks if absolutely necessary.
 
 3. **No new schemas without updating this file.**
    All domain models are defined in this spec (`Signal`, `Snapshot`, `PlaybookAlert`). Code MUST NOT introduce alternative or ad‑hoc schemas.
@@ -71,7 +71,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
   1. Name the target file explicitly.
   2. Reference the relevant section of this spec.
   3. For workflows, say:
-     > “Follow the CUGA YAML patterns from the official `cuga-agent` examples but with the tools and prompts from this spec.”[web:81]
+     > “Follow the CUGA YAML patterns from the official `cuga-agent` examples but with the tools and prompts from this spec.”
 
 - Never let AI tools “auto‑refactor” across the whole repo. Limit them to the file or function you specify.
 
@@ -124,7 +124,7 @@ Use the existing architecture diagram as the canonical visual reference. It MUST
 
 ## 3. MCP Inventory & Integration Best Practices
 
-All MCP services run in Docker, expose `/health`, and are wired into CUGA via its MCP client tooling.[web:81]
+All MCP services run in Docker, expose `/health`, and are wired into CUGA via its MCP client tooling.
 
 | Port | Service Name       | Key Tools (examples)                                   | Role & Integration Notes                                                                                                                                      |
 | ---- | ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |

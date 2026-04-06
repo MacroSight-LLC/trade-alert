@@ -11,8 +11,11 @@ Prompt names in Langfuse:
     ``decision-user``   — macro context, signals, gate thresholds
 
 Variables injected at runtime:
-    timeframe, macro_summary, vix, yc, n, snapshots_json,
-    ep_gate, sa_gate, conf_gate, extra_rules
+    timeframe, extra_rules, data_freshness, performance_context,
+    few_shot_examples, snapshot_age_oldest, snapshot_age_newest,
+    market_hours_status, recent_alerts_context,
+    macro_summary, vix, yc, n, snapshots_json,
+    ep_gate, sa_gate, conf_gate
 """
 
 from __future__ import annotations
