@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from jinja2 import Template
 
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
 cuga = pytest.importorskip("cuga", reason="cuga library not installed")
 
 from cuga.backend.cuga_graph.state.agent_state import SubTaskHistory

@@ -8,6 +8,7 @@ its target / stop levels, and writes the result back to Postgres via
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -41,6 +42,17 @@ _TIMEFRAME_EXPIRY_HOURS: dict[str, int] = {
 }
 
 _http_client: httpx.Client | None = None
+
+
+def _close_http_client() -> None:
+    """Close the module-level HTTP client on process exit."""
+    global _http_client  # noqa: PLW0603
+    if _http_client is not None and not _http_client.is_closed:
+        _http_client.close()
+        _http_client = None
+
+
+atexit.register(_close_http_client)
 
 
 def _get_http_client() -> httpx.Client:

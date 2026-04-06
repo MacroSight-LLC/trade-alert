@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,13 +36,19 @@ class TestMergeSnapshots:
         assert result["n"] == 0
 
     def test_none_inputs_falls_through_to_redis(self) -> None:
-        with patch("merger.merge", return_value=[]), patch("merger.get_macro_regime", return_value={}):
+        mock_merger = MagicMock()
+        mock_merger.merge.return_value = []
+        mock_merger.get_macro_regime.return_value = {}
+        with patch.dict(sys.modules, {"merger": mock_merger}):
             result = merge_snapshots("15m", None)
             assert result["skip"] is True
             assert result["n"] == 0
 
     def test_empty_inputs_falls_through_to_redis(self) -> None:
-        with patch("merger.merge", return_value=[]), patch("merger.get_macro_regime", return_value={}):
+        mock_merger = MagicMock()
+        mock_merger.merge.return_value = []
+        mock_merger.get_macro_regime.return_value = {}
+        with patch.dict(sys.modules, {"merger": mock_merger}):
             result = merge_snapshots("15m", {})
             assert result["skip"] is True
 

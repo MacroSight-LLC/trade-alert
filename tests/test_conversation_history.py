@@ -7,11 +7,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from cuga.backend.server.conversation_history import ConversationHistoryDB
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
+
+from langchain_core.messages import AIMessage, HumanMessage
+
 from cuga.backend.cuga_graph.state.agent_state import default_state
-from langchain_core.messages import HumanMessage, AIMessage
+from cuga.backend.server.conversation_history import ConversationHistoryDB
 
 
 def test_conversation_history_db():

@@ -3,8 +3,28 @@ Test script for agent tools API.
 Run this after starting the server to verify the implementation.
 """
 
-import requests
+from __future__ import annotations
+
 import json
+import socket
+
+import pytest
+import requests
+
+
+def _server_available() -> bool:
+    """Return True if the agent tools API is reachable."""
+    try:
+        with socket.create_connection(("localhost", 8000), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _server_available(),
+    reason="Agent tools API server not running on localhost:8000",
+)
 
 BASE_URL = "http://localhost:8000/api/manage"
 AGENT_ID = "test-agent"

@@ -11,15 +11,17 @@ These tests do NOT require an external server — they call the internal functio
 directly using pytest-asyncio.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
 
 from cuga.backend.llm.models import (
     LLMManager,
     _ModelSettingsWrap,
     set_current_llm_override,
 )
-
 
 BAD_KEY = "sk-bad-key-000000000000"
 
@@ -134,6 +136,7 @@ class TestDynamicAgentGraphPicksUpLLMConfig:
     async def test_build_graph_uses_create_llm_from_config(self):
         """When llm_config is set, build_graph calls create_llm_from_config with it."""
         from unittest.mock import AsyncMock
+
         from cuga.backend.cuga_graph.graph import DynamicAgentGraph
         from cuga.backend.cuga_graph.nodes.cuga_lite.tool_provider_interface import ToolProviderInterface
 

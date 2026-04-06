@@ -5,8 +5,12 @@ This simulates how LangGraph updates state objects to ensure
 VariablesManager works correctly in that context.
 """
 
-import pytest
 import json
+
+import pytest
+
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
+
 from cuga.backend.cuga_graph.state.agent_state import AgentState, VariablesManager
 
 

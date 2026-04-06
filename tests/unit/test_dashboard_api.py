@@ -10,6 +10,10 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("slowapi", reason="slowapi not installed")
+
 from fastapi.testclient import TestClient
 
 from dashboard_api import _clean_dict, _clean_rows, _serialize, app

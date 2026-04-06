@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import redis as redis_lib
+import pytest
+
+redis_lib = pytest.importorskip("redis", reason="redis not installed")
 
 from models import Signal, Snapshot
 

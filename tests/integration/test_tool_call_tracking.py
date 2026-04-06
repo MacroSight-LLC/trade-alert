@@ -15,9 +15,11 @@ Run E2E tests with:
 
 import pytest
 
-from cuga.sdk import CugaAgent
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
+
 from cuga.backend.cuga_graph.nodes.cuga_lite.combined_tool_provider import CombinedToolProvider
 from cuga.backend.cuga_graph.nodes.cuga_lite.tool_call_tracker import ToolCallTracker
+from cuga.sdk import CugaAgent
 
 
 @pytest.mark.e2e
@@ -427,8 +429,8 @@ class TestToolProviderOperationId:
 
     def test_operation_id_not_in_prompt_serialization(self):
         """Test that operation_id does NOT appear in prompt-formatted tool output."""
-        from cuga.backend.cuga_graph.nodes.cuga_lite.tool_registry_provider import create_tool_from_api_dict
         from cuga.backend.cuga_graph.nodes.cuga_lite.prompt_utils import PromptUtils
+        from cuga.backend.cuga_graph.nodes.cuga_lite.tool_registry_provider import create_tool_from_api_dict
 
         tool_def = {
             "description": "Get all accounts",

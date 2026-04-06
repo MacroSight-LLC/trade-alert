@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("matplotlib", reason="matplotlib not installed")
+
 import pandas as pd
 
 from chart_gen import _fetch_candles, generate_chart

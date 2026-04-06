@@ -9,6 +9,9 @@ This test verifies:
 """
 
 import pytest
+
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
+
 from cuga.backend.cuga_graph.state.agent_state import AgentState, VariablesManager
 
 

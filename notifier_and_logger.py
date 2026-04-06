@@ -17,7 +17,9 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+import psycopg2
 import redis
+from pydantic import ValidationError
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from chart_gen import generate_chart
@@ -515,7 +517,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             if _is_duplicate_alert(alert.symbol, alert.direction, alert.timeframe, alert.thesis):
                 continue
             valid_alerts.append(alert)
-        except Exception as exc:
+        except (ValidationError, redis.RedisError, KeyError, TypeError) as exc:
             logger.error("Notifier alert processing failed: %s", exc)
 
     # Cap alerts per cycle to prevent Discord spam (sort by quality)
@@ -565,7 +567,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             # non-fatal and will be retried or noticed via ops monitoring.
             try:
                 insert_alert(alert, snapshots)
-            except Exception as exc:
+            except (psycopg2.Error, psycopg2.DatabaseError) as exc:
                 logger.error(
                     "Postgres insert failed for %s — skipping Discord send: %s",
                     alert.symbol,
@@ -581,7 +583,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                     "Discord send failed for %s after successful Postgres insert",
                     alert.symbol,
                 )
-        except Exception as exc:
+        except (httpx.HTTPError, redis.RedisError, KeyError, TypeError, ValueError) as exc:
             logger.error("Notifier alert send failed: %s", exc)
 
     logger.info("Notifier: sent %d/%d alerts to Discord", n_sent, len(items))

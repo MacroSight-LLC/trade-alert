@@ -24,6 +24,8 @@ import httpx
 import pytest
 from loguru import logger
 
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
+
 # Import config to get DBS_DIR
 from cuga.config import DBS_DIR
 

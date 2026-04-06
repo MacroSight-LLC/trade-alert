@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+pytest.importorskip("redis", reason="redis not installed")
+
 from models import PlaybookAlert
 from notifier_and_logger import (
     _score_bar,

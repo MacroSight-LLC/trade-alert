@@ -6,6 +6,7 @@ produces an authentication/connection error rather than silently using defaults.
 
 import pytest
 
+pytest.importorskip("langchain_openai", reason="langchain_openai not installed")
 cuga = pytest.importorskip("cuga", reason="cuga library not installed")
 
 from cuga.backend.llm.models import (

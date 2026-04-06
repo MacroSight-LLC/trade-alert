@@ -6,6 +6,10 @@ import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+redis_lib = pytest.importorskip("redis", reason="redis not installed")
+
 # ---------------------------------------------------------------------------
 # _run_pipeline
 # ---------------------------------------------------------------------------
@@ -53,7 +57,7 @@ class TestRunPipeline:
 class TestGetStatus:
     """Tests for _get_status Redis / MCP health summary."""
 
-    @patch("redis_client.get_redis", side_effect=__import__("redis").RedisError("connection refused"))
+    @patch("redis_client.get_redis", side_effect=redis_lib.RedisError("connection refused"))
     @patch("discord_bot.httpx.Client")
     def test_status_with_redis_down(self, mock_client_cls: MagicMock, _mock_redis: MagicMock) -> None:
         """When Redis is unreachable, status should still return a string."""

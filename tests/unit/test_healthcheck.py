@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
+
+pytest.importorskip("redis", reason="redis not installed")
 
 from healthcheck import MCP_SERVICES, check_mcps
 

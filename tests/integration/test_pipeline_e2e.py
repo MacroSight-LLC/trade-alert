@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+pytest.importorskip("redis", reason="redis not installed")
+pytest.importorskip("slowapi", reason="slowapi not installed")
+
 from models import PlaybookAlert
 
 # ── Helpers ──────────────────────────────────────────────────────────────

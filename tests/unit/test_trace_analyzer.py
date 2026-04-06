@@ -5,6 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("redis", reason="redis not installed")
+
 from models import TraceAnalysis
 from trace_analyzer import (
     _health_bar,

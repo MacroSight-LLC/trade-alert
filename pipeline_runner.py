@@ -163,11 +163,14 @@ def _safe_eval(expr: str, ns: dict[str, Any]) -> Any:
     Raises:
         ValueError: On any disallowed AST node or dunder attribute access.
     """
+    _MAX_DEPTH = 40
     tree = ast.parse(expr.strip(), mode="eval")
 
-    def _eval(node: ast.AST) -> Any:  # noqa: PLR0911
+    def _eval(node: ast.AST, depth: int = 0) -> Any:  # noqa: PLR0911
+        if depth > _MAX_DEPTH:
+            raise ValueError(f"Expression nested too deeply (>{_MAX_DEPTH} levels)")
         if isinstance(node, ast.Expression):
-            return _eval(node.body)
+            return _eval(node.body, depth + 1)
         if isinstance(node, ast.Constant):
             return node.value
         if isinstance(node, ast.Name):
@@ -179,59 +182,61 @@ def _safe_eval(expr: str, ns: dict[str, Any]) -> Any:
                 return _SAFE_FUNC_MAP[node.id]
             raise ValueError(f"Name {node.id!r} is not allowed")
         if isinstance(node, ast.Subscript):
-            obj = _eval(node.value)
-            slc = _eval(node.slice)
+            obj = _eval(node.value, depth + 1)
+            slc = _eval(node.slice, depth + 1)
             return obj[slc]
         if isinstance(node, ast.Slice):
             return slice(
-                _eval(node.lower) if node.lower else None,
-                _eval(node.upper) if node.upper else None,
-                _eval(node.step) if node.step else None,
+                _eval(node.lower, depth + 1) if node.lower else None,
+                _eval(node.upper, depth + 1) if node.upper else None,
+                _eval(node.step, depth + 1) if node.step else None,
             )
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("__"):
                 raise ValueError(f"Dunder attribute access is forbidden: {node.attr}")
-            return getattr(_eval(node.value), node.attr)
+            return getattr(_eval(node.value, depth + 1), node.attr)
         if isinstance(node, ast.UnaryOp):
             op_fn = _UNARY_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"Unary op {type(node.op).__name__} not allowed")
-            return op_fn(_eval(node.operand))
+            return op_fn(_eval(node.operand, depth + 1))
         if isinstance(node, ast.BoolOp):
             if isinstance(node.op, ast.And):
-                return all(_eval(v) for v in node.values)
-            return any(_eval(v) for v in node.values)
+                return all(_eval(v, depth + 1) for v in node.values)
+            return any(_eval(v, depth + 1) for v in node.values)
         if isinstance(node, ast.BinOp):
             op_fn = _BIN_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"BinOp {type(node.op).__name__} not allowed")
-            return op_fn(_eval(node.left), _eval(node.right))
+            return op_fn(_eval(node.left, depth + 1), _eval(node.right, depth + 1))
         if isinstance(node, ast.Compare):
-            left = _eval(node.left)
+            left = _eval(node.left, depth + 1)
             for op, comparator in zip(node.ops, node.comparators):
                 op_fn = _CMP_OPS.get(type(op))
                 if op_fn is None:
                     raise ValueError(f"Compare op {type(op).__name__} not allowed")
-                right = _eval(comparator)
+                right = _eval(comparator, depth + 1)
                 if not op_fn(left, right):
                     return False
                 left = right
             return True
         if isinstance(node, ast.Call):
-            func = _eval(node.func)
+            func = _eval(node.func, depth + 1)
             if callable(func) and getattr(func, "__name__", "") in _SAFE_FUNCS:
-                args = [_eval(a) for a in node.args]
-                kwargs = {kw.arg: _eval(kw.value) for kw in node.keywords}
+                args = [_eval(a, depth + 1) for a in node.args]
+                kwargs = {kw.arg: _eval(kw.value, depth + 1) for kw in node.keywords}
                 return func(*args, **kwargs)
             raise ValueError(f"Function call not allowed: {ast.dump(node.func)}")
         if isinstance(node, ast.IfExp):
-            return _eval(node.body) if _eval(node.test) else _eval(node.orelse)
+            return (
+                _eval(node.body, depth + 1) if _eval(node.test, depth + 1) else _eval(node.orelse, depth + 1)
+            )
         if isinstance(node, ast.List):
-            return [_eval(e) for e in node.elts]
+            return [_eval(e, depth + 1) for e in node.elts]
         if isinstance(node, ast.Tuple):
-            return tuple(_eval(e) for e in node.elts)
+            return tuple(_eval(e, depth + 1) for e in node.elts)
         if isinstance(node, ast.Dict):
-            return {_eval(k): _eval(v) for k, v in zip(node.keys, node.values)}
+            return {_eval(k, depth + 1): _eval(v, depth + 1) for k, v in zip(node.keys, node.values)}
         raise ValueError(f"AST node {type(node).__name__} is not allowed")
 
     return _eval(tree)

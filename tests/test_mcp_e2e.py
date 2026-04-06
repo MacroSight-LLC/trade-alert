@@ -11,6 +11,10 @@ import os
 import sys
 import urllib.request
 
+import pytest
+
+pytest.importorskip("redis", reason="redis not installed")
+
 # Ensure repo root is on sys.path when running from tests/ subdirectory.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
