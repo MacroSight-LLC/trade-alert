@@ -69,7 +69,7 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       macro_data = steps["compute-risk-flag"]
 
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
       # Write macro:regime for merger.get_macro_regime()
       r.setex("macro:regime", snapshot_ttl, json.dumps(macro_data))

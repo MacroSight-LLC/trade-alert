@@ -42,7 +42,9 @@ _discord_client: httpx.Client | None = None
 
 # Discord circuit breaker: fast-fail remaining batch when Discord is down
 _DISCORD_CB_THRESHOLD: int = int(os.getenv("DISCORD_CB_THRESHOLD", "2"))
+_DISCORD_CB_RESET_SECS: float = float(os.getenv("DISCORD_CB_RESET_SECS", "120.0"))
 _discord_consecutive_failures: int = 0
+_discord_cb_open_since: float = 0.0  # monotonic timestamp when CB opened
 
 # Maximum field length for Discord embed fields (Discord limit is 1024)
 _MAX_FIELD_LEN: int = 1000
@@ -508,15 +510,22 @@ def send_discord_embed(
         ``True`` on success (2xx), ``False`` on failure.
     """
     last_exc: httpx.HTTPStatusError | httpx.RequestError | None = None
-    global _discord_consecutive_failures  # noqa: PLW0603
+    global _discord_consecutive_failures, _discord_cb_open_since  # noqa: PLW0603
 
-    # Circuit breaker: fast-fail if Discord has been consecutively failing
+    # Circuit breaker: fast-fail if Discord has been consecutively failing.
+    # Auto-resets after _DISCORD_CB_RESET_SECS so alerts resume after outages.
     if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
-        logger.error(
-            "Discord circuit breaker OPEN (%d consecutive failures) — skipping send",
-            _discord_consecutive_failures,
-        )
-        return False
+        elapsed = time.monotonic() - _discord_cb_open_since
+        if elapsed < _DISCORD_CB_RESET_SECS:
+            logger.error(
+                "Discord circuit breaker OPEN (%d consecutive failures, %.0fs remaining) — skipping send",
+                _discord_consecutive_failures,
+                _DISCORD_CB_RESET_SECS - elapsed,
+            )
+            return False
+        # Reset after cooldown period
+        logger.info("Discord circuit breaker RESET after %.0fs cooldown", elapsed)
+        _discord_consecutive_failures = 0
 
     for attempt in range(1, DISCORD_SEND_MAX_RETRIES + 1):
         try:
@@ -573,6 +582,8 @@ def send_discord_embed(
                 time.sleep(delay)
                 continue
             _discord_consecutive_failures += 1
+            if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
+                _discord_cb_open_since = time.monotonic()
             logger.error("Discord API error %s: %s", exc.response.status_code, exc)
             return False
 
@@ -590,10 +601,14 @@ def send_discord_embed(
                 time.sleep(delay)
                 continue
             _discord_consecutive_failures += 1
+            if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
+                _discord_cb_open_since = time.monotonic()
             logger.error("Discord request failed after %d attempts: %s", attempt, exc)
             return False
 
     _discord_consecutive_failures += 1
+    if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
+        _discord_cb_open_since = time.monotonic()
     logger.error("Discord send exhausted %d retries, last error: %s", DISCORD_SEND_MAX_RETRIES, last_exc)
     return False
 

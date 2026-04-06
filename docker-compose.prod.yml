@@ -145,7 +145,7 @@ services:
       - trade-net
     restart: unless-stopped
 
-  # --- MCP Services (ports 8001-8011, SSOT §3) ---
+  # --- MCP Services (ports 8001-8012, SSOT §3) ---
   # All share one image built from docker/Dockerfile.mcp (live API integrations).
   # Activate with: docker compose --profile mcp up -d
 
@@ -154,6 +154,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.mcp
     image: trade-alert-mcp:latest
+    depends_on:
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8001"]
     ports:
@@ -185,6 +188,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8002"]
     ports:
@@ -210,6 +215,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8003"]
     ports:
@@ -235,6 +242,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8004"]
     ports:
@@ -260,6 +269,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8005"]
     ports:
@@ -285,6 +296,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8008"]
     ports:
@@ -310,6 +323,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8009"]
     ports:
@@ -335,6 +350,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8010"]
     ports:
@@ -360,6 +377,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8006"]
     ports:
@@ -385,6 +404,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8007"]
     ports:
@@ -410,6 +431,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8011"]
     ports:
@@ -439,6 +462,8 @@ services:
     depends_on:
       tradingview-mcp:
         condition: service_started
+      vault:
+        condition: service_healthy
     profiles: [mcp]
     command: ["8012"]
     ports:
@@ -459,7 +484,7 @@ services:
     networks:
       - trade-net
     restart: unless-stopped
-    mem_limit: 4g
+    mem_limit: 6g
 
   # --- Application ---
 
@@ -490,6 +515,10 @@ services:
       - ./models.py:/app/models.py
       - ./merger.py:/app/merger.py
       - ./db.py:/app/db.py
+      - ./constants.py:/app/constants.py
+      - ./redis_client.py:/app/redis_client.py
+      - ./log_config.py:/app/log_config.py
+      - ./metrics.py:/app/metrics.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
@@ -528,6 +557,11 @@ services:
     networks:
       - trade-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
   cron:
     build: *cuga-build
@@ -540,6 +574,10 @@ services:
       - ./models.py:/app/models.py
       - ./merger.py:/app/merger.py
       - ./db.py:/app/db.py
+      - ./constants.py:/app/constants.py
+      - ./redis_client.py:/app/redis_client.py
+      - ./log_config.py:/app/log_config.py
+      - ./metrics.py:/app/metrics.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
@@ -577,6 +615,11 @@ services:
     networks:
       - trade-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
   # --- Discord Bot (manual trigger) ---
 
@@ -596,6 +639,10 @@ services:
       - ./models.py:/app/models.py
       - ./merger.py:/app/merger.py
       - ./db.py:/app/db.py
+      - ./constants.py:/app/constants.py
+      - ./redis_client.py:/app/redis_client.py
+      - ./log_config.py:/app/log_config.py
+      - ./metrics.py:/app/metrics.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
@@ -628,6 +675,11 @@ services:
     networks:
       - trade-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
   # --- Dashboard (Phase 9) ---
 
@@ -658,6 +710,7 @@ services:
       - ./db.py:/app/db.py
       - ./models.py:/app/models.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./log_config.py:/app/log_config.py
     command:
       [
         "python",
@@ -670,11 +723,7 @@ services:
         "8080",
       ]
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8080/health'')"',
-        ]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -682,6 +731,11 @@ services:
     networks:
       - trade-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
   # --- Postgres Backup (daily pg_dump) ---
 

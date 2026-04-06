@@ -114,7 +114,10 @@ def check_redis_snapshot_staleness() -> str | None:
         r = _get_redis()
         keys = r.keys(f"{SNAPSHOT_KEY_PREFIX}*")
         if not keys:
-            return None  # No snapshot keys — nothing to check
+            return (
+                "No snapshot keys found in Redis — collectors may have stopped "
+                "producing data. Check collector health and cron schedule."
+            )
         ttls = [r.ttl(k) for k in keys]
         # TTL returns -1 for no-expiry, -2 for missing key
         valid_ttls = [t for t in ttls if t > 0]

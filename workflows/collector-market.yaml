@@ -60,7 +60,7 @@ steps:
 
       fallback_equities_str = os.environ.get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
       fallback_equities = [s.strip() for s in fallback_equities_str.split(",")]
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
       equity_symbols = set()
       for item in steps["fetch-equity-screen"].get("results", []):
@@ -93,7 +93,7 @@ steps:
       from normalizers.market_normalizer import normalize
 
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
       raw_results = {}
 

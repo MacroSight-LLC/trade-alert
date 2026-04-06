@@ -67,7 +67,7 @@ steps:
       from normalizers.ta_normalizer import normalize
 
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
       # Combined ta_scan step: fetch-tv-eq-ta
       # Each result contains both RSI and BB fields per symbol.

@@ -32,8 +32,8 @@ UNIVERSE_KEY: str = "universe:equities"
 
 # ── TTL Constants (seconds) ────────────────────────────────────────
 
-SNAPSHOT_TTL: int = int(os.environ.get("SNAPSHOT_TTL", "900"))
-"""TTL for snapshot queue entries. Default 15 minutes (aligned with cron cadence)."""
+SNAPSHOT_TTL: int = int(os.environ.get("SNAPSHOT_TTL", "1200"))
+"""TTL for snapshot queue entries. Default 20 minutes (5-min buffer over 15-min cron cadence)."""
 
 DEDUP_WINDOW_SECONDS: int = int(os.environ.get("DEDUP_WINDOW_SECONDS", "900"))
 """Alert deduplication window. Default 15 minutes."""

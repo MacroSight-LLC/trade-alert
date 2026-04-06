@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -907,8 +908,9 @@ class TestDiscordCircuitBreaker:
     def test_circuit_breaker_opens_after_threshold(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         import notifier_and_logger as nl
 
-        # Reset state
+        # Reset state — simulate CB that just opened
         nl._discord_consecutive_failures = nl._DISCORD_CB_THRESHOLD
+        nl._discord_cb_open_since = time.monotonic()
 
         result = send_discord_embed({"embeds": []})
         assert result is False
@@ -916,6 +918,28 @@ class TestDiscordCircuitBreaker:
 
         # Reset for other tests
         nl._discord_consecutive_failures = 0
+        nl._discord_cb_open_since = 0.0
+
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_circuit_breaker_resets_after_cooldown(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        import notifier_and_logger as nl
+
+        # Simulate CB that opened long ago (past the cooldown window)
+        nl._discord_consecutive_failures = nl._DISCORD_CB_THRESHOLD
+        nl._discord_cb_open_since = time.monotonic() - nl._DISCORD_CB_RESET_SECS - 1.0
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = MagicMock(status_code=204)
+        mock_client.post.return_value.raise_for_status = MagicMock()
+        mock_client_fn.return_value = mock_client
+
+        result = send_discord_embed({"embeds": []})
+        assert result is True
+        assert nl._discord_consecutive_failures == 0
+
+        # Reset for other tests
+        nl._discord_cb_open_since = 0.0
 
     @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
     @patch("notifier_and_logger._get_discord_client")

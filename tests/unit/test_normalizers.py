@@ -409,10 +409,8 @@ class TestMacroNormalizer:
 
     def test_empty_input(self) -> None:
         result = macro_normalize({}, timeframe="15m")
-        assert len(result) == 1
-        # Should emit neutral macro snapshot
-        assert result[0].symbol == "__GLOBAL_MACRO__"
-        assert result[0].signals[0].confidence == 0.0
+        # No risk-off triggers → empty list (no zero-score noise)
+        assert len(result) == 0
 
     def test_timeframe_passed(self) -> None:
         raw = {"vix": 40.0, "risk_on": False}
@@ -422,11 +420,8 @@ class TestMacroNormalizer:
     def test_nan_vix_ignored(self) -> None:
         raw = {"vix": float("nan"), "yield_curve_slope": 50.0, "risk_on": True}
         result = macro_normalize(raw, timeframe="15m")
-        # Always emits a snapshot; NaN VIX produces neutral macro
-        assert len(result) == 1
-        # No VIX-based signals (NaN is ignored), only neutral
-        vix_sigs = [s for s in result[0].signals if "VIX" in s.reason]
-        assert len(vix_sigs) == 0
+        # NaN VIX ignored, positive slope + risk_on=True → no signals → empty
+        assert len(result) == 0
 
     def test_inf_curve_slope_ignored(self) -> None:
         raw = {"vix": 15.0, "yield_curve_slope": float("inf"), "risk_on": True}

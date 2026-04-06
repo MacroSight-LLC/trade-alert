@@ -52,7 +52,7 @@ steps:
       from normalizers.forecast_normalizer import normalize
 
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
       raw_forecasts = steps.get("fetch-forecasts", {})
 

@@ -116,19 +116,13 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             )
         )
 
-    # Always emit a macro snapshot so the decision engine can distinguish
-    # "no macro data" from "macro is neutral"
+    # When no risk signals triggered, skip the snapshot entirely.
+    # The decision engine and merger already handle "no macro data"
+    # gracefully (macro staleness guard + default risk_on=True).
+    # Emitting zero-score/zero-confidence signals wastes Redis space
+    # and muddies the signal-type count used by SA and diversity scoring.
     if not signals:
-        signals.append(
-            Signal(
-                source="fred",
-                type="macro_risk_off",
-                score=0.0,
-                confidence=0.0,
-                reason="Macro neutral — no risk-off triggers",
-                raw=raw_results,
-            )
-        )
+        return []
 
     now = datetime.now(timezone.utc).isoformat()
     return [

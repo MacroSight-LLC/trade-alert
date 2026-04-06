@@ -38,6 +38,10 @@ COPY normalizers/ /app/normalizers/
 COPY models.py /app/models.py
 COPY merger.py /app/merger.py
 COPY db.py /app/db.py
+COPY constants.py /app/constants.py
+COPY redis_client.py /app/redis_client.py
+COPY log_config.py /app/log_config.py
+COPY metrics.py /app/metrics.py
 COPY notifier_and_logger.py /app/notifier_and_logger.py
 COPY healthcheck.py /app/healthcheck.py
 COPY outcome_tracker.py /app/outcome_tracker.py

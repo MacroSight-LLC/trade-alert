@@ -53,15 +53,24 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 if -24 <= hours_until <= 168:  # 168h = 7 days; include recent (last 24h)
                     # Continuous scoring: closer earnings = higher score.
                     # Map [0..168] hours → score [2.5..0.5], conf [0.90..0.50]
-                    # Past earnings (< 0h) still scored at max to capture post-report volatility
-                    t = max(hours_until, 0.0) / 168.0  # 0.0 = imminent, 1.0 = 7d out
-                    raw_score = 2.5 - t * 2.0  # 2.5 → 0.5
-                    conf = 0.90 - t * 0.40  # 0.90 → 0.50
+                    # Past earnings (< 0h): decay rapidly — alpha already priced in.
+                    # -24h → score 0.5, conf 0.40  (post-report residual volatility)
+                    if hours_until < 0:
+                        # Decay: 0h → (1.5, 0.60), -24h → (0.5, 0.40)
+                        t_past = min(abs(hours_until) / 24.0, 1.0)
+                        raw_score = 1.5 - t_past * 1.0  # 1.5 → 0.5
+                        conf = 0.60 - t_past * 0.20  # 0.60 → 0.40
+                    else:
+                        t = hours_until / 168.0  # 0.0 = imminent, 1.0 = 7d out
+                        raw_score = 2.5 - t * 2.0  # 2.5 → 0.5
+                        conf = 0.90 - t * 0.40  # 0.90 → 0.50
 
                     days_until = max(int(hours_until / 24), 0)
-                    if hours_until <= 24:
+                    if hours_until < 0:
+                        reason = f"Earnings RECENT ({earnings_date_str}, {abs(hours_until):.0f}h ago)"
+                    elif hours_until <= 24:
                         reason = f"Earnings IMMINENT ({earnings_date_str})"
-                    elif days_until <= 1:
+                    elif hours_until <= 48:
                         reason = f"Earnings TOMORROW ({earnings_date_str})"
                     else:
                         reason = f"Earnings in {days_until}d ({earnings_date_str})"

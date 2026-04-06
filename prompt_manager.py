@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -409,6 +410,7 @@ _last_version: str = "yaml-fallback"
 # TTL cache for Langfuse prompt objects (avoids repeated API calls)
 _prompt_cache: dict[str, tuple[float, Any, Any]] = {}  # key → (ts, sys_obj, usr_obj)
 _PROMPT_CACHE_TTL: float = 300.0  # seconds
+_prompt_cache_lock = threading.Lock()
 
 
 def _compile_template(template: str, variables: dict[str, Any]) -> str:
@@ -588,7 +590,8 @@ def get_decision_prompts(
     import time as _time
 
     cache_key = timeframe
-    cached = _prompt_cache.get(cache_key)
+    with _prompt_cache_lock:
+        cached = _prompt_cache.get(cache_key)
     if cached:
         ts, sys_obj, usr_obj = cached
         if (_time.monotonic() - ts) < _PROMPT_CACHE_TTL:
@@ -612,7 +615,8 @@ def get_decision_prompts(
         try:
             sys_prompt_obj = lf.get_prompt("decision-system", label="production")
             usr_prompt_obj = lf.get_prompt("decision-user", label="production")
-            _prompt_cache[cache_key] = (_time.monotonic(), sys_prompt_obj, usr_prompt_obj)
+            with _prompt_cache_lock:
+                _prompt_cache[cache_key] = (_time.monotonic(), sys_prompt_obj, usr_prompt_obj)
             system = sys_prompt_obj.compile(**merged)
             user = usr_prompt_obj.compile(**merged)
             _last_source = "langfuse"

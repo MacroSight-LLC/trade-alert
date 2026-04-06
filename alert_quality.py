@@ -148,12 +148,21 @@ def score_thesis_quality(thesis: str) -> float:
 def _load_calibration_cache() -> dict[tuple[str, float], float]:
     """Load calibration gap data from Postgres (cached with TTL).
 
+    Uses double-checked locking to avoid DB stampede when multiple
+    threads find the cache expired simultaneously.
+
     Returns:
         Mapping of (direction, ep_bucket) to gap (predicted EP - actual WR).
         Positive gap means EP is over-predicting.
     """
     global _calibration_cache, _calibration_ts  # noqa: PLW0603
+    # Fast path: check without lock
+    now = time.monotonic()
+    if _calibration_cache is not None and (now - _calibration_ts) < _CALIBRATION_TTL_SECS:
+        return _calibration_cache
+
     with _calibration_lock:
+        # Re-check inside lock (another thread may have refreshed)
         now = time.monotonic()
         if _calibration_cache is not None and (now - _calibration_ts) < _CALIBRATION_TTL_SECS:
             return _calibration_cache

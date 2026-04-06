@@ -140,6 +140,10 @@ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- Index for Langfuse trace → alert lookups (outcome_tracker, trace_analyzer)
+CREATE INDEX IF NOT EXISTS idx_alerts_trace_id
+    ON alerts(langfuse_trace_id) WHERE langfuse_trace_id IS NOT NULL;
+
 -- Composite index for historical win-rate lookup in notifier embeds
 -- Covers: WHERE symbol = X AND direction = X AND edge_probability BETWEEN X AND X
 --         AND outcome IN ('WIN','LOSS') AND created_at > NOW() - 30 days

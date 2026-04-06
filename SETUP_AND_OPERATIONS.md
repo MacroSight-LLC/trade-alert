@@ -63,7 +63,7 @@ These `.env` variables control pipeline behavior and can be overridden without t
 | `GATE_SA`                   | `3`     | Minimum sources_agree for any alert                    |
 | `GATE_CONF`                 | `0.75`  | Minimum average confidence for any alert               |
 | `MERGER_TOP_N`              | `20`    | Max symbols passed to the decision engine              |
-| `REDIS_SNAPSHOT_TTL`        | `900`   | TTL (seconds) for Redis snapshot queues                |
+| `REDIS_SNAPSHOT_TTL`        | `1200`  | TTL (seconds) for Redis snapshot queues                |
 | `OUTCOME_WINDOW_HOURS`      | `4`     | Default alert expiry window (fallback if no timeframe) |
 
 ---

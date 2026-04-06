@@ -12,9 +12,12 @@ RUN pip install --no-cache-dir \
     pydantic \
     psycopg2-binary \
     hvac \
-    httpx
+    httpx \
+    slowapi \
+    structlog \
+    prometheus_client
 
-COPY dashboard_api.py db.py models.py vault_env_loader.py dashboard.html ./
+COPY dashboard_api.py db.py models.py vault_env_loader.py log_config.py dashboard.html ./
 
 RUN useradd -r -s /bin/false appuser
 USER appuser
