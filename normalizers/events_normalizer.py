@@ -48,20 +48,22 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         if earnings_date_str:
             try:
                 earnings_dt = datetime.strptime(earnings_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                days_until = (earnings_dt - now_dt).days
+                hours_until = (earnings_dt - now_dt).total_seconds() / 3600.0
 
-                if 0 <= days_until <= 7:
-                    if days_until <= 1:
-                        raw_score = 2.5
-                        conf = 0.90
+                if -24 <= hours_until <= 168:  # 168h = 7 days; include recent (last 24h)
+                    # Continuous scoring: closer earnings = higher score.
+                    # Map [0..168] hours → score [2.5..0.5], conf [0.90..0.50]
+                    # Past earnings (< 0h) still scored at max to capture post-report volatility
+                    t = max(hours_until, 0.0) / 168.0  # 0.0 = imminent, 1.0 = 7d out
+                    raw_score = 2.5 - t * 2.0  # 2.5 → 0.5
+                    conf = 0.90 - t * 0.40  # 0.90 → 0.50
+
+                    days_until = max(int(hours_until / 24), 0)
+                    if hours_until <= 24:
+                        reason = f"Earnings IMMINENT ({earnings_date_str})"
+                    elif days_until <= 1:
                         reason = f"Earnings TOMORROW ({earnings_date_str})"
-                    elif days_until <= 3:
-                        raw_score = 1.5
-                        conf = 0.75
-                        reason = f"Earnings in {days_until}d ({earnings_date_str})"
                     else:
-                        raw_score = 0.5
-                        conf = 0.50
                         reason = f"Earnings in {days_until}d ({earnings_date_str})"
 
                     hour = data.get("hour", "")

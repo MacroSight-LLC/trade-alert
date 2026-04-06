@@ -14,11 +14,11 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import httpx
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from constants import is_market_open
 from db import get_open_alerts, update_outcome
 from models import PlaybookAlert  # noqa: F401 — required project import
 
@@ -30,6 +30,12 @@ OUTCOME_OPEN_ALERT_LIMIT: int = int(os.getenv("OUTCOME_OPEN_ALERT_LIMIT", "200")
 STALE_ALERT_DAYS: int = int(os.getenv("STALE_ALERT_DAYS", "7"))
 PRICE_FETCH_MAX_RETRIES: int = int(os.getenv("PRICE_FETCH_MAX_RETRIES", "3"))
 PRICE_FETCH_TIMEOUT: float = float(os.getenv("PRICE_FETCH_TIMEOUT", "10.0"))
+
+# Forecast-based stop tightening (feature-flagged)
+FORECAST_STOP_TIGHTEN_ENABLED: bool = os.getenv("FORECAST_STOP_TIGHTEN_ENABLED", "false").lower() == "true"
+FORECAST_STOP_TIGHTEN_RATIO: float = float(os.getenv("FORECAST_STOP_TIGHTEN_RATIO", "0.50"))
+FORECAST_STOP_MIN_CUSHION_PCT: float = float(os.getenv("FORECAST_STOP_MIN_CUSHION_PCT", "1.0"))
+_TIMESFM_MCP_URL: str = os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012")
 
 # Per-timeframe outcome expiry windows (hours)
 # 15m alerts should resolve faster than 1h alerts.
@@ -64,6 +70,38 @@ def _get_http_client() -> httpx.Client:
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
     return _http_client
+
+
+def _post_outcome_to_langfuse(row: dict, outcome: str, pnl_pct: float | None) -> None:
+    """Post outcome score to the originating Langfuse trace.
+
+    Links the resolved outcome back to the pipeline trace that produced
+    the alert, enabling filtering traces by actual performance.
+
+    Args:
+        row: Alert row dict from the DB (must have ``langfuse_trace_id``).
+        outcome: Resolved outcome (WIN, LOSS, EXPIRED, etc).
+        pnl_pct: PnL percentage (optional).
+    """
+    trace_id = row.get("langfuse_trace_id")
+    if not trace_id:
+        return
+    try:
+        from pipeline_tracing import add_score
+
+        score_val = 1.0 if outcome == "WIN" else 0.0
+        add_score(
+            trace_id,
+            "outcome_result",
+            score_val,
+            comment=f"{row.get('symbol')} {outcome} pnl={pnl_pct:.2f}%"
+            if pnl_pct
+            else f"{row.get('symbol')} {outcome}",
+        )
+        if pnl_pct is not None:
+            add_score(trace_id, "outcome_pnl_pct", pnl_pct, comment=f"{row.get('symbol')}")
+    except Exception as exc:
+        logger.debug("Langfuse outcome linkage failed for alert %s: %s", row.get("id"), exc)
 
 
 # ── Price source chain ───────────────────────────────────────────
@@ -144,6 +182,56 @@ def get_current_price(symbol: str) -> float | None:
     return None
 
 
+def _check_forecast_agrees(
+    symbol: str,
+    direction: str,
+    timeframe: str | None,
+    *,
+    cycle_cache: dict[str, bool],
+) -> bool:
+    """Check if TimesFM forecast still agrees with alert direction.
+
+    Calls the TimesFM MCP ``/tool/validate`` endpoint.  Results are
+    cached per-symbol within the current tracker cycle to avoid
+    redundant inference calls.
+
+    Args:
+        symbol: Ticker symbol.
+        direction: Alert direction (``"LONG"`` or ``"SHORT"``).
+        timeframe: Alert timeframe.
+        cycle_cache: Mutable dict for per-cycle result caching.
+
+    Returns:
+        ``True`` if forecast agrees (or MCP unavailable), ``False`` if it contradicts.
+    """
+    if symbol in cycle_cache:
+        return cycle_cache[symbol]
+
+    try:
+        resp = _get_http_client().post(
+            f"{_TIMESFM_MCP_URL}/tool/validate",
+            json={"symbol": symbol, "direction": direction, "timeframe": timeframe or "15m"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        agrees = result.get("agrees", True)
+        cycle_cache[symbol] = agrees
+        if not agrees:
+            logger.info(
+                "Forecast disagrees for %s %s (forecast_dir=%s, pct=%.2f%%)",
+                symbol,
+                direction,
+                result.get("forecast_direction", "?"),
+                result.get("direction_pct", 0.0),
+            )
+        return agrees
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        logger.debug("Forecast check unavailable for %s: %s", symbol, exc)
+        cycle_cache[symbol] = True  # default: agree (non-blocking)
+        return True
+
+
 def evaluate_outcome(
     alert_row: dict,
     current_price: float,
@@ -196,7 +284,7 @@ def evaluate_outcome(
         return None
 
 
-def _map_db_row(row: dict) -> dict:
+def _map_db_row(row: dict) -> dict | None:
     """Transform a raw Postgres alert row into the flat format expected
     by ``evaluate_outcome``.
 
@@ -205,80 +293,49 @@ def _map_db_row(row: dict) -> dict:
 
     Returns:
         Flat dict with ``entry_level``, ``stop_level``, ``target_level``,
-        ``fired_at``, plus passthrough of other keys.
+        ``fired_at``, plus passthrough of other keys.  Returns ``None``
+        if required price data is missing or non-positive.
     """
     entry = row.get("entry", {})
     if isinstance(entry, str):
-        entry = json.loads(entry)
+        try:
+            entry = json.loads(entry)
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.error("Malformed entry JSON for alert %s: %s", row.get("id"), exc)
+            return None
+
+    # Validate required entry keys — reject rows with missing keys
+    for key in ("level", "stop", "target"):
+        if key not in entry:
+            logger.error(
+                "Missing '%s' key in entry for alert %s — skipping",
+                key,
+                row.get("id"),
+            )
+            return None
+
+    entry_level = float(entry.get("level", 0))
+    stop_level = float(entry.get("stop", 0))
+    target_level = float(entry.get("target", 0))
+
+    # Reject non-positive prices — these indicate corrupted data
+    if entry_level <= 0 or stop_level <= 0 or target_level <= 0:
+        logger.error(
+            "Non-positive price for alert %s: level=%.4f stop=%.4f target=%.4f — skipping",
+            row.get("id"),
+            entry_level,
+            stop_level,
+            target_level,
+        )
+        return None
 
     return {
         **row,
-        "entry_level": float(entry.get("level", 0)),
-        "stop_level": float(entry.get("stop", 0)),
-        "target_level": float(entry.get("target", 0)),
+        "entry_level": entry_level,
+        "stop_level": stop_level,
+        "target_level": target_level,
         "fired_at": row.get("created_at"),
     }
-
-
-_ET = ZoneInfo("America/New_York")
-
-# US market holidays for 2025-2027 (NYSE observed).
-# Extend annually or replace with exchange_calendars package.
-_MARKET_HOLIDAYS: frozenset[tuple[int, int, int]] = frozenset(
-    {
-        # 2025
-        (2025, 1, 1),
-        (2025, 1, 20),
-        (2025, 2, 17),
-        (2025, 4, 18),
-        (2025, 5, 26),
-        (2025, 6, 19),
-        (2025, 7, 4),
-        (2025, 9, 1),
-        (2025, 11, 27),
-        (2025, 12, 25),
-        # 2026
-        (2026, 1, 1),
-        (2026, 1, 19),
-        (2026, 2, 16),
-        (2026, 4, 3),
-        (2026, 5, 25),
-        (2026, 6, 19),
-        (2026, 7, 3),
-        (2026, 9, 7),
-        (2026, 11, 26),
-        (2026, 12, 25),
-        # 2027
-        (2027, 1, 1),
-        (2027, 1, 18),
-        (2027, 2, 15),
-        (2027, 3, 26),
-        (2027, 5, 31),
-        (2027, 6, 18),
-        (2027, 7, 5),
-        (2027, 9, 6),
-        (2027, 11, 25),
-        (2027, 12, 24),
-    }
-)
-
-
-def _is_market_open() -> bool:
-    """Return True if US equity markets are in regular/extended hours.
-
-    Extended hours window: Mon-Fri 04:00-20:00 ET, excluding
-    NYSE-observed holidays.
-    """
-    now_et = datetime.now(tz=_ET)
-    # Weekends
-    if now_et.weekday() >= 5:
-        return False
-    # Holidays
-    if (now_et.year, now_et.month, now_et.day) in _MARKET_HOLIDAYS:
-        return False
-    # Extended hours: 4 AM - 8 PM ET
-    hour = now_et.hour
-    return 4 <= hour < 20
 
 
 def run_tracker_cycle() -> int:
@@ -291,11 +348,12 @@ def run_tracker_cycle() -> int:
     Returns:
         Number of outcomes resolved this cycle.
     """
-    if not _is_market_open():
+    if not is_market_open():
         logger.info("Market closed — skipping outcome tracker cycle")
         return 0
 
     resolved = 0
+    forecast_cache: dict[str, bool] = {}  # per-cycle forecast result cache
     try:
         rows = get_open_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
     except Exception as exc:
@@ -309,6 +367,8 @@ def run_tracker_cycle() -> int:
                 continue
 
             mapped = _map_db_row(row)
+            if mapped is None:
+                continue
             price = get_current_price(row["symbol"])
             if price is None:
                 continue
@@ -319,6 +379,64 @@ def run_tracker_cycle() -> int:
                 timeframe=row.get("timeframe"),
             )
             if outcome is None:
+                # ── Forecast-based stop tightening ─────────────────
+                # If alert is still open AND in profit AND forecast
+                # now disagrees, tighten the stop to protect gains.
+                if FORECAST_STOP_TIGHTEN_ENABLED and mapped["direction"] in ("LONG", "SHORT"):
+                    entry_level = mapped["entry_level"]
+                    if mapped["direction"] == "LONG" and price > entry_level:
+                        unrealized = price - entry_level
+                        agrees = _check_forecast_agrees(
+                            row["symbol"],
+                            mapped["direction"],
+                            row.get("timeframe"),
+                            cycle_cache=forecast_cache,
+                        )
+                        if not agrees:
+                            new_stop = entry_level + (unrealized * FORECAST_STOP_TIGHTEN_RATIO)
+                            # Enforce minimum cushion so stop isn't set
+                            # dangerously close to entry level
+                            min_cushion = entry_level * (FORECAST_STOP_MIN_CUSHION_PCT / 100.0)
+                            new_stop = max(new_stop, entry_level + min_cushion)
+                            if new_stop > mapped["stop_level"]:
+                                logger.info(
+                                    "Forecast stop tighten: %s LONG stop %.2f → %.2f "
+                                    "(unrealized=%.2f, ratio=%.2f)",
+                                    row["symbol"],
+                                    mapped["stop_level"],
+                                    new_stop,
+                                    unrealized,
+                                    FORECAST_STOP_TIGHTEN_RATIO,
+                                )
+                                mapped["stop_level"] = new_stop
+                                outcome = evaluate_outcome(mapped, price, timeframe=row.get("timeframe"))
+                    elif mapped["direction"] == "SHORT" and price < entry_level:
+                        unrealized = entry_level - price
+                        agrees = _check_forecast_agrees(
+                            row["symbol"],
+                            mapped["direction"],
+                            row.get("timeframe"),
+                            cycle_cache=forecast_cache,
+                        )
+                        if not agrees:
+                            new_stop = entry_level - (unrealized * FORECAST_STOP_TIGHTEN_RATIO)
+                            # Enforce minimum cushion so stop isn't set
+                            # dangerously close to entry level
+                            min_cushion = entry_level * (FORECAST_STOP_MIN_CUSHION_PCT / 100.0)
+                            new_stop = min(new_stop, entry_level - min_cushion)
+                            if new_stop < mapped["stop_level"]:
+                                logger.info(
+                                    "Forecast stop tighten: %s SHORT stop %.2f → %.2f "
+                                    "(unrealized=%.2f, ratio=%.2f)",
+                                    row["symbol"],
+                                    mapped["stop_level"],
+                                    new_stop,
+                                    unrealized,
+                                    FORECAST_STOP_TIGHTEN_RATIO,
+                                )
+                                mapped["stop_level"] = new_stop
+                                outcome = evaluate_outcome(mapped, price, timeframe=row.get("timeframe"))
+
                 continue
 
             # Calculate PnL
@@ -333,14 +451,24 @@ def run_tracker_cycle() -> int:
 
             pnl_pct = (pnl / entry_level * 100) if entry_level else None
 
+            # Slippage tracking: actual resolution price vs target/stop
+            if outcome == "WIN":
+                slippage = abs(price - mapped["target_level"])
+            elif outcome == "LOSS":
+                slippage = abs(price - mapped["stop_level"])
+            else:
+                slippage = 0.0
+
             update_outcome(row["id"], outcome, pnl, pnl_pct=pnl_pct)
+            _post_outcome_to_langfuse(row, outcome, pnl_pct)
             logger.info(
-                "Outcome: %s → %s @ %.2f (pnl=%.4f, pnl_pct=%.2f%%)",
+                "Outcome: %s → %s @ %.2f (pnl=%.4f, pnl_pct=%.2f%%, slippage=%.4f)",
                 row["symbol"],
                 outcome,
                 price,
                 pnl,
                 pnl_pct or 0.0,
+                slippage,
             )
             resolved += 1
         except Exception as exc:
@@ -380,6 +508,62 @@ def _expire_stale_alerts() -> int:
     return expired
 
 
+_EXPIRY_RATE_THRESHOLD: float = float(os.getenv("EXPIRY_RATE_THRESHOLD", "0.15"))
+
+
+def _check_expiry_rate() -> None:
+    """Send ops alert if daily expiry rate exceeds threshold.
+
+    Queries resolved alerts from the last 24h and computes the
+    EXPIRED/(WIN+LOSS+EXPIRED) ratio. If > 15%, sends a warning to ops.
+    """
+    try:
+        from psycopg2.extras import RealDictCursor
+
+        from db import _put_conn, get_conn
+
+        sql = """
+            SELECT
+                COALESCE(SUM(CASE WHEN outcome = 'EXPIRED' THEN 1 ELSE 0 END), 0) AS expired,
+                COALESCE(SUM(CASE WHEN outcome IN ('WIN','LOSS','EXPIRED') THEN 1 ELSE 0 END), 0) AS total
+            FROM alerts
+            WHERE outcome IS NOT NULL
+              AND updated_at >= NOW() - INTERVAL '24 hours'
+        """
+        conn = get_conn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+        finally:
+            _put_conn(conn)
+
+        if not row or row["total"] < 5:
+            return  # not enough data to judge
+
+        rate = row["expired"] / row["total"]
+        if rate > _EXPIRY_RATE_THRESHOLD:
+            try:
+                from notifier_and_logger import send_ops_message
+
+                send_ops_message(
+                    f"⚠️ High expiry rate: {row['expired']}/{row['total']} "
+                    f"({rate:.0%}) alerts EXPIRED in last 24h "
+                    f"(threshold: {_EXPIRY_RATE_THRESHOLD:.0%}). "
+                    f"Check entry levels and timeframe alignment."
+                )
+            except Exception as exc:
+                logger.warning("Failed to send expiry rate ops alert: %s", exc)
+            logger.warning(
+                "High expiry rate: %d/%d (%.0f%%) in last 24h",
+                row["expired"],
+                row["total"],
+                rate * 100,
+            )
+    except Exception as exc:
+        logger.debug("Expiry rate check failed: %s", exc)
+
+
 def run_tracker_loop() -> None:
     """Continuous polling loop for standalone deployment.
 
@@ -394,6 +578,7 @@ def run_tracker_loop() -> None:
         while True:
             resolved = run_tracker_cycle()
             stale = _expire_stale_alerts()
+            _check_expiry_rate()
             logger.info("Tracker cycle complete: %d outcomes resolved, %d stale expired", resolved, stale)
             time.sleep(PRICE_POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:

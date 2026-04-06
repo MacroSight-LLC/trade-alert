@@ -149,20 +149,24 @@ class TestGenerateChart:
         df = df.set_index("Date")[["Open", "High", "Low", "Close", "Volume"]]
         mock_fetch.return_value = df
 
-        result = generate_chart("NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0})
+        result, atr = generate_chart("NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0})
 
         assert result is not None
         # PNG magic bytes
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
         assert len(result) > 1000  # sanity: a real chart should be >1KB
+        # ATR should be computed for 30 bars
+        assert atr is not None
+        assert atr > 0
 
     @patch("chart_gen._fetch_candles")
     def test_returns_none_on_empty_data(self, mock_fetch: MagicMock) -> None:
         """Returns None when no candle data is available."""
         mock_fetch.return_value = pd.DataFrame()
 
-        result = generate_chart("FAKE", "1h", {"level": 50.0, "stop": 48.0, "target": 55.0})
+        result, atr = generate_chart("FAKE", "1h", {"level": 50.0, "stop": 48.0, "target": 55.0})
         assert result is None
+        assert atr is None
 
     @patch("chart_gen._fetch_candles")
     def test_handles_zero_prices(self, mock_fetch: MagicMock) -> None:
@@ -175,7 +179,7 @@ class TestGenerateChart:
         df = df.set_index("Date")[["Open", "High", "Low", "Close", "Volume"]]
         mock_fetch.return_value = df
 
-        result = generate_chart("NVDA", "15m", {"level": 0, "stop": 0, "target": 0})
+        result, _ = generate_chart("NVDA", "15m", {"level": 0, "stop": 0, "target": 0})
         # Should still produce a chart, just without overlay lines
         assert result is not None
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
@@ -191,7 +195,7 @@ class TestGenerateChart:
         df = df.set_index("Date")[["Open", "High", "Low", "Close", "Volume"]]
         mock_fetch.return_value = df
 
-        result = generate_chart("NVDA", "15m", {})
+        result, _ = generate_chart("NVDA", "15m", {})
         assert result is not None
 
     @patch("chart_gen._fetch_candles")
@@ -215,8 +219,9 @@ class TestGenerateChart:
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            result = generate_chart("NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0})
+            result, atr = generate_chart("NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0})
         assert result is None
+        assert atr is None
 
     @patch("chart_gen._fetch_candles")
     def test_daily_timeframe(self, mock_fetch: MagicMock) -> None:
@@ -229,6 +234,6 @@ class TestGenerateChart:
         df = df.set_index("Date")[["Open", "High", "Low", "Close", "Volume"]]
         mock_fetch.return_value = df
 
-        result = generate_chart("SPY", "1D", {"level": 500.0, "stop": 495.0, "target": 510.0})
+        result, _ = generate_chart("SPY", "1D", {"level": 500.0, "stop": 495.0, "target": 510.0})
         assert result is not None
         assert result[:8] == b"\x89PNG\r\n\x1a\n"

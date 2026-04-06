@@ -30,11 +30,9 @@ from pathlib import Path
 import httpx
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from log_config import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [discord_bot] %(message)s",
-)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
@@ -210,12 +208,11 @@ def _get_status() -> str:
     for port, name in mcp_ports.items():
         host = name.lower().replace(" ", "-") + "-mcp"
         try:
-            with httpx.Client(timeout=3.0) as client:
-                resp = client.get(f"http://{host}:{port}/health")
-                if resp.status_code == 200:
-                    lines.append(f"  {name} (:{port}): healthy")
-                else:
-                    lines.append(f"  {name} (:{port}): unhealthy ({resp.status_code})")
+            resp = _get_client().get(f"http://{host}:{port}/health", timeout=3.0)
+            if resp.status_code == 200:
+                lines.append(f"  {name} (:{port}): healthy")
+            else:
+                lines.append(f"  {name} (:{port}): unhealthy ({resp.status_code})")
         except httpx.HTTPError:
             lines.append(f"  {name} (:{port}): unreachable")
 

@@ -116,6 +116,37 @@ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- Add forecast tracking columns for TimesFM signal analytics
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN forecast_score DECIMAL(4,3);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN forecast_contradicted BOOLEAN DEFAULT FALSE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- Index for forecast analytics queries
+CREATE INDEX IF NOT EXISTS idx_alerts_forecast_contradicted
+    ON alerts(forecast_contradicted) WHERE forecast_contradicted = TRUE;
+
+-- Add langfuse_trace_id column for outcome → trace linkage
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN langfuse_trace_id VARCHAR(64);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- Composite index for historical win-rate lookup in notifier embeds
+-- Covers: WHERE symbol = X AND direction = X AND edge_probability BETWEEN X AND X
+--         AND outcome IN ('WIN','LOSS') AND created_at > NOW() - 30 days
+CREATE INDEX IF NOT EXISTS idx_alerts_winrate_lookup
+    ON alerts(symbol, direction, edge_probability, created_at DESC)
+    WHERE outcome IN ('WIN', 'LOSS');
+
 -- ── Partitioning prep (run manually when alerts table exceeds ~1M rows) ─────
 -- Convert the alerts table to range-partitioned by created_at.
 -- This is a one-time migration: create the partitioned table, migrate data,
@@ -141,3 +172,31 @@ END $$;
 -- Step 4: Auto-create future partitions via pg_partman or a cron job:
 --   CREATE EXTENSION IF NOT EXISTS pg_partman;
 --   SELECT partman.create_parent('public.alerts', 'created_at', 'native', 'monthly');
+
+-- ── Column constraint tightening (safe to re-run) ──────────────────────
+-- Backfill NULLs before adding NOT NULL constraints.
+
+UPDATE alerts SET sources_agree = 0 WHERE sources_agree IS NULL;
+UPDATE alerts SET unusual_activity = '{}'::jsonb WHERE unusual_activity IS NULL;
+UPDATE alerts SET forecast_contradicted = FALSE WHERE forecast_contradicted IS NULL;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ALTER COLUMN sources_agree SET DEFAULT 0;
+    ALTER TABLE alerts ALTER COLUMN sources_agree SET NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ALTER COLUMN unusual_activity SET DEFAULT '{}'::jsonb;
+    ALTER TABLE alerts ALTER COLUMN unusual_activity SET NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ALTER COLUMN forecast_contradicted SET DEFAULT FALSE;
+    ALTER TABLE alerts ALTER COLUMN forecast_contradicted SET NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;

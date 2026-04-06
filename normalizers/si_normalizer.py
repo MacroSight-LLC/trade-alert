@@ -9,7 +9,15 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import clamp, safe_float
+from normalizers import clamp, interpolate, safe_float
+
+# Continuous SI% scoring breakpoints (fraction of float)
+_SI_BREAKPOINTS: list[tuple[float, float, float]] = [
+    (0.10, 1.0, 0.60),
+    (0.15, 1.8, 0.72),
+    (0.25, 2.5, 0.85),
+    (0.40, 3.0, 0.95),
+]
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -38,23 +46,22 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
         short_ratio_val = safe_float(data.get("short_ratio"), default=0.0)
 
-        # SI% thresholds — score is always positive (short interest = potential energy)
-        raw_score: float | None = None
-        conf: float | None = None
+        # SI% scoring — continuous interpolation
         reason_parts: list[str] = []
+        interp = interpolate(si_pct, _SI_BREAKPOINTS)
 
-        if si_pct >= 0.25:
-            raw_score = 2.5
-            conf = 0.85
-            reason_parts.append(f"SI {si_pct:.0%} of float (very high)")
-        elif si_pct >= 0.15:
-            raw_score = 2.0
-            conf = 0.75
-            reason_parts.append(f"SI {si_pct:.0%} of float (elevated)")
-        elif si_pct >= 0.10:
-            raw_score = 1.0
-            conf = 0.60
-            reason_parts.append(f"SI {si_pct:.0%} of float (notable)")
+        if interp is not None:
+            raw_score, conf = interp
+            if si_pct >= 0.25:
+                label = "very high"
+            elif si_pct >= 0.15:
+                label = "elevated"
+            else:
+                label = "notable"
+            reason_parts.append(f"SI {si_pct:.0%} of float ({label})")
+        else:
+            raw_score = None
+            conf = None
 
         if raw_score is not None:
             # Short ratio > 5 days = hard to cover → boost

@@ -31,8 +31,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from log_config import configure_logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Maximum request body size (10 MB)
@@ -51,6 +52,7 @@ PORT_TO_MODULE: dict[int, str] = {
     8009: "fred",
     8010: "spamshield",
     8011: "alpaca_mcp",
+    8012: "timesfm_mcp",
 }
 
 

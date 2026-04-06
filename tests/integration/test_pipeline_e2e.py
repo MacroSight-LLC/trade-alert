@@ -181,7 +181,7 @@ class TestFullPipelinePath:
 class TestOutcomeTrackerRoundTrip:
     """Insert alert → mock price → verify WIN/LOSS/EXPIRED resolution."""
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price")
     @patch("outcome_tracker.get_open_alerts")
@@ -217,7 +217,7 @@ class TestOutcomeTrackerRoundTrip:
         assert args[0][2] > 0  # pnl positive
         assert args[1]["pnl_pct"] > 0  # pnl_pct positive
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price")
     @patch("outcome_tracker.get_open_alerts")
@@ -250,7 +250,7 @@ class TestOutcomeTrackerRoundTrip:
         assert args[0][1] == "LOSS"
         assert args[0][2] < 0  # negative pnl
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price")
     @patch("outcome_tracker.get_open_alerts")
@@ -282,7 +282,7 @@ class TestOutcomeTrackerRoundTrip:
         args = mock_update.call_args
         assert args[0][1] == "EXPIRED"
 
-    @patch("outcome_tracker._is_market_open", return_value=False)
+    @patch("outcome_tracker.is_market_open", return_value=False)
     def test_market_closed_skips_cycle(self, _mkt: MagicMock) -> None:
         """When market is closed, no alerts are processed."""
         from outcome_tracker import run_tracker_cycle

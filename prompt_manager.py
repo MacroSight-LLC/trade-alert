@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from constants import get_market_hours_status  # noqa: F811 — re-exported
 from langfuse_client import get_langfuse_client
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ QUALITY RULES — follow these strictly:
 6. sources_agree = count of DISTINCT independent signal groups pointing same direction
    Valid groups: technical_trend, volume_spike, sentiment_bull, sentiment_bear,
    options_flow, insider_activity, relative_strength, macro_risk_off,
-   catalyst_event, short_interest
+   catalyst_event, short_interest, price_forecast
    - sentiment_bull and sentiment_bear are SEPARATE groups — never merge them.
      If a symbol has both, they represent conflicting signals from different sources.
    - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
@@ -63,6 +64,12 @@ QUALITY RULES — follow these strictly:
      Combine with volume_spike for short-squeeze conviction.
    - insider_activity: SEC Form 4 cluster buys/sells from EDGAR.
      Recent insider buys with score > 1.0 = strong conviction signal.
+   - price_forecast: TimesFM neural forecast of future price direction.
+     Positive score = model forecasts upward move. Negative = downward.
+     High confidence = tight quantile spread (model is certain).
+     Use as a confirming signal — strong agreement with technical_trend
+     and volume_spike significantly increases conviction. A contradiction
+     (forecast disagrees with other signals) is a caution flag.
    WEIGHTING GUIDANCE:
    - technical_trend + volume_spike together are stronger than either alone
    - options_flow large sweeps (high score) outweigh small mixed flow
@@ -118,7 +125,7 @@ except unusual_activity which defaults to []):
   sentiment_context: string
   unusual_activity: list[string] (may be empty)
   macro_regime: string
-  sources_agree: int 3-10
+  sources_agree: int 3-11
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
 {{performance_context}}
@@ -162,9 +169,9 @@ Output format — a JSON array (may be empty []):
     "entry": {"level": 185.00, "stop": 182.00, "target": 192.00},
     "timeframe_rationale": "15m breakout aligning with 1h uptrend — momentum expected to persist 2-4 candles.",
     "sentiment_context": "ROT: strong_bullish (0.82 conf), Finnhub aggregate +0.6. Institutional flow neutral.",
-    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential"],
+    "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential", "TimesFM forecast +2.1% (high confidence) — confirms breakout direction"],
     "macro_regime": "Risk-on. VIX 14.2, curve +18bps. No headwinds.",
-    "sources_agree": 6
+    "sources_agree": 7
   }
 ]
 
@@ -226,6 +233,9 @@ _GATE_DEFAULTS: dict[str, dict[str, str]] = {
 def format_winrate_context() -> str:
     """Format recent win-rate data for injection into the system prompt.
 
+    Produces a structured table of per-EP-bucket win rates so the LLM
+    can self-calibrate edge_probability claims against actual outcomes.
+
     Returns:
         Human-readable summary of recent win-rate stats, or a default
         message if data is unavailable.
@@ -242,13 +252,24 @@ def format_winrate_context() -> str:
         avg_ep = data.get("avg_ep")
         lines = [
             f"Last 7 days: {total} resolved alerts, win-rate {winrate:.0%}, avg EP claimed {avg_ep:.2f}.",
+            "",
+            "EP Calibration Table (claimed EP → actual outcome):",
+            "| EP Bucket | Alerts | Actual Win% | Deviation |",
+            "|-----------|--------|-------------|-----------|",
         ]
         for bucket in data.get("ep_calibration", []):
             b = bucket["bucket"]
             t = bucket["total"]
             wr = bucket.get("actual_winrate")
             if t >= 2 and wr is not None:
-                lines.append(f"  EP {b:.1f}: {t} alerts, actual win-rate {wr:.0%}")
+                deviation = wr - b
+                dev_label = f"{deviation:+.0%}"
+                lines.append(f"| {b:.2f}      | {t:>6} | {wr:>10.0%}  | {dev_label:>9} |")
+        lines.append("")
+        lines.append(
+            "IMPORTANT: If your claimed EP consistently exceeds actual win-rate "
+            "for a bucket, lower your EP for similar setups."
+        )
         return "\n".join(lines)
     except Exception:
         return "No recent outcome data available yet."
@@ -429,41 +450,8 @@ def _check_unresolved_placeholders(text: str, label: str) -> None:
         )
 
 
-def get_market_hours_status() -> str:
-    """Return a human-readable US equity market hours status.
-
-    Uses America/New_York rules:
-    - Pre-market:  04:00–09:30 ET
-    - Regular:     09:30–16:00 ET
-    - After-hours: 16:00–20:00 ET
-    - Closed:      otherwise / weekends / major holidays
-
-    Returns:
-        String like ``"Regular Trading Hours (14:32 ET)"``.
-    """
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
-
-    et = datetime.now(ZoneInfo("America/New_York"))
-    weekday = et.weekday()  # 0=Mon … 6=Sun
-
-    if weekday >= 5:
-        return f"Market Closed (weekend, {et.strftime('%A %H:%M')} ET)"
-
-    t = et.time()
-    from datetime import time as dt_time
-
-    if t < dt_time(4, 0):
-        return f"Market Closed (overnight, {et.strftime('%H:%M')} ET)"
-    if t < dt_time(9, 30):
-        return f"Pre-market ({et.strftime('%H:%M')} ET)"
-    if t < dt_time(16, 0):
-        return f"Regular Trading Hours ({et.strftime('%H:%M')} ET)"
-    if t < dt_time(20, 0):
-        return f"After-hours ({et.strftime('%H:%M')} ET)"
-    return f"Market Closed (post-session, {et.strftime('%H:%M')} ET)"
+# get_market_hours_status is imported from constants.
+# Re-exporting here so callers of prompt_manager.get_market_hours_status() still work.
 
 
 def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
@@ -488,7 +476,7 @@ def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
         sql = """
             SELECT symbol, direction, edge_probability, timeframe, created_at
             FROM alerts
-            WHERE created_at >= NOW() - INTERVAL '%s hours'
+            WHERE created_at >= NOW() - make_interval(hours => %s)
             ORDER BY created_at DESC
             LIMIT %s
         """

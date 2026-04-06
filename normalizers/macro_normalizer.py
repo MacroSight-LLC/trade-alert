@@ -48,7 +48,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     curve_slope: float | None = _safe_float(raw_results.get("yield_curve_slope"))
     risk_on: bool | None = raw_results.get("risk_on")
 
-    # VIX thresholds (SSOT §7)
+    # VIX scoring (SSOT §7) — continuous instead of binary thresholds
     if vix is not None:
         if vix > VIX_EXTREME_THRESHOLD:
             signals.append(
@@ -62,13 +62,30 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 )
             )
         elif vix > VIX_ELEVATED_THRESHOLD:
+            # Interpolate between elevated and extreme
+            t = (vix - VIX_ELEVATED_THRESHOLD) / (VIX_EXTREME_THRESHOLD - VIX_ELEVATED_THRESHOLD)
+            score = 2.0 + t * 1.0  # 2.0 → 3.0
+            conf = 0.85 + t * 0.10  # 0.85 → 0.95
             signals.append(
                 Signal(
                     source="fred",
                     type="macro_risk_off",
-                    score=2.0,
-                    confidence=0.85,
+                    score=round(score, 2),
+                    confidence=round(conf, 2),
                     reason=f"VIX elevated at {vix:.1f}",
+                    raw=raw_results,
+                )
+            )
+        elif vix <= 15.0:
+            # Calm VIX = risk-on environment; emit negative risk_off
+            # so decision engine can see "macro is supportive"
+            signals.append(
+                Signal(
+                    source="fred",
+                    type="macro_risk_off",
+                    score=-1.0,
+                    confidence=0.70,
+                    reason=f"VIX calm at {vix:.1f} (risk-on)",
                     raw=raw_results,
                 )
             )
@@ -99,8 +116,19 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             )
         )
 
+    # Always emit a macro snapshot so the decision engine can distinguish
+    # "no macro data" from "macro is neutral"
     if not signals:
-        return []
+        signals.append(
+            Signal(
+                source="fred",
+                type="macro_risk_off",
+                score=0.0,
+                confidence=0.0,
+                reason="Macro neutral — no risk-off triggers",
+                raw=raw_results,
+            )
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     return [

@@ -113,6 +113,10 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             sweep_type = flow_item.get("sweep_type", "")
             strike = flow_item.get("strike", "")
 
+            # Validate required fields
+            if not sweep_type:
+                continue
+
             # Score by magnitude: small sweep → 1.0, medium → 2.0, large → 2.5
             if contracts >= 500 or premium >= 1_000_000:
                 flow_score = 2.5
@@ -140,7 +144,9 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     raw=flow_item,
                 )
             )
-            break  # One options_flow signal per symbol
+            # Emit up to 3 sweeps per symbol to avoid flooding
+            if sum(1 for s in signals if s.type == "options_flow" and s.source == "rot") >= 3:
+                break
 
         if signals:
             snapshots.append(

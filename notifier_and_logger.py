@@ -14,29 +14,43 @@ import json
 import logging
 import os
 import time
+from atexit import register as _atexit_register
 from datetime import datetime, timezone
 
 import httpx
-import psycopg2
 import redis
 from pydantic import ValidationError
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from chart_gen import generate_chart
 from db import insert_alert
+from log_config import configure_logging
 from models import PlaybookAlert
 from redis_client import get_redis
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
 DISCORD_SEND_MAX_RETRIES: int = int(os.getenv("DISCORD_SEND_MAX_RETRIES", "3"))
 DISCORD_SEND_BACKOFF_BASE: float = float(os.getenv("DISCORD_SEND_BACKOFF_BASE", "1.0"))
-DEDUP_WINDOW_SECONDS: int = int(os.getenv("DEDUP_WINDOW_SECONDS", "900"))  # 15 min default
+from constants import DEDUP_WINDOW_SECONDS  # centralized
+
 MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
 
 _discord_client: httpx.Client | None = None
+
+# Discord circuit breaker: fast-fail remaining batch when Discord is down
+_DISCORD_CB_THRESHOLD: int = int(os.getenv("DISCORD_CB_THRESHOLD", "2"))
+_discord_consecutive_failures: int = 0
+
+# Maximum field length for Discord embed fields (Discord limit is 1024)
+_MAX_FIELD_LEN: int = 1000
+
+# Tiered channel routing by alert quality
+_DISCORD_CHANNEL_HIGH: str | None = os.getenv("DISCORD_CHANNEL_HIGH")
+_DISCORD_CHANNEL_STANDARD: str | None = os.getenv("DISCORD_CHANNEL_STANDARD")
+_DISCORD_CHANNEL_WATCH: str | None = os.getenv("DISCORD_CHANNEL_WATCH")
 
 
 def _get_discord_client() -> httpx.Client:
@@ -47,7 +61,19 @@ def _get_discord_client() -> httpx.Client:
             timeout=httpx.Timeout(connect=5.0, read=DISCORD_HTTP_TIMEOUT, write=5.0, pool=5.0),
             limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
         )
+        _atexit_register(_close_http_client)
     return _discord_client
+
+
+def _close_http_client() -> None:
+    """Close the module-level HTTP client on process exit."""
+    global _discord_client  # noqa: PLW0603
+    if _discord_client is not None and not _discord_client.is_closed:
+        try:
+            _discord_client.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _discord_client = None
 
 
 def _discord_webhook() -> str | None:
@@ -71,6 +97,13 @@ _COLOR_MAP: dict[str, int] = {
     "SHORT": 15158332,  # #E74C3C red
     "WATCH": 3447003,  # #3498DB blue
 }
+
+# Confidence-tier color overrides (composite quality → embed color)
+_QUALITY_COLORS: list[tuple[float, int]] = [
+    (0.80, 3066993),  # > 0.80 → green  #2ECC71
+    (0.65, 15905331),  # 0.65–0.80 → amber #F2C43D
+    (0.00, 15158332),  # < 0.65 → red    #E74C3C
+]
 
 _DIRECTION_EMOJI: dict[str, str] = {
     "LONG": "\U0001f7e2",  # 🟢
@@ -121,7 +154,183 @@ def _edge_label(ep: float) -> str:
     return "\u26a0\ufe0f MODERATE"
 
 
-def format_embed(alert: PlaybookAlert) -> dict:
+def _truncate_field(text: str, max_len: int = _MAX_FIELD_LEN) -> str:
+    """Truncate text to fit Discord's field length limit.
+
+    Args:
+        text: Raw text.
+        max_len: Maximum allowed characters.
+
+    Returns:
+        Truncated string with ellipsis if needed.
+    """
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _quality_color(alert: PlaybookAlert) -> int:
+    """Return embed color based on alert composite quality.
+
+    Blends EP × confidence as a simple quality proxy.
+    """
+    quality = alert.edge_probability * alert.confidence
+    for threshold, color in _QUALITY_COLORS:
+        if quality >= threshold:
+            return color
+    return _COLOR_MAP.get(alert.direction, 3447003)
+
+
+def _get_similar_alert_stats(symbol: str, direction: str, ep: float) -> str:
+    """Query Postgres for historical win-rate of similar alerts.
+
+    Args:
+        symbol: Ticker symbol.
+        direction: LONG/SHORT/WATCH.
+        ep: Edge probability (for \u00b10.05 bucket matching).
+
+    Returns:
+        Human-readable string for embed, or empty string.
+    """
+    try:
+        from db import _put_conn, get_conn
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT outcome, COUNT(*) as cnt
+                    FROM alerts
+                    WHERE symbol = %s
+                      AND direction = %s
+                      AND edge_probability BETWEEN %s AND %s
+                      AND outcome IN ('WIN', 'LOSS')
+                      AND created_at > NOW() - INTERVAL '30 days'
+                    GROUP BY outcome
+                    """,
+                    (symbol, direction, ep - 0.05, ep + 0.05),
+                )
+                rows = cur.fetchall()
+        finally:
+            _put_conn(conn)
+
+        if not rows:
+            return "\U0001f4ca First alert for this setup"
+
+        wins = sum(r[1] for r in rows if r[0] == "WIN")
+        total = sum(r[1] for r in rows)
+        if total < 2:
+            return "\U0001f4ca First alert for this setup"
+        pct = int(wins / total * 100)
+        return f"\U0001f4ca Similar past alerts: {pct}% win rate (N={total})"
+    except Exception:
+        return ""
+
+
+def _batch_similar_alert_stats(
+    alerts: list[PlaybookAlert],
+) -> dict[str, str]:
+    """Batch-fetch historical win-rate stats for multiple alerts in one query.
+
+    Avoids N+1 DB round-trips by fetching all matching rows in a single
+    query and grouping results client-side.
+
+    Args:
+        alerts: List of PlaybookAlert instances to look up.
+
+    Returns:
+        Mapping of ``"{symbol}:{direction}"`` → human-readable stats string.
+    """
+    if not alerts:
+        return {}
+    try:
+        from db import _put_conn, get_conn
+
+        # Build (symbol, direction, ep_low, ep_high) tuples
+        lookups: list[tuple[str, str, float, float]] = []
+        for a in alerts:
+            lookups.append((a.symbol, a.direction, a.edge_probability - 0.05, a.edge_probability + 0.05))
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Use ANY(ARRAY[...]) to batch the query
+                cur.execute(
+                    """
+                    SELECT a.symbol, a.direction, a.outcome, COUNT(*) as cnt
+                    FROM alerts a
+                    INNER JOIN (
+                        SELECT unnest(%s::text[]) AS symbol,
+                               unnest(%s::text[]) AS direction,
+                               unnest(%s::float8[]) AS ep_low,
+                               unnest(%s::float8[]) AS ep_high
+                    ) lookup ON a.symbol = lookup.symbol
+                            AND a.direction = lookup.direction
+                            AND a.edge_probability BETWEEN lookup.ep_low AND lookup.ep_high
+                    WHERE a.outcome IN ('WIN', 'LOSS')
+                      AND a.created_at > NOW() - INTERVAL '30 days'
+                    GROUP BY a.symbol, a.direction, a.outcome
+                    """,
+                    (
+                        [t[0] for t in lookups],
+                        [t[1] for t in lookups],
+                        [t[2] for t in lookups],
+                        [t[3] for t in lookups],
+                    ),
+                )
+                rows = cur.fetchall()
+        finally:
+            _put_conn(conn)
+
+        # Aggregate: {(symbol, direction): {outcome: count}}
+        agg: dict[tuple[str, str], dict[str, int]] = {}
+        for sym, direction, outcome, cnt in rows:
+            key = (sym, direction)
+            agg.setdefault(key, {})
+            agg[key][outcome] = agg[key].get(outcome, 0) + cnt
+
+        result: dict[str, str] = {}
+        for a in alerts:
+            k = (a.symbol, a.direction)
+            stats = agg.get(k, {})
+            wins = stats.get("WIN", 0)
+            total = sum(stats.values())
+            lookup_key = f"{a.symbol}:{a.direction}"
+            if total < 2:
+                result[lookup_key] = "\U0001f4ca First alert for this setup"
+            else:
+                pct = int(wins / total * 100)
+                result[lookup_key] = f"\U0001f4ca Similar past alerts: {pct}% win rate (N={total})"
+        return result
+    except Exception:
+        return {}
+
+
+def _route_channel_for_alert(alert: PlaybookAlert) -> str | None:
+    """Select Discord channel ID based on alert quality tier.
+
+    Uses EP * confidence as a quality score to route to high/standard/watch
+    channels when the corresponding env vars are set.  Returns the channel
+    ID instead of mutating ``os.environ`` (thread-safe).
+
+    Args:
+        alert: The alert being sent.
+
+    Returns:
+        Channel ID string, or ``None`` to use the default channel.
+    """
+    quality = alert.edge_probability * alert.confidence
+    if quality >= 0.65 and _DISCORD_CHANNEL_HIGH:
+        return _DISCORD_CHANNEL_HIGH
+    if quality >= 0.45 and _DISCORD_CHANNEL_STANDARD:
+        return _DISCORD_CHANNEL_STANDARD
+    if _DISCORD_CHANNEL_WATCH:
+        return _DISCORD_CHANNEL_WATCH
+    return None
+
+
+def format_embed(alert: PlaybookAlert, *, hist_stats: str = "") -> dict:
     """Format a PlaybookAlert as a rich Discord embed payload.
 
     Produces a visually dense, multi-section embed with:
@@ -154,89 +363,114 @@ def format_embed(alert: PlaybookAlert) -> dict:
     risk_per_share = abs(entry_price - stop_price)
     reward_per_share = abs(target_price - entry_price)
 
+    # Historical win-rate context (pre-fetched by caller or per-alert fallback)
+    if not hist_stats:
+        hist_stats = _get_similar_alert_stats(alert.symbol, alert.direction, alert.edge_probability)
+
+    # Confidence-tier color
+    embed_color = _quality_color(alert)
+
+    # Truncate long fields
+    thesis = _truncate_field(alert.thesis)
+    sentiment_ctx = _truncate_field(alert.sentiment_context)
+    macro_ctx = _truncate_field(alert.macro_regime)
+    unusual = _truncate_field(unusual)
+
+    fields: list[dict] = [
+        {
+            "name": "\u2500" * 25,
+            "value": "**SIGNAL STRENGTH**",
+            "inline": False,
+        },
+        {
+            "name": "\U0001f3af Edge Probability",
+            "value": f"```{_score_bar(alert.edge_probability)}```",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f4aa Confidence",
+            "value": f"```{_score_bar(alert.confidence)}```",
+            "inline": True,
+        },
+        {
+            "name": "\u2500" * 25,
+            "value": "**TRADE PLAYBOOK**",
+            "inline": False,
+        },
+        {
+            "name": "\U0001f4b0 Entry",
+            "value": f"```${entry_price:,.2f}```",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f6d1 Stop Loss",
+            "value": f"```${stop_price:,.2f}```",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f3c6 Target",
+            "value": f"```${target_price:,.2f}```",
+            "inline": True,
+        },
+        {
+            "name": "\u2696\ufe0f Risk / Reward",
+            "value": (
+                f"**R:R {rr}**\n"
+                f"Risk: ${risk_per_share:,.2f}/share  \u2192  "
+                f"Reward: ${reward_per_share:,.2f}/share"
+            ),
+            "inline": False,
+        },
+        {
+            "name": "\u2500" * 25,
+            "value": "**MARKET CONTEXT**",
+            "inline": False,
+        },
+        {
+            "name": "\u23f0 Timeframe",
+            "value": f"**{alert.timeframe}** \u2014 {alert.timeframe_rationale}",
+            "inline": False,
+        },
+        {
+            "name": "\U0001f4e3 Sentiment",
+            "value": sentiment_ctx,
+            "inline": True,
+        },
+        {
+            "name": "\U0001f30d Macro Regime",
+            "value": macro_ctx,
+            "inline": True,
+        },
+        {
+            "name": "\U0001f50d Unusual Activity",
+            "value": unusual,
+            "inline": False,
+        },
+        {
+            "name": "\U0001f4ca Source Alignment",
+            "value": f"```{_score_bar(alert.sources_agree / 10, segments=10)}```"
+            f"**{alert.sources_agree}/10** independent sources aligned",
+            "inline": False,
+        },
+    ]
+
+    # Append historical stats if available
+    if hist_stats:
+        fields.append(
+            {
+                "name": "\U0001f4c8 Track Record",
+                "value": hist_stats,
+                "inline": False,
+            }
+        )
+
     return {
         "embeds": [
             {
                 "title": (f"{direction_emoji} {alert.symbol} {alert.direction} | {edge_label}"),
-                "description": f"**{alert.thesis}**",
-                "color": _COLOR_MAP.get(alert.direction, 3447003),
-                "fields": [
-                    {
-                        "name": "\u2500" * 25,
-                        "value": "**SIGNAL STRENGTH**",
-                        "inline": False,
-                    },
-                    {
-                        "name": "\U0001f3af Edge Probability",
-                        "value": f"```{_score_bar(alert.edge_probability)}```",
-                        "inline": True,
-                    },
-                    {
-                        "name": "\U0001f4aa Confidence",
-                        "value": f"```{_score_bar(alert.confidence)}```",
-                        "inline": True,
-                    },
-                    {
-                        "name": "\u2500" * 25,
-                        "value": "**TRADE PLAYBOOK**",
-                        "inline": False,
-                    },
-                    {
-                        "name": "\U0001f4b0 Entry",
-                        "value": f"```${entry_price:,.2f}```",
-                        "inline": True,
-                    },
-                    {
-                        "name": "\U0001f6d1 Stop Loss",
-                        "value": f"```${stop_price:,.2f}```",
-                        "inline": True,
-                    },
-                    {
-                        "name": "\U0001f3c6 Target",
-                        "value": f"```${target_price:,.2f}```",
-                        "inline": True,
-                    },
-                    {
-                        "name": "\u2696\ufe0f Risk / Reward",
-                        "value": (
-                            f"**R:R {rr}**\n"
-                            f"Risk: ${risk_per_share:,.2f}/share  \u2192  "
-                            f"Reward: ${reward_per_share:,.2f}/share"
-                        ),
-                        "inline": False,
-                    },
-                    {
-                        "name": "\u2500" * 25,
-                        "value": "**MARKET CONTEXT**",
-                        "inline": False,
-                    },
-                    {
-                        "name": "\u23f0 Timeframe",
-                        "value": f"**{alert.timeframe}** \u2014 {alert.timeframe_rationale}",
-                        "inline": False,
-                    },
-                    {
-                        "name": "\U0001f4e3 Sentiment",
-                        "value": alert.sentiment_context,
-                        "inline": True,
-                    },
-                    {
-                        "name": "\U0001f30d Macro Regime",
-                        "value": alert.macro_regime,
-                        "inline": True,
-                    },
-                    {
-                        "name": "\U0001f50d Unusual Activity",
-                        "value": unusual,
-                        "inline": False,
-                    },
-                    {
-                        "name": "\U0001f4ca Source Alignment",
-                        "value": f"```{_score_bar(alert.sources_agree / 10, segments=10)}```"
-                        f"**{alert.sources_agree}/10** independent sources aligned",
-                        "inline": False,
-                    },
-                ],
+                "description": f"**{thesis}**",
+                "color": embed_color,
+                "fields": fields,
                 "footer": {"text": "trade-alert \u2022 MacroSight LLC"},
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -252,6 +486,8 @@ def _is_retryable(exc: httpx.HTTPStatusError) -> bool:
 def send_discord_embed(
     embed_payload: dict,
     chart_png: bytes | None = None,
+    *,
+    channel_override: str | None = None,
 ) -> bool:
     """Send embed to Discord alert channel with retry on transient errors.
 
@@ -265,11 +501,22 @@ def send_discord_embed(
     Args:
         embed_payload: Dict with ``embeds`` key matching Discord format.
         chart_png: Optional PNG bytes for the candlestick chart image.
+        channel_override: Optional Discord channel ID for tiered routing.
+            Overrides ``DISCORD_ALERT_CHANNEL_ID`` for this send only.
 
     Returns:
         ``True`` on success (2xx), ``False`` on failure.
     """
     last_exc: httpx.HTTPStatusError | httpx.RequestError | None = None
+    global _discord_consecutive_failures  # noqa: PLW0603
+
+    # Circuit breaker: fast-fail if Discord has been consecutively failing
+    if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
+        logger.error(
+            "Discord circuit breaker OPEN (%d consecutive failures) — skipping send",
+            _discord_consecutive_failures,
+        )
+        return False
 
     for attempt in range(1, DISCORD_SEND_MAX_RETRIES + 1):
         try:
@@ -284,10 +531,11 @@ def send_discord_embed(
                 else:
                     resp = _get_discord_client().post(webhook, json=embed_payload)
                 resp.raise_for_status()
+                _discord_consecutive_failures = 0
                 return True
 
             bot_token = _discord_bot_token()
-            alert_channel = _discord_alert_channel_id()
+            alert_channel = channel_override or _discord_alert_channel_id()
             if bot_token and alert_channel:
                 url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
                 headers = {"Authorization": f"Bot {bot_token}"}
@@ -305,6 +553,7 @@ def send_discord_embed(
                         headers=headers,
                     )
                 resp.raise_for_status()
+                _discord_consecutive_failures = 0
                 return True
 
             logger.warning("No Discord credentials configured — skipping send")
@@ -323,6 +572,7 @@ def send_discord_embed(
                 )
                 time.sleep(delay)
                 continue
+            _discord_consecutive_failures += 1
             logger.error("Discord API error %s: %s", exc.response.status_code, exc)
             return False
 
@@ -339,9 +589,11 @@ def send_discord_embed(
                 )
                 time.sleep(delay)
                 continue
+            _discord_consecutive_failures += 1
             logger.error("Discord request failed after %d attempts: %s", attempt, exc)
             return False
 
+    _discord_consecutive_failures += 1
     logger.error("Discord send exhausted %d retries, last error: %s", DISCORD_SEND_MAX_RETRIES, last_exc)
     return False
 
@@ -494,6 +746,20 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         Count of alerts successfully sent to Discord.
     """
     snapshots = raw_snapshots or []
+
+    # Extract per-symbol forecast scores from raw snapshots for DB logging
+    _forecast_scores: dict[str, float] = {}
+    for snap in snapshots:
+        sym = snap.get("symbol", "")
+        for sig in snap.get("signals", []):
+            if sig.get("type") == "price_forecast":
+                try:
+                    val = float(sig.get("score", 0))
+                    if sym not in _forecast_scores or abs(val) > abs(_forecast_scores[sym]):
+                        _forecast_scores[sym] = val
+                except (TypeError, ValueError):
+                    pass
+
     n_sent = 0
 
     try:
@@ -536,7 +802,10 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         )
 
     # Pre-generate candlestick charts in parallel (I/O-bound: Polygon API + mplfinance render)
+    # Also batch-fetch historical win-rate stats (single DB query instead of N+1)
+    batch_stats = _batch_similar_alert_stats(valid_alerts)
     chart_map: dict[str, bytes | None] = {}
+    atr_map: dict[str, float | None] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         future_to_sym = {
             pool.submit(generate_chart, alert.symbol, alert.timeframe, alert.entry): alert.symbol
@@ -545,17 +814,36 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         for future in concurrent.futures.as_completed(future_to_sym):
             sym = future_to_sym[future]
             try:
-                chart_map[sym] = future.result()
+                chart_bytes, atr_val = future.result()
+                chart_map[sym] = chart_bytes
+                atr_map[sym] = atr_val
             except Exception as exc:
                 logger.warning("Chart generation failed for %s: %s", sym, exc)
                 chart_map[sym] = None
+                atr_map[sym] = None
 
     for alert in valid_alerts:
         try:
-            embed = format_embed(alert)
+            embed = format_embed(
+                alert,
+                hist_stats=batch_stats.get(f"{alert.symbol}:{alert.direction}", ""),
+            )
             chart_png = chart_map.get(alert.symbol)
+            atr_val = atr_map.get(alert.symbol)
             if chart_png:
                 embed["embeds"][0]["image"] = {"url": "attachment://chart.png"}
+            # Add ATR-based position sizing hint
+            if atr_val and atr_val > 0:
+                embed["embeds"][0]["fields"].append(
+                    {
+                        "name": "\U0001f4b0 ATR Risk Guide",
+                        "value": (
+                            f"14-period ATR: **${atr_val:,.2f}**\n"
+                            f"1 ATR stop: ${atr_val * 1.5:,.2f} risk/share"
+                        ),
+                        "inline": True,
+                    }
+                )
 
             # Persist-first ordering: INSERT into Postgres BEFORE sending
             # to Discord.  This prevents "phantom alerts" where a Discord
@@ -566,8 +854,14 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             # insert the alert is safely persisted; Discord failure is
             # non-fatal and will be retried or noticed via ops monitoring.
             try:
-                insert_alert(alert, snapshots)
-            except (psycopg2.Error, psycopg2.DatabaseError) as exc:
+                _fc = _forecast_scores.get(alert.symbol)
+                insert_alert(
+                    alert,
+                    snapshots,
+                    forecast_score=_fc,
+                    forecast_contradicted=False,
+                )
+            except Exception as exc:
                 logger.error(
                     "Postgres insert failed for %s — skipping Discord send: %s",
                     alert.symbol,
@@ -575,7 +869,10 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                 )
                 continue
 
-            sent = send_discord_embed(embed, chart_png=chart_png)
+            # Tiered channel routing: select channel based on quality (thread-safe)
+            routed_channel = _route_channel_for_alert(alert)
+
+            sent = send_discord_embed(embed, chart_png=chart_png, channel_override=routed_channel)
             if sent:
                 n_sent += 1
             else:

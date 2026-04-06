@@ -14,11 +14,19 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from typing import Any
 
 from models import PlaybookAlert
 
 logger = logging.getLogger(__name__)
+
+# Cached calibration data (refreshed per pipeline run)
+_calibration_cache: dict[tuple[str, float], float] | None = None
+_calibration_ts: float = 0.0
+_calibration_lock = threading.Lock()
+_CALIBRATION_TTL_SECS: float = 300.0  # 5-minute TTL
 
 # Minimum thresholds for quality sub-scores
 _MIN_THESIS_WORDS = 15
@@ -135,6 +143,67 @@ def score_thesis_quality(thesis: str) -> float:
         score += 0.25
 
     return max(0.0, min(1.0, score))
+
+
+def _load_calibration_cache() -> dict[tuple[str, float], float]:
+    """Load calibration gap data from Postgres (cached with TTL).
+
+    Returns:
+        Mapping of (direction, ep_bucket) to gap (predicted EP - actual WR).
+        Positive gap means EP is over-predicting.
+    """
+    global _calibration_cache, _calibration_ts  # noqa: PLW0603
+    with _calibration_lock:
+        now = time.monotonic()
+        if _calibration_cache is not None and (now - _calibration_ts) < _CALIBRATION_TTL_SECS:
+            return _calibration_cache
+        try:
+            from db import get_calibration_accuracy
+
+            rows = get_calibration_accuracy(days=60)
+            _calibration_cache = {(str(r["direction"]), float(r["ep_bucket"])): float(r["gap"]) for r in rows}
+        except Exception as exc:
+            logger.debug("Calibration cache load failed (expected in tests): %s", exc)
+            _calibration_cache = {}
+        _calibration_ts = now
+        return _calibration_cache
+
+
+def score_historical_accuracy(
+    direction: str,
+    edge_probability: float,
+) -> float:
+    """Score based on historical EP-vs-actual-winrate calibration gap.
+
+    Penalizes alerts in (direction, EP bucket) combos where the LLM
+    has historically over-predicted the edge probability by >10%.
+
+    Args:
+        direction: LONG, SHORT, or WATCH.
+        edge_probability: Claimed edge probability.
+
+    Returns:
+        Score from 0.0 (severely miscalibrated) to 1.0 (well-calibrated).
+    """
+    if direction == "WATCH":
+        return 0.75
+    cache = _load_calibration_cache()
+    if not cache:
+        return 0.75  # neutral when no data available
+    bucket = round(edge_probability, 1)
+    gap = cache.get((direction, bucket))
+    if gap is None:
+        return 0.75  # no data for this bucket
+    # gap > 0 means over-prediction; penalize proportionally
+    if gap > 0.15:
+        return 0.2
+    if gap > 0.10:
+        return 0.4
+    if gap > 0.05:
+        return 0.6
+    if gap < -0.05:
+        return 0.9  # conservative under-prediction is good
+    return 1.0
 
 
 def score_rr_ratio(entry: dict[str, float], direction: str) -> float:
@@ -285,14 +354,16 @@ def score_alert(alert: PlaybookAlert) -> dict[str, float]:
             alert.sources_agree,
         ),
         "signal_consistency": score_signal_consistency(alert),
+        "historical_accuracy": score_historical_accuracy(alert.direction, alert.edge_probability),
     }
     # Composite quality score: weighted average
     weights = {
-        "thesis_quality": 0.20,
+        "thesis_quality": 0.15,
         "rr_ratio": 0.25,
-        "signal_coverage": 0.20,
-        "confidence_calibration": 0.20,
+        "signal_coverage": 0.15,
+        "confidence_calibration": 0.15,
         "signal_consistency": 0.15,
+        "historical_accuracy": 0.15,
     }
     scores["composite_quality"] = sum(scores[k] * weights[k] for k in weights)
     return scores

@@ -10,6 +10,7 @@ import atexit
 import json
 import logging
 import os
+import threading
 from datetime import timedelta
 from typing import Any
 
@@ -25,12 +26,17 @@ logger = logging.getLogger(__name__)
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
 _pool: psycopg2.pool.SimpleConnectionPool | None = None
+_pool_lock = threading.Lock()
 
 
 def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
     """Return a lazily-initialised connection pool (min=1, max=5)."""
     global _pool  # noqa: PLW0603
-    if _pool is None or _pool.closed:
+    if _pool is not None and not _pool.closed:
+        return _pool
+    with _pool_lock:
+        if _pool is not None and not _pool.closed:
+            return _pool
         url = DATABASE_URL
         if not url:
             raise RuntimeError("DATABASE_URL not set — configure via Vault or .env")
@@ -63,19 +69,33 @@ def get_conn() -> psycopg2.extensions.connection:
 
 
 def _put_conn(conn: psycopg2.extensions.connection) -> None:
-    """Return a connection to the pool."""
+    """Return a connection to the pool, rolling back dirty transactions."""
     try:
+        if conn.closed:
+            return
+        if conn.info.transaction_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            conn.rollback()
         _get_pool().putconn(conn)
     except (psycopg2.Error, RuntimeError):
         logger.debug("Failed to return connection to pool", exc_info=True)
 
 
-def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
+def insert_alert(
+    alert: PlaybookAlert,
+    raw_snapshots: list[dict],
+    *,
+    forecast_score: float | None = None,
+    forecast_contradicted: bool = False,
+    trace_id: str | None = None,
+) -> int:
     """Insert a PlaybookAlert into the alerts table.
 
     Args:
         alert: Validated PlaybookAlert from the decision engine.
         raw_snapshots: Raw snapshot dicts archived for auditability.
+        forecast_score: TimesFM price_forecast score for this symbol (optional).
+        forecast_contradicted: Whether the forecast gate was triggered (optional).
+        trace_id: Langfuse trace ID for outcome linkage (optional).
 
     Returns:
         The auto-generated ``id`` of the new row.
@@ -84,11 +104,13 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
         INSERT INTO alerts (
             symbol, direction, edge_probability, confidence, timeframe,
             thesis, entry, timeframe_rationale, sentiment_context,
-            unusual_activity, macro_regime, sources_agree, raw_snapshots
+            unusual_activity, macro_regime, sources_agree, raw_snapshots,
+            forecast_score, forecast_contradicted, langfuse_trace_id
         ) VALUES (
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s, %s
+            %s, %s, %s, %s,
+            %s, %s, %s
         )
         RETURNING id
     """
@@ -111,6 +133,9 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
                     alert.macro_regime,
                     alert.sources_agree,
                     json.dumps(raw_snapshots),
+                    forecast_score,
+                    forecast_contradicted,
+                    trace_id,
                 ),
             )
             row = cur.fetchone()
@@ -276,6 +301,50 @@ def get_winrate_by_bucket() -> list[dict]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql)
             return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def get_calibration_accuracy(days: int = 60) -> list[dict]:
+    """Return predicted EP vs actual win rate by (direction, EP bucket).
+
+    Used by ``alert_quality.py`` to penalize EP inflation.
+
+    Args:
+        days: Lookback window in days.
+
+    Returns:
+        List of dicts with keys: direction, ep_bucket, predicted_ep,
+        actual_winrate, total, gap (predicted − actual).
+    """
+    sql = """
+        SELECT
+            direction,
+            ROUND(edge_probability::numeric, 1) AS ep_bucket,
+            ROUND(AVG(edge_probability)::numeric, 4) AS predicted_ep,
+            ROUND(
+                CASE WHEN COUNT(*) > 0
+                THEN SUM(CASE WHEN outcome = 'WIN' THEN 1.0 ELSE 0 END) / COUNT(*)
+                ELSE NULL END::numeric, 4
+            ) AS actual_winrate,
+            COUNT(*) AS total
+        FROM alerts
+        WHERE outcome IN ('WIN', 'LOSS')
+          AND created_at >= NOW() - %s
+        GROUP BY direction, ep_bucket
+        HAVING COUNT(*) >= 5
+        ORDER BY direction, ep_bucket DESC
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (timedelta(days=days),))
+            rows = [dict(row) for row in cur.fetchall()]
+            for r in rows:
+                pred = float(r.get("predicted_ep") or 0)
+                actual = float(r.get("actual_winrate") or 0)
+                r["gap"] = round(pred - actual, 4)
+            return rows
     finally:
         _put_conn(conn)
 

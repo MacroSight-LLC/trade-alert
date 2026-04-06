@@ -19,12 +19,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from db import (
@@ -34,6 +36,10 @@ from db import (
     get_symbol_performance,
     get_winrate_by_bucket,
 )
+from log_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 # ── Authentication ───────────────────────────────────────────────────────
 
@@ -139,11 +145,22 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all handler — returns structured JSON 500, never raw stack traces."""
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 app.add_middleware(
@@ -153,9 +170,56 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key"],
 )
 
+
+class _RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log method, path, status code, and latency for every request."""
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        """Process a request and log its result."""
+        import time as _time
+
+        start = _time.monotonic()
+        response = await call_next(request)
+        elapsed_ms = (_time.monotonic() - start) * 1000
+        logger.info(
+            "HTTP %s %s %d %.1fms client=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+            request.client.host if request.client else "-",
+        )
+        return response
+
+
+app.add_middleware(_RequestLoggingMiddleware)
+
 router = APIRouter(prefix="/api", dependencies=[Depends(_require_api_key)])
 
 _RATE_LIMIT = "60/minute"
+
+
+# ── Health & Auth Probes (outside the authenticated router) ──────────
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    """Unauthenticated liveness probe for k8s / docker healthcheck."""
+    return {"status": "ok"}
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    """Unauthenticated Prometheus scrape endpoint."""
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/api/auth/test", dependencies=[Depends(_require_api_key)])
+def auth_test() -> dict[str, Any]:
+    """Authenticated probe to validate API key."""
+    return {"authenticated": True, "timestamp": datetime.utcnow().isoformat()}
 
 
 @router.get("/summary", response_model=SummaryResponse)

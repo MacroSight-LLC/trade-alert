@@ -19,6 +19,7 @@ import psycopg2
 import redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from constants import SNAPSHOT_KEY_PREFIX, SNAPSHOT_STALE_TTL_THRESHOLD
 from notifier_and_logger import send_ops_message
 from redis_client import get_redis as _get_redis
 
@@ -47,10 +48,7 @@ HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.json
 MCP_HEALTH_TIMEOUT: float = float(os.getenv("MCP_HEALTH_TIMEOUT", "5.0"))
 LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "http://langfuse:3000")
 # Minimum TTL (seconds) before a snapshot key is considered stale.
-# Keys with TTL below this threshold are nearing expiry (set long ago).
-# Default 100s means a key set 800+ seconds ago (out of 900s total TTL)
-# is flagged as stale.
-REDIS_SNAPSHOT_STALE_THRESHOLD: int = int(os.getenv("REDIS_SNAPSHOT_STALE_THRESHOLD", "100"))
+REDIS_SNAPSHOT_STALE_THRESHOLD: int = SNAPSHOT_STALE_TTL_THRESHOLD
 
 
 HEALTH_LOG_MAX_LINES: int = int(os.getenv("HEALTH_LOG_MAX_LINES", "2000"))
@@ -114,7 +112,7 @@ def check_redis_snapshot_staleness() -> str | None:
     """
     try:
         r = _get_redis()
-        keys = r.keys("snapshots:*")
+        keys = r.keys(f"{SNAPSHOT_KEY_PREFIX}*")
         if not keys:
             return None  # No snapshot keys — nothing to check
         ttls = [r.ttl(k) for k in keys]

@@ -34,11 +34,15 @@ import httpx
 import yaml
 
 import vault_env_loader  # noqa: F401  — seeds os.environ from Vault
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+from log_config import configure_logging
+from metrics import (
+    MCP_CALL_DURATION,
+    MCP_CIRCUIT_BREAKER_TRIPS,
+    PIPELINE_LAST_RUN,
+    PIPELINE_RUNS,
 )
+
+configure_logging()
 logger = logging.getLogger("pipeline_runner")
 
 # MCP server endpoint mapping — matches docker-compose.prod.yml
@@ -329,6 +333,7 @@ async def _mcp_call_async(
         return {"error": f"Unknown MCP: {tool}"}
 
     url = f"{base}/tool/{method}"
+    _mcp_start = time.monotonic()
     try:
         if client:
             resp = await client.post(url, json=params)
@@ -336,14 +341,17 @@ async def _mcp_call_async(
             async with _new_http_client() as c:
                 resp = await c.post(url, json=params)
         resp.raise_for_status()
+        MCP_CALL_DURATION.labels(tool=tool, method=method).observe(time.monotonic() - _mcp_start)
         # Success — reset circuit
         circuit.failures = 0
         circuit.open_until = 0.0
         return resp.json()
     except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        MCP_CALL_DURATION.labels(tool=tool, method=method).observe(time.monotonic() - _mcp_start)
         circuit.failures += 1
         if circuit.failures >= _CIRCUIT_FAILURE_THRESHOLD:
             circuit.open_until = time.monotonic() + _CIRCUIT_OPEN_DURATION
+            MCP_CIRCUIT_BREAKER_TRIPS.labels(endpoint=tool).inc()
             logger.error(
                 "Circuit OPEN for %s after %d consecutive failures (%.0fs cooldown): %s",
                 tool,
@@ -360,11 +368,7 @@ async def _mcp_call_async(
 
 def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Synchronous wrapper for MCP calls (available inside code blocks)."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_mcp_call_async(tool, method, params or {}))
-    finally:
-        loop.close()
+    return asyncio.run(_mcp_call_async(tool, method, params or {}))
 
 
 # ── LLM call helper ─────────────────────────────────────────────────
@@ -648,11 +652,7 @@ def _exec_parallel_tool_calls(
                 tasks.append(_mcp_call_async(tool, method, params, client=client))
             return await asyncio.gather(*tasks, return_exceptions=True)
 
-    loop = asyncio.new_event_loop()
-    try:
-        raw = loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    raw = asyncio.run(_run())
     for i, r in enumerate(raw):
         if isinstance(r, Exception):
             call_info = calls[i] if i < len(calls) else {}
@@ -732,6 +732,7 @@ def run_workflow(
 
     wf_steps: list[dict[str, Any]] = wf.get("steps", [])
     step_results: dict[str, Any] = {}
+    step_timings: dict[str, float] = {}
     extra_vars: dict[str, Any] = dict(inputs or {})
     workflow_failed = False
 
@@ -770,7 +771,9 @@ def run_workflow(
                     trace_id=active_trace_id,
                 )
                 step_results[step_name] = result
-                logger.info("  │  ✓ %s completed (%.1fs)", step_name, time.time() - t0)
+                step_elapsed = time.time() - t0
+                step_timings[step_name] = step_elapsed
+                logger.info("  │  ✓ %s completed (%.1fs)", step_name, step_elapsed)
                 break
             except Exception as exc:
                 logger.error(
@@ -815,6 +818,19 @@ def run_workflow(
                     logger.error("  │  on-failure step %s also failed: %s", step_name, exc)
 
     logger.info("■ Finished workflow: %s (failed=%s)", name, workflow_failed)
+
+    # Prometheus metrics
+    _wf_label = workflow_path.stem
+    PIPELINE_RUNS.labels(workflow=_wf_label, status="failure" if workflow_failed else "success").inc()
+    PIPELINE_LAST_RUN.labels(workflow=_wf_label).set_to_current_time()
+
+    # Latency breakdown summary
+    if step_timings:
+        sorted_steps = sorted(step_timings.items(), key=lambda x: x[1], reverse=True)
+        total = sum(step_timings.values())
+        parts = " | ".join(f"{n}={t:.1f}s" for n, t in sorted_steps[:5])
+        logger.info("  ⏱ Latency breakdown (top 5): %s | total=%.1fs", parts, total)
+
     return step_results
 
 

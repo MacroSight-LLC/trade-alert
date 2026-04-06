@@ -237,6 +237,7 @@ class TestScoreAlert:
             "signal_coverage",
             "confidence_calibration",
             "signal_consistency",
+            "historical_accuracy",
             "composite_quality",
         }
         assert set(scores.keys()) == expected_keys
@@ -245,11 +246,12 @@ class TestScoreAlert:
         alert = _make_alert()
         scores = score_alert(alert)
         weights = {
-            "thesis_quality": 0.20,
+            "thesis_quality": 0.15,
             "rr_ratio": 0.25,
-            "signal_coverage": 0.20,
-            "confidence_calibration": 0.20,
+            "signal_coverage": 0.15,
+            "confidence_calibration": 0.15,
             "signal_consistency": 0.15,
+            "historical_accuracy": 0.15,
         }
         expected = sum(scores[k] * weights[k] for k in weights)
         assert scores["composite_quality"] == pytest.approx(expected)

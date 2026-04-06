@@ -10,6 +10,15 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
+from normalizers import interpolate
+
+# Continuous scoring breakpoints for 24h price change (abs %)
+# (threshold_pct, score, confidence) — ascending by threshold
+_CHANGE_BREAKPOINTS: list[tuple[float, float, float]] = [
+    (2.0, 1.0, 0.55),
+    (5.0, 2.0, 0.70),
+    (10.0, 2.8, 0.90),
+]
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -32,17 +41,10 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
 
         change: float | None = data.get("price_change_24h")
         if change is not None:
-            abs_change = abs(change)
-            if abs_change >= 5.0:
-                score = 2.5 if change > 0 else -2.5
-                conf = 0.8
-            elif abs_change >= 2.0:
-                score = 1.5 if change > 0 else -1.5
-                conf = 0.65
-            else:
-                score = None
-                conf = None
-            if score is not None:
+            result = interpolate(abs(change), _CHANGE_BREAKPOINTS)
+            if result is not None:
+                score, conf = result
+                score = score if change > 0 else -score
                 signals.append(
                     Signal(
                         source="trading",
@@ -71,13 +73,34 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         raw=data,
                     )
                 )
+        elif change is not None:
+            # Graceful degradation: SPY data missing — emit low-confidence
+            # relative-strength signal using absolute change as proxy so the
+            # symbol remains visible to the merger.  Confidence capped at
+            # 0.20 since this is NOT true relative strength.
+            if abs(change) >= 2.0:
+                rs_score = min(change, 3.0) if change > 0 else max(change, -3.0)
+                signals.append(
+                    Signal(
+                        source="polygon",
+                        type="relative_strength",
+                        score=rs_score,
+                        confidence=0.20,
+                        reason=f"RS approx {change:+.1f}% (SPY unavailable — absolute, not relative)",
+                        raw=data,
+                    )
+                )
 
         # Enhanced insider activity: prefer EDGAR filing data when available,
         # fall back to Finnhub binary buying/selling classification.
         edgar_filings: list[dict] = data.get("edgar_filings", [])
+        _pre_insider_count = sum(1 for s in signals if s.type == "insider_activity")
         if edgar_filings:
             _add_edgar_insider_signals(signals, edgar_filings, data)
-        else:
+        # Fall back to Finnhub if EDGAR produced no insider signals
+        # (empty list or all filings were below threshold)
+        _edgar_produced = sum(1 for s in signals if s.type == "insider_activity") > _pre_insider_count
+        if not _edgar_produced:
             insider: str | None = data.get("insider_activity")
             if insider:
                 insider_lower = insider.strip().lower()
@@ -187,6 +210,11 @@ def _add_edgar_insider_signals(
     if len(insiders_buying) >= 3 and raw_score > 0 and not insiders_selling:
         raw_score = min(raw_score + 0.5, 3.0)
         reason += f" (cluster: {len(insiders_buying)} insiders)"
+
+    # Symmetric sell-cluster detection: heavy coordinated selling
+    if len(insiders_selling) >= 3 and raw_score < 0 and not insiders_buying:
+        raw_score = max(raw_score - 0.5, -3.0)
+        reason += f" (sell cluster: {len(insiders_selling)} insiders)"
 
     signals.append(
         Signal(

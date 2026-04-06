@@ -147,16 +147,20 @@ class TestMapDbRow:
         assert mapped["entry_level"] == 50.0
         assert mapped["stop_level"] == 48.0
 
-    def test_missing_entry_keys_default_zero(self) -> None:
+    def test_missing_entry_keys_returns_none(self) -> None:
         row = {"id": 3, "entry": {}, "created_at": None}
         mapped = _map_db_row(row)
-        assert mapped["entry_level"] == 0.0
-        assert mapped["stop_level"] == 0.0
-        assert mapped["target_level"] == 0.0
+        assert mapped is None
 
     def test_preserves_other_keys(self) -> None:
-        row = {"id": 5, "symbol": "SPY", "entry": {}, "created_at": None}
+        row = {
+            "id": 5,
+            "symbol": "SPY",
+            "entry": {"level": 450.0, "stop": 445.0, "target": 460.0},
+            "created_at": None,
+        }
         mapped = _map_db_row(row)
+        assert mapped is not None
         assert mapped["symbol"] == "SPY"
 
 
@@ -205,7 +209,7 @@ class TestGetCurrentPrice:
 class TestRunTrackerCycle:
     """Tests for run_tracker_cycle with mocked DB and price API."""
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=195.0)
     @patch("outcome_tracker.get_open_alerts")
@@ -233,7 +237,7 @@ class TestRunTrackerCycle:
         assert call_args[0] == 10  # alert_id
         assert call_args[1] == "WIN"
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
     @patch("outcome_tracker.get_open_alerts")
@@ -248,7 +252,7 @@ class TestRunTrackerCycle:
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
     @patch("outcome_tracker.get_open_alerts")
@@ -272,12 +276,12 @@ class TestRunTrackerCycle:
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.get_open_alerts", side_effect=Exception("DB down"))
     def test_db_error_returns_zero(self, _alerts: MagicMock, _mkt: MagicMock) -> None:
         assert run_tracker_cycle() == 0
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=None)
     @patch("outcome_tracker.get_open_alerts")
@@ -301,7 +305,7 @@ class TestRunTrackerCycle:
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
-    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
     @patch("outcome_tracker.get_open_alerts")

@@ -127,8 +127,8 @@ def generate_chart(
     symbol: str,
     timeframe: str,
     entry: dict[str, float],
-) -> bytes | None:
-    """Generate a candlestick chart PNG with entry/stop/target overlays.
+) -> tuple[bytes | None, float | None]:
+    """Generate a candlestick chart PNG with entry/stop/target overlays and EMAs.
 
     Args:
         symbol: Ticker symbol (e.g. ``"NVDA"``).
@@ -136,21 +136,47 @@ def generate_chart(
         entry: Dict with keys ``level``, ``stop``, ``target`` (all floats).
 
     Returns:
-        PNG image bytes, or ``None`` if chart generation fails.
+        Tuple of (PNG image bytes or None, 14-period ATR value or None).
     """
     df = _fetch_candles(symbol, timeframe)
     if df.empty:
-        return None
+        return None, None
 
     try:
         import mplfinance as mpf
     except ImportError:
         logger.warning("mplfinance not installed — skipping chart generation")
-        return None
+        return None, None
 
     entry_price = entry.get("level", 0)
     stop_price = entry.get("stop", 0)
     target_price = entry.get("target", 0)
+
+    # Compute 14-period ATR
+    atr_value: float | None = None
+    if len(df) >= 15:
+        high_low = df["High"] - df["Low"]
+        high_close = (df["High"] - df["Close"].shift()).abs()
+        low_close = (df["Low"] - df["Close"].shift()).abs()
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr_value = float(true_range.rolling(14).mean().iloc[-1])
+
+    # Compute EMA overlays based on timeframe
+    ema_plots: list = []
+    if timeframe in ("5m", "15m"):
+        ema_periods = [9, 21]
+        ema_colors = ["#F39C12", "#9B59B6"]  # amber, purple
+    elif timeframe in ("1h", "4h"):
+        ema_periods = [20, 50]
+        ema_colors = ["#3498DB", "#E67E22"]  # blue, orange
+    else:  # 1D
+        ema_periods = [20, 50]
+        ema_colors = ["#3498DB", "#E67E22"]
+
+    for period, color in zip(ema_periods, ema_colors):
+        if len(df) >= period:
+            ema = df["Close"].ewm(span=period, adjust=False).mean()
+            ema_plots.append(mpf.make_addplot(ema, color=color, width=1.0, label=f"EMA{period}"))
 
     # Build horizontal lines — only include valid (non-zero) prices
     hlines_vals: list[float] = []
@@ -204,19 +230,22 @@ def generate_chart(
     buf = io.BytesIO()
     fig = None
     try:
-        fig, axes = mpf.plot(
-            df,
-            type="candle",
-            style=style,
-            volume=True,
-            title=f"\n{symbol} — {tf_label} Chart",
-            ylabel="Price ($)",
-            ylabel_lower="Volume",
-            figsize=(10, 6),
-            tight_layout=True,
-            returnfig=True,
+        plot_kwargs: dict[str, Any] = {
+            "type": "candle",
+            "style": style,
+            "volume": True,
+            "title": f"\n{symbol} — {tf_label} Chart",
+            "ylabel": "Price ($)",
+            "ylabel_lower": "Volume",
+            "figsize": (10, 6),
+            "tight_layout": True,
+            "returnfig": True,
             **hline_kwargs,
-        )
+        }
+        if ema_plots:
+            plot_kwargs["addplot"] = ema_plots
+
+        fig, axes = mpf.plot(df, **plot_kwargs)
 
         # Reserve right margin for price labels
         fig.subplots_adjust(right=0.82)
@@ -244,7 +273,7 @@ def generate_chart(
         chart_bytes = buf.getvalue()
     except Exception as exc:  # noqa: BLE001 — chart is cosmetic; rendering failure must not block alert delivery
         logger.warning("Chart rendering failed for %s: %s", symbol, exc)
-        return None
+        return None, atr_value
     finally:
         if fig is not None:
             import matplotlib.pyplot as plt
@@ -252,5 +281,7 @@ def generate_chart(
             plt.close(fig)
         buf.close()
 
-    logger.info("Generated %s chart for %s (%d bytes)", tf_label, symbol, len(chart_bytes))
-    return chart_bytes
+    logger.info(
+        "Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0
+    )
+    return chart_bytes, atr_value

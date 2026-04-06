@@ -1,0 +1,38 @@
+# TimesFM MCP server image for trade-alert.
+# Separate from Dockerfile.mcp because torch + timesfm add ~3GB.
+# Standard MCP services continue to use the lean Dockerfile.mcp image.
+#
+# Build: docker compose --profile mcp build timesfm-mcp
+# Usage: docker compose --profile mcp up timesfm-mcp -d
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install PyTorch CPU-only first (large layer, cached separately)
+RUN pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install TimesFM and MCP server dependencies
+RUN pip install --no-cache-dir \
+    "timesfm[torch]" \
+    fastapi \
+    "uvicorn[standard]" \
+    httpx \
+    hvac \
+    redis \
+    numpy \
+    pandas
+
+COPY scripts/mcp_server.py /app/mcp_server.py
+COPY scripts/mcp_servers/timesfm_mcp.py /app/mcp_servers/timesfm_mcp.py
+COPY scripts/mcp_servers/__init__.py /app/mcp_servers/__init__.py
+COPY vault_env_loader.py /app/vault_env_loader.py
+
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
+EXPOSE 8012
+
+ENTRYPOINT ["python", "mcp_server.py"]
+CMD ["8012"]

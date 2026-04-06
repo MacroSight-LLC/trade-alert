@@ -206,3 +206,100 @@ def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 — few-shot fetch is optional; return empty on any error
         logger.debug("Golden dataset fetch failed (non-blocking): %s", exc)
         return []
+
+
+# ── Quality-gated golden dataset promotion ───────────────────────
+
+_GOLDEN_MIN_QUALITY: float = 0.75
+_GOLDEN_REQUIRE_WIN: bool = True
+
+
+def auto_promote_to_golden(
+    quality_report: dict[str, Any],
+    alerts_json: str,
+    snapshots_json: str,
+    timeframe: str,
+    *,
+    trace_id: str | None = None,
+    prompt_version: str = "unknown",
+) -> bool:
+    """Auto-promote a decision run to golden dataset if quality is high enough.
+
+    Only promotes runs where:
+    1. ``batch_avg_quality >= 0.75``
+    2. At least one alert has ``outcome=WIN`` (when outcome data available)
+
+    Called after quality scoring in the decision workflow.
+
+    Args:
+        quality_report: Quality scoring results from ``alert_quality.py``.
+        alerts_json: Validated alerts JSON string.
+        snapshots_json: Raw signal snapshots JSON.
+        timeframe: Pipeline timeframe.
+        trace_id: Langfuse trace ID.
+        prompt_version: Prompt version identifier.
+
+    Returns:
+        True if the run was promoted, False otherwise.
+    """
+    if not quality_report:
+        return False
+
+    batch = quality_report.get("batch", {})
+    avg_quality = batch.get("batch_avg_quality", 0.0)
+    if avg_quality < _GOLDEN_MIN_QUALITY:
+        logger.debug(
+            "Golden gate: quality %.2f < %.2f — not promoted",
+            avg_quality,
+            _GOLDEN_MIN_QUALITY,
+        )
+        return False
+
+    # Check for at least one WIN outcome in per-alert results
+    per_alert = quality_report.get("per_alert", [])
+    has_win = any(a.get("scores", {}).get("historical_accuracy", 0) >= 0.8 for a in per_alert)
+    if _GOLDEN_REQUIRE_WIN and not has_win and per_alert:
+        logger.debug("Golden gate: no high-accuracy alerts — not promoted")
+        return False
+
+    lf = get_langfuse_client()
+    if lf is None:
+        return False
+
+    if not _ensure_dataset(lf, GOLDEN_DATASET_NAME):
+        return False
+
+    try:
+        parsed_alerts = json.loads(alerts_json) if isinstance(alerts_json, str) else alerts_json
+
+        now = datetime.now(tz=timezone.utc)
+        lf.create_dataset_item(
+            dataset_name=GOLDEN_DATASET_NAME,
+            input={
+                "timeframe": timeframe,
+                "snapshots": json.loads(snapshots_json)
+                if isinstance(snapshots_json, str)
+                else snapshots_json,
+                "prompt_version": prompt_version,
+                "timestamp": now.isoformat(),
+            },
+            expected_output={
+                "alerts": parsed_alerts,
+                "alert_count": len(parsed_alerts) if isinstance(parsed_alerts, list) else 0,
+            },
+            metadata={
+                "trace_id": trace_id or "",
+                "auto_promoted": True,
+                "batch_avg_quality": avg_quality,
+            },
+        )
+        lf.flush()
+        logger.info(
+            "Auto-promoted decision run to golden dataset (quality=%.2f, alerts=%d)",
+            avg_quality,
+            len(parsed_alerts) if isinstance(parsed_alerts, list) else 0,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — golden promotion is best-effort
+        logger.warning("Auto-promote to golden dataset failed: %s", exc)
+        return False

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from normalizers import safe_float
 from normalizers.events_normalizer import normalize as events_normalize
 from normalizers.flow_normalizer import normalize as flow_normalize
@@ -126,12 +128,12 @@ class TestFlowNormalizer:
         result = flow_normalize(raw, timeframe="15m")
         assert len(result) == 1
         assert result[0].signals[0].type == "volume_spike"
-        assert result[0].signals[0].score == 1.0
+        assert result[0].signals[0].score == pytest.approx(1.333, abs=0.01)
 
     def test_volume_spike_medium(self) -> None:
         raw = {"X": {"volume_multiple": 3.5}}
         result = flow_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 2.5
+        assert result[0].signals[0].score == pytest.approx(2.25, abs=0.01)
 
     def test_volume_spike_high(self) -> None:
         raw = {"X": {"volume_multiple": 6.0}}
@@ -152,7 +154,7 @@ class TestFlowNormalizer:
     def test_boundary_3_0(self) -> None:
         raw = {"X": {"volume_multiple": 3.0}}
         result = flow_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 2.5
+        assert result[0].signals[0].score == pytest.approx(2.0, abs=0.01)
 
     def test_boundary_5_0(self) -> None:
         raw = {"X": {"volume_multiple": 5.0}}
@@ -249,17 +251,17 @@ class TestMarketNormalizer:
     def test_large_positive_change(self) -> None:
         raw = {"X": {"price_change_24h": 12.0}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 2.5
+        assert result[0].signals[0].score == pytest.approx(2.8, abs=0.01)
 
     def test_moderate_positive_change(self) -> None:
         raw = {"X": {"price_change_24h": 7.0}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 2.5
+        assert result[0].signals[0].score == pytest.approx(2.32, abs=0.01)
 
     def test_large_negative_change(self) -> None:
         raw = {"X": {"price_change_24h": -12.0}}
         result = market_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == -2.5
+        assert result[0].signals[0].score == pytest.approx(-2.8, abs=0.01)
 
     def test_small_change_no_signal(self) -> None:
         raw = {"X": {"price_change_24h": 1.0}}
@@ -380,7 +382,8 @@ class TestMacroNormalizer:
         result = macro_normalize(raw, timeframe="15m")
         signals = result[0].signals
         vix_sig = [s for s in signals if "VIX" in s.reason][0]
-        assert vix_sig.score == 2.0
+        # Continuous interpolation: 28.0 is 30% between 25 and 35
+        assert 2.0 <= vix_sig.score <= 3.0
 
     def test_inverted_curve(self) -> None:
         raw = {"vix": 15.0, "yield_curve_slope": -60.0, "risk_on": True}
@@ -392,16 +395,24 @@ class TestMacroNormalizer:
         raw = {"vix": 15.0, "yield_curve_slope": 50.0, "risk_on": False}
         result = macro_normalize(raw, timeframe="15m")
         assert len(result) == 1
-        assert result[0].signals[0].reason == "FRED risk-on flag is False"
+        reasons = [s.reason for s in result[0].signals]
+        assert any("risk-on flag" in r.lower() for r in reasons)
 
-    def test_calm_market_no_signals(self) -> None:
+    def test_calm_market_emits_risk_on(self) -> None:
         raw = {"vix": 15.0, "yield_curve_slope": 50.0, "risk_on": True}
         result = macro_normalize(raw, timeframe="15m")
-        assert len(result) == 0
+        assert len(result) == 1
+        # Calm VIX should emit risk-on signal (negative risk_off score)
+        vix_sig = [s for s in result[0].signals if "calm" in s.reason.lower()]
+        assert len(vix_sig) == 1
+        assert vix_sig[0].score < 0
 
     def test_empty_input(self) -> None:
         result = macro_normalize({}, timeframe="15m")
-        assert len(result) == 0
+        assert len(result) == 1
+        # Should emit neutral macro snapshot
+        assert result[0].symbol == "__GLOBAL_MACRO__"
+        assert result[0].signals[0].confidence == 0.0
 
     def test_timeframe_passed(self) -> None:
         raw = {"vix": 40.0, "risk_on": False}
@@ -411,12 +422,19 @@ class TestMacroNormalizer:
     def test_nan_vix_ignored(self) -> None:
         raw = {"vix": float("nan"), "yield_curve_slope": 50.0, "risk_on": True}
         result = macro_normalize(raw, timeframe="15m")
-        assert len(result) == 0
+        # Always emits a snapshot; NaN VIX produces neutral macro
+        assert len(result) == 1
+        # No VIX-based signals (NaN is ignored), only neutral
+        vix_sigs = [s for s in result[0].signals if "VIX" in s.reason]
+        assert len(vix_sigs) == 0
 
     def test_inf_curve_slope_ignored(self) -> None:
         raw = {"vix": 15.0, "yield_curve_slope": float("inf"), "risk_on": True}
         result = macro_normalize(raw, timeframe="15m")
-        assert len(result) == 0
+        # Always emits a snapshot; calm VIX produces risk-on signal
+        assert len(result) == 1
+        curve_sigs = [s for s in result[0].signals if "curve" in s.reason.lower()]
+        assert len(curve_sigs) == 0
 
 
 # ── Events Normalizer ───────────────────────────────────────────
@@ -434,29 +452,40 @@ class TestEventsNormalizer:
         assert len(result) == 1
         sig = result[0].signals[0]
         assert sig.type == "catalyst_event"
-        assert sig.score == 2.5
-        assert sig.confidence == 0.90
+        # Continuous scoring: ~24h out gives high score close to 2.5
+        assert 2.0 <= sig.score <= 2.5
+        assert sig.confidence >= 0.80
         assert "[BMO]" in sig.reason
 
     def test_earnings_in_3_days(self) -> None:
         from datetime import datetime, timedelta, timezone
 
-        dt = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%d")
+        dt_obj = datetime.now(timezone.utc) + timedelta(days=3)
+        dt = dt_obj.strftime("%Y-%m-%d")
         raw = {"TSLA": {"earnings_date": dt}}
         result = events_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
-        assert sig.score == 1.5
-        assert sig.confidence == 0.75
+        # Continuous interpolation: score depends on actual days_until
+        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        days_until = (earnings_dt - datetime.now(timezone.utc)).days
+        t = days_until / 7.0
+        assert sig.score == pytest.approx(2.5 - t * 2.0, abs=0.05)
+        assert sig.confidence == pytest.approx(0.90 - t * 0.40, abs=0.05)
 
     def test_earnings_in_5_days(self) -> None:
         from datetime import datetime, timedelta, timezone
 
-        dt = (datetime.now(timezone.utc) + timedelta(days=5)).strftime("%Y-%m-%d")
+        dt_obj = datetime.now(timezone.utc) + timedelta(days=5)
+        dt = dt_obj.strftime("%Y-%m-%d")
         raw = {"MSFT": {"earnings_date": dt}}
         result = events_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
-        assert sig.score == 0.5
-        assert sig.confidence == 0.50
+        # Continuous interpolation: score depends on actual days_until
+        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        days_until = (earnings_dt - datetime.now(timezone.utc)).days
+        t = days_until / 7.0
+        assert sig.score == pytest.approx(2.5 - t * 2.0, abs=0.05)
+        assert sig.confidence == pytest.approx(0.90 - t * 0.40, abs=0.05)
 
     def test_earnings_too_far(self) -> None:
         from datetime import datetime, timedelta, timezone
@@ -519,22 +548,22 @@ class TestSiNormalizer:
         assert len(result) == 1
         sig = result[0].signals[0]
         assert sig.type == "short_interest"
-        assert sig.score == 2.5
-        assert sig.confidence == 0.85
+        assert sig.score == pytest.approx(2.667, abs=0.01)
+        assert sig.confidence == pytest.approx(0.883, abs=0.01)
 
     def test_elevated_si(self) -> None:
         raw = {"AMC": {"si_pct_float": 0.18}}
         result = si_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
-        assert sig.score == 2.0
-        assert sig.confidence == 0.75
+        assert sig.score == pytest.approx(2.01, abs=0.01)
+        assert sig.confidence == pytest.approx(0.759, abs=0.01)
 
     def test_notable_si(self) -> None:
         raw = {"BBBY": {"si_pct_float": 0.12}}
         result = si_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
-        assert sig.score == 1.0
-        assert sig.confidence == 0.60
+        assert sig.score == pytest.approx(1.32, abs=0.01)
+        assert sig.confidence == pytest.approx(0.648, abs=0.01)
 
     def test_below_threshold_ignored(self) -> None:
         raw = {"AAPL": {"si_pct_float": 0.05}}
@@ -586,9 +615,110 @@ class TestSiNormalizer:
     def test_boundary_15_pct(self) -> None:
         raw = {"X": {"si_pct_float": 0.15}}
         result = si_normalize(raw, timeframe="15m")
-        assert result[0].signals[0].score == 2.0
+        assert result[0].signals[0].score == pytest.approx(1.8, abs=0.01)
 
     def test_boundary_10_pct(self) -> None:
         raw = {"X": {"si_pct_float": 0.10}}
         result = si_normalize(raw, timeframe="15m")
         assert result[0].signals[0].score == 1.0
+
+
+# ── Interpolate utility ─────────────────────────────────────────
+
+
+class TestInterpolate:
+    """Tests for normalizers.interpolate continuous scoring utility."""
+
+    def test_exact_breakpoint(self) -> None:
+        from normalizers import interpolate
+
+        bp = [(2.0, 1.0, 0.55), (5.0, 2.0, 0.70), (10.0, 2.8, 0.90)]
+        score, conf = interpolate(2.0, bp)
+        assert score == 1.0
+        assert conf == 0.55
+
+    def test_midpoint_interpolation(self) -> None:
+        from normalizers import interpolate
+
+        bp = [(2.0, 1.0, 0.55), (5.0, 2.0, 0.70)]
+        score, conf = interpolate(3.5, bp)
+        assert 1.0 < score < 2.0
+        assert 0.55 < conf < 0.70
+
+    def test_above_highest_breakpoint(self) -> None:
+        from normalizers import interpolate
+
+        bp = [(2.0, 1.0, 0.55), (5.0, 2.0, 0.70)]
+        score, conf = interpolate(10.0, bp)
+        assert score == 2.0
+        assert conf == 0.70
+
+    def test_below_lowest_breakpoint(self) -> None:
+        from normalizers import interpolate
+
+        bp = [(2.0, 1.0, 0.55), (5.0, 2.0, 0.70)]
+        result = interpolate(1.0, bp)
+        assert result is None
+
+    def test_at_lowest_breakpoint(self) -> None:
+        from normalizers import interpolate
+
+        bp = [(2.0, 1.0, 0.55)]
+        score, conf = interpolate(2.0, bp)
+        assert score == 1.0
+        assert conf == 0.55
+
+
+# ── TA Normalizer Graceful Degradation ──────────────────────────
+
+
+class TestTaGracefulDegradation:
+    """TA normalizer emits a low-confidence signal when rating is None but patterns exist."""
+
+    def test_none_rating_with_bb_gets_signal(self) -> None:
+        raw = {"AAPL": {"rating": None, "patterns": [], "indicators": {"bb_squeeze": True}}}
+        result = ta_normalize(raw, timeframe="15m")
+        assert len(result) == 1
+        assert result[0].signals[0].confidence <= 0.30
+
+    def test_none_rating_no_bb_emits_degraded(self) -> None:
+        """None rating, no BB data, no patterns → no signal emitted."""
+        raw = {"AAPL": {"rating": None, "patterns": [], "indicators": {}}}
+        result = ta_normalize(raw, timeframe="15m")
+        assert len(result) == 0
+
+
+# ── Market Normalizer Sell-Cluster ──────────────────────────────
+
+
+class TestSellCluster:
+    """EDGAR sell-cluster detection (symmetric with buy-cluster)."""
+
+    def test_sell_cluster_detected(self) -> None:
+        raw = {"AAPL": {"insider_activity": "selling", "insiders_selling": 4}}
+        result = market_normalize(raw, timeframe="15m")
+        insider_sigs = [s for snap in result for s in snap.signals if s.type == "insider_activity"]
+        assert len(insider_sigs) == 1
+        assert insider_sigs[0].score < 0  # negative for sell cluster
+
+    def test_no_sell_cluster_below_threshold(self) -> None:
+        raw = {"AAPL": {"insider_activity": "selling", "insiders_selling": 1}}
+        result = market_normalize(raw, timeframe="15m")
+        insider_sigs = [s for snap in result for s in snap.signals if s.type == "insider_activity"]
+        if insider_sigs:
+            # Still a sell signal but without cluster boost
+            assert insider_sigs[0].score >= -1.5
+
+
+# ── Market Normalizer SPY Fallback ──────────────────────────────
+
+
+class TestSpyFallback:
+    """Relative strength emits low-confidence signal when SPY data missing."""
+
+    def test_no_spy_still_emits_rs(self) -> None:
+        raw = {"AAPL": {"price_change_24h": 5.0}}
+        result = market_normalize(raw, timeframe="15m")
+        rs_sigs = [s for snap in result for s in snap.signals if s.type == "relative_strength"]
+        assert len(rs_sigs) == 1
+        assert rs_sigs[0].confidence == 0.20

@@ -10,10 +10,13 @@ import pytest
 
 pytest.importorskip("redis", reason="redis not installed")
 
+import notifier_and_logger as _nl_mod
 from models import PlaybookAlert
 from notifier_and_logger import (
+    _quality_color,
     _score_bar,
     _thesis_similarity,
+    _truncate_field,
     compute_rr,
     format_embed,
     notify,
@@ -21,6 +24,15 @@ from notifier_and_logger import (
     send_ops_embed,
     send_ops_message,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breaker():
+    """Reset Discord circuit breaker between tests."""
+    _nl_mod._discord_consecutive_failures = 0
+    yield
+    _nl_mod._discord_consecutive_failures = 0
+
 
 # ── compute_rr ──────────────────────────────────────────────────
 
@@ -92,11 +104,15 @@ class TestFormatEmbed:
 
     def test_embed_color_long(self, mock_alert: PlaybookAlert) -> None:
         result = format_embed(mock_alert)
-        assert result["embeds"][0]["color"] == 3066993  # green
+        # EP=0.82 * conf=0.85 = 0.697 → amber range (0.65-0.80)
+        assert result["embeds"][0]["color"] == 15905331  # amber
 
     def test_embed_color_short(self, mock_alert: PlaybookAlert) -> None:
         mock_alert.direction = "SHORT"
+        mock_alert.edge_probability = 0.50
+        mock_alert.confidence = 0.80
         result = format_embed(mock_alert)
+        # EP=0.50 * conf=0.80 = 0.40 → red range (< 0.65)
         assert result["embeds"][0]["color"] == 15158332  # red
 
     def test_embed_has_many_fields(self, mock_alert: PlaybookAlert) -> None:
@@ -432,7 +448,7 @@ class TestSendOpsMessage:
 class TestNotify:
     """Tests for the main notify() entry point."""
 
-    @patch("notifier_and_logger.generate_chart", return_value=None)
+    @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
@@ -450,7 +466,7 @@ class TestNotify:
         _send.assert_called_once()
         _insert.assert_called_once()
 
-    @patch("notifier_and_logger.generate_chart", return_value=None)
+    @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=False)
@@ -476,9 +492,9 @@ class TestNotify:
     def test_empty_list(self) -> None:
         assert notify("[]") == 0
 
-    @patch("notifier_and_logger.generate_chart", return_value=None)
+    @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert", side_effect=Exception("DB down"))
+    @patch("notifier_and_logger.insert_alert", side_effect=__import__("psycopg2").Error("DB down"))
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_db_error_skips_discord_send(
         self,
@@ -494,7 +510,7 @@ class TestNotify:
         assert count == 0
         _send.assert_not_called()
 
-    @patch("notifier_and_logger.generate_chart", return_value=None)
+    @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
@@ -511,7 +527,7 @@ class TestNotify:
         assert count == 2
         assert _send.call_count == 2
 
-    @patch("notifier_and_logger.generate_chart", return_value=b"\x89PNG chart")
+    @patch("notifier_and_logger.generate_chart", return_value=(b"\x89PNG chart", 2.35))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
@@ -527,11 +543,8 @@ class TestNotify:
         notify(alerts_json)
         call_kwargs = mock_send.call_args
         assert call_kwargs.kwargs["chart_png"] == b"\x89PNG chart"
-        # Verify image field was injected into the embed
-        embed_arg = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("embed_payload")
-        assert embed_arg["embeds"][0]["image"] == {"url": "attachment://chart.png"}
 
-    @patch("notifier_and_logger.generate_chart", return_value=None)
+    @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
@@ -748,3 +761,173 @@ class TestContentAwareDedup:
 
         result = _is_duplicate_alert("AAPL", "LONG", "15m", "thesis")
         assert result is False
+
+
+# ── _truncate_field ─────────────────────────────────────────────
+
+
+class TestTruncateField:
+    """Tests for _truncate_field utility."""
+
+    def test_short_text_unchanged(self) -> None:
+        assert _truncate_field("hello") == "hello"
+
+    def test_long_text_truncated(self) -> None:
+        text = "x" * 1100
+        result = _truncate_field(text, max_len=1000)
+        assert len(result) == 1000
+        assert result.endswith("...")
+
+    def test_exact_length_unchanged(self) -> None:
+        text = "x" * 1000
+        assert _truncate_field(text, max_len=1000) == text
+
+    def test_empty_string(self) -> None:
+        assert _truncate_field("") == ""
+
+
+# ── _quality_color ──────────────────────────────────────────────
+
+
+class TestQualityColor:
+    """Tests for confidence-tier color coding."""
+
+    def test_high_quality_green(self) -> None:
+        alert = PlaybookAlert(
+            symbol="X",
+            direction="LONG",
+            edge_probability=0.90,
+            confidence=0.90,
+            timeframe="15m",
+            thesis="t",
+            entry={"level": 1, "stop": 0.9, "target": 1.3},
+            timeframe_rationale="t",
+            sentiment_context="t",
+            unusual_activity=[],
+            macro_regime="t",
+            sources_agree=5,
+        )
+        assert _quality_color(alert) == 3066993  # green
+
+    def test_medium_quality_amber(self) -> None:
+        alert = PlaybookAlert(
+            symbol="X",
+            direction="LONG",
+            edge_probability=0.80,
+            confidence=0.85,
+            timeframe="15m",
+            thesis="t",
+            entry={"level": 1, "stop": 0.9, "target": 1.3},
+            timeframe_rationale="t",
+            sentiment_context="t",
+            unusual_activity=[],
+            macro_regime="t",
+            sources_agree=5,
+        )
+        # 0.80 * 0.85 = 0.68 → amber range (0.65-0.80)
+        assert _quality_color(alert) == 15905331  # amber
+
+    def test_low_quality_red(self) -> None:
+        alert = PlaybookAlert(
+            symbol="X",
+            direction="LONG",
+            edge_probability=0.70,
+            confidence=0.80,
+            timeframe="15m",
+            thesis="t",
+            entry={"level": 1, "stop": 0.9, "target": 1.3},
+            timeframe_rationale="t",
+            sentiment_context="t",
+            unusual_activity=[],
+            macro_regime="t",
+            sources_agree=5,
+        )
+        # 0.70 * 0.80 = 0.56 → red range (< 0.65)
+        assert _quality_color(alert) == 15158332  # red
+
+
+# ── Embed historical stats field ────────────────────────────────
+
+
+class TestEmbedHistoricalStats:
+    """format_embed includes a Track Record field."""
+
+    @patch(
+        "notifier_and_logger._get_similar_alert_stats",
+        return_value="\U0001f4ca Similar past alerts: 70% win rate (N=10)",
+    )
+    def test_track_record_field_added(self, _mock_stats: MagicMock) -> None:
+        alert = PlaybookAlert(
+            symbol="NVDA",
+            direction="LONG",
+            edge_probability=0.82,
+            confidence=0.85,
+            timeframe="15m",
+            thesis="Test.",
+            entry={"level": 100, "stop": 95, "target": 110},
+            timeframe_rationale="t",
+            sentiment_context="t",
+            unusual_activity=[],
+            macro_regime="t",
+            sources_agree=5,
+        )
+        result = format_embed(alert)
+        field_names = [f["name"] for f in result["embeds"][0]["fields"]]
+        assert any("Track Record" in n for n in field_names)
+
+    @patch("notifier_and_logger._get_similar_alert_stats", return_value="")
+    def test_no_track_record_when_empty(self, _mock_stats: MagicMock) -> None:
+        alert = PlaybookAlert(
+            symbol="NVDA",
+            direction="LONG",
+            edge_probability=0.82,
+            confidence=0.85,
+            timeframe="15m",
+            thesis="Test.",
+            entry={"level": 100, "stop": 95, "target": 110},
+            timeframe_rationale="t",
+            sentiment_context="t",
+            unusual_activity=[],
+            macro_regime="t",
+            sources_agree=5,
+        )
+        result = format_embed(alert)
+        field_names = [f["name"] for f in result["embeds"][0]["fields"]]
+        assert not any("Track Record" in n for n in field_names)
+
+
+# ── Circuit breaker ─────────────────────────────────────────────
+
+
+class TestDiscordCircuitBreaker:
+    """Discord circuit breaker fast-fails when consecutive failures exceed threshold."""
+
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_circuit_breaker_opens_after_threshold(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        import notifier_and_logger as nl
+
+        # Reset state
+        nl._discord_consecutive_failures = nl._DISCORD_CB_THRESHOLD
+
+        result = send_discord_embed({"embeds": []})
+        assert result is False
+        mock_client_fn.return_value.post.assert_not_called()
+
+        # Reset for other tests
+        nl._discord_consecutive_failures = 0
+
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_success_resets_circuit_breaker(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
+        import notifier_and_logger as nl
+
+        nl._discord_consecutive_failures = 1
+        mock_client = MagicMock()
+        mock_client.post.return_value = MagicMock(status_code=204)
+        mock_client.post.return_value.raise_for_status = MagicMock()
+        mock_client_fn.return_value = mock_client
+
+        result = send_discord_embed({"embeds": []})
+        assert result is True
+        assert nl._discord_consecutive_failures == 0

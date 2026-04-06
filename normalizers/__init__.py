@@ -19,6 +19,48 @@ def safe_float(value: float | None, default: float = 0.0) -> float:
     return float(value)
 
 
+def interpolate(
+    value: float,
+    breakpoints: list[tuple[float, float, float]],
+) -> tuple[float, float] | None:
+    """Linearly interpolate score and confidence from tier breakpoints.
+
+    Each breakpoint is ``(threshold, score, confidence)``.  Breakpoints
+    must be ordered ascending by threshold.  For *value* between two
+    breakpoints the output is linearly blended.  Below the lowest
+    breakpoint returns ``None`` (no signal).
+
+    Args:
+        value: Raw input metric (e.g. abs price change, SI%, volume mult).
+        breakpoints: Ascending list of ``(threshold, score, confidence)``
+            tuples defining the piecewise-linear mapping.
+
+    Returns:
+        ``(score, confidence)`` tuple or ``None`` if *value* is below the
+        lowest breakpoint.
+    """
+    if not breakpoints or value < breakpoints[0][0]:
+        return None
+
+    # At or above the highest breakpoint → return its values
+    if value >= breakpoints[-1][0]:
+        return breakpoints[-1][1], breakpoints[-1][2]
+
+    # Find the surrounding pair and interpolate
+    for i in range(len(breakpoints) - 1):
+        lo_thresh, lo_score, lo_conf = breakpoints[i]
+        hi_thresh, hi_score, hi_conf = breakpoints[i + 1]
+        if lo_thresh <= value < hi_thresh:
+            t = (value - lo_thresh) / (hi_thresh - lo_thresh)
+            return (
+                lo_score + t * (hi_score - lo_score),
+                lo_conf + t * (hi_conf - lo_conf),
+            )
+
+    # Fallback (shouldn't reach here)
+    return breakpoints[-1][1], breakpoints[-1][2]
+
+
 def normalize_score(score: float, lo: float, hi: float) -> float:
     """Map *score* from [lo, hi] range to [-1.0, +1.0].
 

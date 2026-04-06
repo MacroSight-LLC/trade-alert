@@ -1,0 +1,100 @@
+# collector-forecast.yaml
+# SSOT Reference: Section 8 - Collector Workflows (collector-forecast)
+# Purpose: Collect TimesFM price-forecast signals for the universe.
+# Reads universe:equities from Redis; writes snapshots:15m and snapshots:1h.
+
+name: collector-forecast
+description: Collect TimesFM price-forecast signals for all universe symbols
+llm_model: claude-sonnet-4-20250514
+
+mcp_servers:
+  - name: timesfm-mcp
+    endpoint: http://timesfm-mcp:8012
+
+steps:
+  # Step 1 -- Read universes from Redis
+  # SSOT S8: read universe:equities set by collector-market
+  - name: read-universes
+    type: code
+    code: |
+      import json
+      import os
+      import redis
+
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+
+      equities_raw = r.get("universe:equities")
+
+      equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
+
+      result = {"equities": equities}
+
+  # Step 2 -- TimesFM batch forecast for equities
+  # Self-contained MCP: fetches OHLCV from Polygon internally, runs TimesFM inference.
+  # Batch limit: 50 symbols per call (configurable via TIMESFM_MAX_BATCH).
+  - name: fetch-forecasts
+    type: tool_call
+    tool: timesfm-mcp
+    method: forecast
+    params:
+      symbols: "{{ steps['read-universes']['equities'][:50] }}"
+      timeframe: "15m"
+
+  # Step 3 -- Normalize raw forecast results and push snapshots to Redis
+  # SSOT S7: pass raw results to forecast_normalizer.normalize
+  # Redis keys: snapshots:15m and snapshots:1h, TTL 900s
+  - name: normalize-and-store-snapshots
+    type: code
+    code: |
+      import json
+      import os
+      import redis
+      from normalizers.forecast_normalizer import normalize
+
+      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "900"))
+
+      raw_forecasts = steps.get("fetch-forecasts", {})
+
+      n_pushed = 0
+      for timeframe in ["15m", "1h"]:
+          merged = {}
+
+          items = raw_forecasts.get("results", []) if isinstance(raw_forecasts, dict) else []
+          for item in items:
+              sym = item.get("symbol", "")
+              if not sym or "error" in item:
+                  continue
+              merged[sym] = item
+
+          snapshots = normalize(merged, timeframe=timeframe)
+          redis_key = f"snapshots:{timeframe}"
+          for snap in snapshots:
+              r.lpush(redis_key, snap.model_dump_json())
+              r.expire(redis_key, snapshot_ttl)
+              n_pushed += 1
+
+      result = {"n_snapshots": n_pushed}
+
+  # Step 4 -- Log completion
+  - name: log-completion
+    type: code
+    code: |
+      import logging
+      n = (steps.get("normalize-and-store-snapshots") or {}).get("n_snapshots", 0)
+      logging.getLogger(__name__).info("Forecast collector: %d snapshots pushed to Redis", n)
+      result = f"Forecast collector: {n} snapshots pushed to Redis"
+
+error_handling:
+  # TimesFM MCP may be slow (model inference) — generous timeout.
+  # If unavailable, skip gracefully — pipeline continues without forecast signals.
+  on_rate_limit:
+    strategy: skip_symbol
+    log: true
+  on_mcp_error:
+    strategy: continue_partial
+    log: true
+  abort_on_failure: false
+  retry:
+    max_attempts: 2
+    backoff_seconds: 10

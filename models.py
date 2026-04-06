@@ -35,6 +35,7 @@ class Signal(BaseModel):
         "macro_risk_off",
         "catalyst_event",
         "short_interest",
+        "price_forecast",
     ]
     score: float
     confidence: float

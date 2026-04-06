@@ -2,7 +2,7 @@
 
 > Production trading alert engine built on [CUGA](./README.cuga.md).
 
-11 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest) → Claude Sonnet 4 probabilistic reasoning → Discord trade playbooks with candlestick charts, entry, stop, target, thesis & edge probability.
+11 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest · forecast) → Claude Sonnet 4 probabilistic reasoning → 7-gate validation → Discord trade playbooks with candlestick charts, EMA/ATR overlays, entry, stop, target, thesis & edge probability.
 
 ## Documentation
 - **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md)
@@ -14,16 +14,26 @@
 | Layer                 | Components                                                                                                                                                                              |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Data (11 MCPs)**    | TradingView (:8001), Polygon (:8002), Discord (:8003), Finnhub (:8004), ROT (:8005), EDGAR (:8006), YFinance (:8007), Trading (:8008), FRED (:8009), SpamShield (:8010), Alpaca (:8011) |
-| **Pipeline**          | 6 collectors → merger → Claude Sonnet 4 decision → 7-gate validate & filter → notifier                                                                                                  |
-| **Signal types (10)** | `technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`, `options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`, `catalyst_event`, `short_interest`    |
+| **Pipeline**          | 7 collectors → merger (time-decay, diversity scoring, composite signals) → Claude Sonnet 4 decision → 7-gate validate & filter → notifier                                               |
+| **Signal types (11)** | `technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`, `options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`, `catalyst_event`, `short_interest`, `price_forecast` |
 | **Infra**             | Redis (snapshot queues), Postgres (alert logging), Vault (secrets, file backend), Langfuse (prompt mgmt + tracing)                                                                      |
-| **Output**            | Discord embeds with mplfinance candlestick charts, entry/stop/target overlays                                                                                                           |
-| **Ops**               | Discord bot (`!scan`, `!status`, `!last`), cron scheduler, analytics dashboard (:8080)                                                                                                  |
+| **Output**            | Discord embeds with mplfinance candlestick charts, EMA/ATR overlays, confidence color-coding, historical win-rate stats, tiered channel routing                                          |
+| **Ops**               | Discord bot (`!scan`, `!status`, `!last`), cron scheduler, analytics dashboard (:8080), Prometheus + Grafana monitoring                                                                  |
 
 **20 containers total** — all orchestrated via `docker-compose.prod.yml`.
 
-### Production Hardening (Phase 10 — Complete)
-Pydantic field validators, 7-gate validation hardening, NaN/Inf guards in all normalizers, exec sandbox with AST-based safe_eval, Redis connection pooling, persist-first ordering (DB before Discord), atomic SET NX deduplication, non-root Docker containers, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton, and 480+ unit tests.
+### Production Hardening — Complete
+
+| Phase | Scope |
+|-------|-------|
+| **Hardening** | Pydantic validators, 7-gate validation, NaN/Inf guards, AST-based exec sandbox, Redis connection pooling, persist-first ordering, atomic SET NX dedup, non-root Docker, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton |
+| **Signal Quality** | Continuous interpolation scoring, graceful degradation, merger time-decay & diversity tuning, composite signal detection (VOLATILITY_CATALYST, VOLUME_CONFIRMED_BREAKOUT), EP calibration |
+| **Validation Gates** | VIX hard/soft gates, forecast contradiction gate, volume confirmation, macro staleness guard, symbol hallucination detection, price-normalized micro-risk floor |
+| **Alert Output** | Historical win-rate embeds, confidence color-coding, EMA/ATR overlays, truncate-safe fields, tiered channel routing |
+| **Infrastructure** | Structured logging (JSON/text toggle), Prometheus counters/histograms/gauges, Grafana dashboards, Redis retry+backoff, HTTP connection pooling, Discord circuit breaker, market hours automation via exchange_calendars |
+| **Feedback Loop** | Calibration accuracy tracking, Langfuse trace→outcome linkage, expiry rate monitoring, auto-promote golden datasets |
+
+**728+ unit & integration tests, 0 failures.**
 
 ## Quick Start
 
@@ -57,8 +67,8 @@ docker compose -f docker-compose.prod.yml exec cuga python scripts/seed_langfuse
 
 ### 6. Run unit tests
 ```bash
-pip install pydantic httpx psycopg2-binary redis pytest
-pytest tests/test_validate_and_filter.py -v   # 45 tests
+pip install -e ".[dev]"
+pytest tests/ -q --ignore=tests/system/   # 728+ tests
 ```
 
 ## Project Structure
@@ -80,18 +90,21 @@ pytest tests/test_validate_and_filter.py -v   # 45 tests
 | `winrate_injector.py`    | Injects historical win-rate calibration into prompts           |
 | `dashboard_api.py`       | FastAPI analytics dashboard (port 8080)                        |
 | `vault_env_loader.py`    | Auto-loads Vault secrets into `os.environ` on import           |
-| `normalizers/`           | 7 normalizers (TA, flow, sentiment, market, macro, events, SI) |
+| `constants.py`           | Centralized Redis keys, TTLs, market hours/holidays            |
+| `log_config.py`          | Structured logging config (JSON/text toggle via `LOG_FORMAT`)  |
+| `metrics.py`             | Prometheus counters, histograms, gauges                        |
+| `normalizers/`           | 8 normalizers (TA, flow, sentiment, market, macro, events, SI, forecast) |
 | `workflows/`             | CUGA YAML workflows (6 collectors, 2 decisions, orchestrators) |
 | `deployment/`            | Vault config (HCL), auto-unseal entrypoint                     |
 
 ## Testing
 
 ```bash
-# Unit tests (45 gate tests)
-pytest tests/test_validate_and_filter.py -v
+# Full test suite (728+ tests)
+pytest tests/ -q --ignore=tests/system/
 
 # With coverage
-pytest tests/ --cov=. --cov-report=term-missing
+pytest tests/ --cov=. --cov-report=term-missing --ignore=tests/system/
 
 # Integration smoke test (needs Docker)
 python tests/integration_smoke.py

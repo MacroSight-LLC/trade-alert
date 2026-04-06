@@ -41,6 +41,29 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                 # Can't recover direction from BB width alone; use squeeze as neutral
                 raw_rating = 0.0  # neutral fallback from BB-only
             else:
+                # Graceful degradation: emit minimal low-confidence signal so
+                # this symbol remains visible to the merger instead of being
+                # silently dropped when the MCP returns partial data.
+                patterns_list: list[str] = data.get("patterns", [])
+                if patterns_list:
+                    signals_list = [
+                        Signal(
+                            source="tradingview",
+                            type="technical_trend",
+                            score=0.0,
+                            confidence=0.25,
+                            reason=f"Pattern-only (no rating): {', '.join(patterns_list[:3])}",
+                            raw=data,
+                        )
+                    ]
+                    snapshots.append(
+                        Snapshot(
+                            symbol=symbol,
+                            timeframe=cast(Literal["5m", "15m", "1h", "4h", "1D"], timeframe),
+                            timestamp=now,
+                            signals=signals_list,
+                        )
+                    )
                 continue
 
         rating = safe_float(raw_rating)

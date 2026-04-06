@@ -10,7 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
-from normalizers import safe_float
+from normalizers import interpolate, safe_float
+
+# Continuous volume-spike scoring breakpoints (multiples of avg)
+_VOL_BREAKPOINTS: list[tuple[float, float, float]] = [
+    (1.5, 1.0, 0.30),
+    (3.0, 2.0, 0.60),
+    (5.0, 3.0, 1.00),
+]
 
 
 def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
@@ -32,17 +39,12 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         signals: list[Signal] = []
         vol_mult: float | None = data.get("volume_multiple")
 
-        # Volume spike scoring (SSOT §7)
+        # Volume spike scoring — continuous interpolation (SSOT §7)
         if vol_mult is not None:
             vol_mult = safe_float(vol_mult)
-            if vol_mult >= 1.5:
-                # Step-function scoring per SSOT §7
-                if vol_mult >= 5.0:
-                    vol_score = 3.0
-                elif vol_mult >= 3.0:
-                    vol_score = 2.5
-                else:
-                    vol_score = 1.0
+            result = interpolate(vol_mult, _VOL_BREAKPOINTS)
+            if result is not None:
+                vol_score, vol_conf = result
 
                 unusual: list[str] = data.get("unusual_options", [])
                 reason_parts = [f"volume {vol_mult:.1f}x avg"]
@@ -54,7 +56,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         source="polygon",
                         type="volume_spike",
                         score=vol_score,
-                        confidence=min(vol_mult / 5.0, 1.0),
+                        confidence=vol_conf,
                         reason="; ".join(reason_parts),
                         raw=data,
                     )
