@@ -8,44 +8,31 @@ Implements SSOT §11.
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import httpx
-import redis as _redis
+import redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from chart_gen import generate_chart
 from db import insert_alert
 from models import PlaybookAlert
+from redis_client import get_redis
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
+DISCORD_SEND_MAX_RETRIES: int = int(os.getenv("DISCORD_SEND_MAX_RETRIES", "3"))
+DISCORD_SEND_BACKOFF_BASE: float = float(os.getenv("DISCORD_SEND_BACKOFF_BASE", "1.0"))
 DEDUP_WINDOW_SECONDS: int = int(os.getenv("DEDUP_WINDOW_SECONDS", "900"))  # 15 min default
 MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
-
-_discord_client: httpx.Client | None = None
-
-# Module-level Redis connection pool (reused across dedup calls)
-_redis_pool: _redis.ConnectionPool | None = None
-
-
-def _get_redis() -> _redis.Redis:
-    """Return a Redis client backed by a module-level connection pool."""
-    global _redis_pool  # noqa: PLW0603
-    if _redis_pool is None:
-        _redis_pool = _redis.ConnectionPool.from_url(
-            os.getenv("REDIS_URL", "redis://redis:6379"),
-            decode_responses=True,
-            socket_timeout=float(os.getenv("REDIS_DEDUP_TIMEOUT", "5.0")),
-        )
-    return _redis.Redis(connection_pool=_redis_pool)
-
 
 _discord_client: httpx.Client | None = None
 
@@ -255,15 +242,23 @@ def format_embed(alert: PlaybookAlert) -> dict:
     }
 
 
+def _is_retryable(exc: httpx.HTTPStatusError) -> bool:
+    """Return True for transient HTTP status codes worth retrying."""
+    return exc.response.status_code in {429, 500, 502, 503, 504}
+
+
 def send_discord_embed(
     embed_payload: dict,
     chart_png: bytes | None = None,
 ) -> bool:
-    """Send embed to Discord alert channel.
+    """Send embed to Discord alert channel with retry on transient errors.
 
     Tries webhook first; falls back to bot API if webhook is not set.
     When *chart_png* is provided the request is sent as multipart/form-data
     so the PNG is uploaded as a Discord file attachment.
+
+    Retries up to ``DISCORD_SEND_MAX_RETRIES`` times with exponential
+    backoff (1s, 2s, 4s by default) on 429/5xx responses or network errors.
 
     Args:
         embed_payload: Dict with ``embeds`` key matching Discord format.
@@ -272,49 +267,81 @@ def send_discord_embed(
     Returns:
         ``True`` on success (2xx), ``False`` on failure.
     """
-    try:
-        webhook = _discord_webhook()
-        if webhook:
-            if chart_png:
-                resp = _get_discord_client().post(
-                    webhook,
-                    data={"payload_json": json.dumps(embed_payload)},
-                    files={"files[0]": ("chart.png", chart_png, "image/png")},
-                )
-            else:
-                resp = _get_discord_client().post(webhook, json=embed_payload)
-            resp.raise_for_status()
-            return True
+    last_exc: httpx.HTTPStatusError | httpx.RequestError | None = None
 
-        bot_token = _discord_bot_token()
-        alert_channel = _discord_alert_channel_id()
-        if bot_token and alert_channel:
-            url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
-            headers = {"Authorization": f"Bot {bot_token}"}
-            if chart_png:
-                resp = _get_discord_client().post(
-                    url,
-                    headers=headers,
-                    data={"payload_json": json.dumps(embed_payload)},
-                    files={"files[0]": ("chart.png", chart_png, "image/png")},
-                )
-            else:
-                resp = _get_discord_client().post(
-                    url,
-                    json=embed_payload,
-                    headers=headers,
-                )
-            resp.raise_for_status()
-            return True
+    for attempt in range(1, DISCORD_SEND_MAX_RETRIES + 1):
+        try:
+            webhook = _discord_webhook()
+            if webhook:
+                if chart_png:
+                    resp = _get_discord_client().post(
+                        webhook,
+                        data={"payload_json": json.dumps(embed_payload)},
+                        files={"files[0]": ("chart.png", chart_png, "image/png")},
+                    )
+                else:
+                    resp = _get_discord_client().post(webhook, json=embed_payload)
+                resp.raise_for_status()
+                return True
 
-        logger.warning("No Discord credentials configured — skipping send")
-        return False
-    except httpx.HTTPStatusError as exc:
-        logger.error("Discord API error %s: %s", exc.response.status_code, exc)
-        return False
-    except httpx.RequestError as exc:
-        logger.error("Discord request failed: %s", exc)
-        return False
+            bot_token = _discord_bot_token()
+            alert_channel = _discord_alert_channel_id()
+            if bot_token and alert_channel:
+                url = f"https://discord.com/api/v10/channels/{alert_channel}/messages"
+                headers = {"Authorization": f"Bot {bot_token}"}
+                if chart_png:
+                    resp = _get_discord_client().post(
+                        url,
+                        headers=headers,
+                        data={"payload_json": json.dumps(embed_payload)},
+                        files={"files[0]": ("chart.png", chart_png, "image/png")},
+                    )
+                else:
+                    resp = _get_discord_client().post(
+                        url,
+                        json=embed_payload,
+                        headers=headers,
+                    )
+                resp.raise_for_status()
+                return True
+
+            logger.warning("No Discord credentials configured — skipping send")
+            return False
+
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if _is_retryable(exc) and attempt < DISCORD_SEND_MAX_RETRIES:
+                delay = DISCORD_SEND_BACKOFF_BASE * (2 ** (attempt - 1))
+                logger.warning(
+                    "Discord API %s (attempt %d/%d), retrying in %.1fs",
+                    exc.response.status_code,
+                    attempt,
+                    DISCORD_SEND_MAX_RETRIES,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            logger.error("Discord API error %s: %s", exc.response.status_code, exc)
+            return False
+
+        except httpx.RequestError as exc:
+            last_exc = exc
+            if attempt < DISCORD_SEND_MAX_RETRIES:
+                delay = DISCORD_SEND_BACKOFF_BASE * (2 ** (attempt - 1))
+                logger.warning(
+                    "Discord request failed (attempt %d/%d): %s, retrying in %.1fs",
+                    attempt,
+                    DISCORD_SEND_MAX_RETRIES,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            logger.error("Discord request failed after %d attempts: %s", attempt, exc)
+            return False
+
+    logger.error("Discord send exhausted %d retries, last error: %s", DISCORD_SEND_MAX_RETRIES, last_exc)
+    return False
 
 
 def send_ops_message(message: str) -> None:
@@ -417,7 +444,7 @@ def _is_duplicate_alert(
     dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}:{thesis_hash}"
     thesis_key = f"alert:thesis:{symbol}:{direction}:{timeframe}"
     try:
-        r = _get_redis()
+        r = get_redis()
         # Atomic SET NX+EX eliminates the TOCTOU race between EXISTS and
         # SETEX — a concurrent pipeline tick can no longer slip between
         # the read and the write, which previously allowed duplicate
@@ -449,7 +476,7 @@ def _is_duplicate_alert(
                 return False
         logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
         return True
-    except _redis.RedisError as exc:
+    except redis.RedisError as exc:
         logger.warning("Dedup check failed (allowing alert through): %s", exc)
         return False
 
@@ -506,10 +533,25 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
             MAX_ALERTS_PER_CYCLE,
         )
 
+    # Pre-generate candlestick charts in parallel (I/O-bound: Polygon API + mplfinance render)
+    chart_map: dict[str, bytes | None] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        future_to_sym = {
+            pool.submit(generate_chart, alert.symbol, alert.timeframe, alert.entry): alert.symbol
+            for alert in valid_alerts
+        }
+        for future in concurrent.futures.as_completed(future_to_sym):
+            sym = future_to_sym[future]
+            try:
+                chart_map[sym] = future.result()
+            except Exception as exc:
+                logger.warning("Chart generation failed for %s: %s", sym, exc)
+                chart_map[sym] = None
+
     for alert in valid_alerts:
         try:
             embed = format_embed(alert)
-            chart_png = generate_chart(alert.symbol, alert.timeframe, alert.entry)
+            chart_png = chart_map.get(alert.symbol)
             if chart_png:
                 embed["embeds"][0]["image"] = {"url": "attachment://chart.png"}
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -47,6 +48,9 @@ _MAX_PROCESSED: int = 500
 
 # Concurrency lock — prevents overlapping !scan invocations
 _scan_lock = threading.Lock()
+
+# Graceful shutdown event
+_shutdown = threading.Event()
 
 # Shared HTTP client (reused across all calls)
 _http_client: httpx.Client | None = None
@@ -159,18 +163,14 @@ def _get_status() -> str:
     Returns:
         Formatted status string.
     """
-    import redis as _redis
+    from redis_client import get_redis as _get_status_redis
 
     lines: list[str] = ["**Pipeline Status**\n"]
 
     # Redis snapshot counts
     r = None
     try:
-        r = _redis.from_url(
-            os.getenv("REDIS_URL", "redis://redis:6379"),
-            decode_responses=True,
-            socket_timeout=5.0,
-        )
+        r = _get_status_redis()
         for tf in ["15m", "1h"]:
             count = r.llen(f"snapshots:{tf}")
             lines.append(f"  `snapshots:{tf}`: **{count}** entries")
@@ -191,9 +191,6 @@ def _get_status() -> str:
                     lines.append(f"    {t}: {c}")
     except Exception as exc:
         lines.append(f"  Redis: error — {exc}")
-    finally:
-        if r is not None:
-            r.close()
 
     # MCP health
     lines.append("\n**MCP Servers:**")
@@ -336,7 +333,7 @@ def _poll_messages() -> None:
         "Bot online. Type `!help` for available commands.",
     )
 
-    while True:
+    while not _shutdown.is_set():
         try:
             params: dict[str, str | int] = {"limit": 10}
             if last_id != "0":
@@ -382,6 +379,18 @@ def _poll_messages() -> None:
 
         time.sleep(POLL_INTERVAL)
 
+    # Clean up on shutdown
+    logger.info("Shutting down Discord bot gracefully")
+    client = _get_client()
+    if client and not client.is_closed:
+        client.close()
+
+
+def _shutdown_handler(signum: int, _frame: object) -> None:
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    logger.info("Received signal %d — initiating shutdown", signum)
+    _shutdown.set()
+
 
 def main() -> None:
     """Entry point for the Discord bot."""
@@ -393,6 +402,8 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("Starting Discord bot (polling mode)")
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGINT, _shutdown_handler)
     _poll_messages()
 
 

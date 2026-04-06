@@ -459,7 +459,9 @@ def validate_and_filter(
 
     # ── Structured gate telemetry ─────────────────────────────────
     if add_score_fn and trace_id:
-        pass_rate = len(alerts) / max(len(raw), 1)
+        total = max(len(raw), 1)
+        pass_rate = len(alerts) / total
+        rejection_rate = len(rejections) / total
         add_score_fn(
             trace_id,
             "alert_pass_rate",
@@ -472,6 +474,20 @@ def validate_and_filter(
             float(len(alerts)),
             comment=f"{len(alerts)} alerts",
         )
+        add_score_fn(
+            trace_id,
+            "gate_rejection_rate",
+            rejection_rate,
+            comment=f"{len(rejections)}/{len(raw)} rejected",
+        )
+        if rejection_rate > 0.9 and len(raw) >= 3:
+            logger.warning(
+                "Gate rejection rate %.0f%% (%d/%d) exceeds 90%% threshold — "
+                "LLM output quality may have degraded",
+                rejection_rate * 100,
+                len(rejections),
+                len(raw),
+            )
         # Per-gate rejection counts for observability
         gate_counts: dict[str, int] = {}
         for _sym, gate in rejections:

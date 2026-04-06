@@ -20,11 +20,10 @@ import redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from notifier_and_logger import send_ops_message
+from redis_client import get_redis as _get_redis
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
-REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
 # SSOT §3: all 11 MCP services with /health endpoints
@@ -47,7 +46,11 @@ MCP_SERVICES: list[tuple[str, str]] = [
 HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.jsonl"
 MCP_HEALTH_TIMEOUT: float = float(os.getenv("MCP_HEALTH_TIMEOUT", "5.0"))
 LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "http://langfuse:3000")
-REDIS_SNAPSHOT_STALE_TTL: int = int(os.getenv("REDIS_SNAPSHOT_STALE_TTL", "800"))
+# Minimum TTL (seconds) before a snapshot key is considered stale.
+# Keys with TTL below this threshold are nearing expiry (set long ago).
+# Default 100s means a key set 800+ seconds ago (out of 900s total TTL)
+# is flagged as stale.
+REDIS_SNAPSHOT_STALE_THRESHOLD: int = int(os.getenv("REDIS_SNAPSHOT_STALE_THRESHOLD", "100"))
 
 
 HEALTH_LOG_MAX_LINES: int = int(os.getenv("HEALTH_LOG_MAX_LINES", "2000"))
@@ -87,7 +90,7 @@ def check_redis() -> bool:
         True if Redis responds to PING, False otherwise.
     """
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        r = _get_redis()
         r.ping()
         logger.info("Healthcheck: Redis OK")
         return True
@@ -100,14 +103,17 @@ def check_redis_snapshot_staleness() -> str | None:
     """Check TTL of snapshot queue keys for data staleness.
 
     Scans ``snapshots:*`` keys and inspects their TTL values.
-    If every key's TTL exceeds ``REDIS_SNAPSHOT_STALE_TTL`` (default 800s)
-    the snapshots are likely stale — collectors may have stopped.
+    Redis TTLs count *down* from the initial EXPIRE value, so a low
+    TTL means the key was set long ago and is about to expire.
+    If every key's TTL is below ``REDIS_SNAPSHOT_STALE_THRESHOLD``
+    (default 100 s), the snapshots are likely stale — collectors may
+    have stopped producing fresh data.
 
     Returns:
         Warning string if all snapshot keys are stale, else None.
     """
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        r = _get_redis()
         keys = r.keys("snapshots:*")
         if not keys:
             return None  # No snapshot keys — nothing to check
@@ -116,10 +122,10 @@ def check_redis_snapshot_staleness() -> str | None:
         valid_ttls = [t for t in ttls if t > 0]
         if not valid_ttls:
             return None
-        if all(t > REDIS_SNAPSHOT_STALE_TTL for t in valid_ttls):
+        if all(t < REDIS_SNAPSHOT_STALE_THRESHOLD for t in valid_ttls):
             return (
                 f"Snapshot data may be stale — all {len(valid_ttls)} keys "
-                f"have TTL > {REDIS_SNAPSHOT_STALE_TTL}s "
+                f"have TTL < {REDIS_SNAPSHOT_STALE_THRESHOLD}s "
                 f"(min={min(valid_ttls)}s, max={max(valid_ttls)}s)"
             )
         return None
@@ -170,7 +176,7 @@ def check_recent_alerts(timeframe: str) -> bool:
         alerts = get_recent_alerts(limit=1)
         logger.info("Healthcheck: %d recent alerts found", len(alerts))
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — health probe must never raise; report degraded state instead
         logger.error("Healthcheck: recent alerts query failed — %s", exc)
         return False
 
@@ -295,7 +301,7 @@ def run_healthcheck(timeframe: str) -> None:
             send_ops_message(msg)
         else:
             logger.info("Healthcheck OK [%s]", timeframe)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — top-level healthcheck must swallow all; log and continue
         logger.error("Healthcheck unexpected error: %s", exc)
 
 

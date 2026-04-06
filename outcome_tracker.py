@@ -13,11 +13,12 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
-from db import get_recent_alerts, update_outcome
+from db import get_open_alerts, update_outcome
 from models import PlaybookAlert  # noqa: F401 — required project import
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ def _map_db_row(row: dict) -> dict:
     by ``evaluate_outcome``.
 
     Args:
-        row: Dict from ``get_recent_alerts()`` (JSONB ``entry`` column).
+        row: Dict from ``get_open_alerts()`` (JSONB ``entry`` column).
 
     Returns:
         Flat dict with ``entry_level``, ``stop_level``, ``target_level``,
@@ -207,28 +208,90 @@ def _map_db_row(row: dict) -> dict:
     }
 
 
+_ET = ZoneInfo("America/New_York")
+
+# US market holidays for 2025-2027 (NYSE observed).
+# Extend annually or replace with exchange_calendars package.
+_MARKET_HOLIDAYS: frozenset[tuple[int, int, int]] = frozenset(
+    {
+        # 2025
+        (2025, 1, 1),
+        (2025, 1, 20),
+        (2025, 2, 17),
+        (2025, 4, 18),
+        (2025, 5, 26),
+        (2025, 6, 19),
+        (2025, 7, 4),
+        (2025, 9, 1),
+        (2025, 11, 27),
+        (2025, 12, 25),
+        # 2026
+        (2026, 1, 1),
+        (2026, 1, 19),
+        (2026, 2, 16),
+        (2026, 4, 3),
+        (2026, 5, 25),
+        (2026, 6, 19),
+        (2026, 7, 3),
+        (2026, 9, 7),
+        (2026, 11, 26),
+        (2026, 12, 25),
+        # 2027
+        (2027, 1, 1),
+        (2027, 1, 18),
+        (2027, 2, 15),
+        (2027, 3, 26),
+        (2027, 5, 31),
+        (2027, 6, 18),
+        (2027, 7, 5),
+        (2027, 9, 6),
+        (2027, 11, 25),
+        (2027, 12, 24),
+    }
+)
+
+
+def _is_market_open() -> bool:
+    """Return True if US equity markets are in regular/extended hours.
+
+    Extended hours window: Mon-Fri 04:00-20:00 ET, excluding
+    NYSE-observed holidays.
+    """
+    now_et = datetime.now(tz=_ET)
+    # Weekends
+    if now_et.weekday() >= 5:
+        return False
+    # Holidays
+    if (now_et.year, now_et.month, now_et.day) in _MARKET_HOLIDAYS:
+        return False
+    # Extended hours: 4 AM - 8 PM ET
+    hour = now_et.hour
+    return 4 <= hour < 20
+
+
 def run_tracker_cycle() -> int:
     """Execute a single tracker cycle.
 
     Fetches open alerts, polls current prices, evaluates outcomes, and
-    writes resolved results back to Postgres.
+    writes resolved results back to Postgres.  Skips evaluation when
+    US equity markets are closed to avoid stale-price false resolutions.
 
     Returns:
         Number of outcomes resolved this cycle.
     """
+    if not _is_market_open():
+        logger.info("Market closed — skipping outcome tracker cycle")
+        return 0
+
     resolved = 0
     try:
-        rows = get_recent_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
+        rows = get_open_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
     except Exception as exc:
-        logger.error("Failed to fetch recent alerts: %s", exc)
+        logger.error("Failed to fetch open alerts: %s", exc)
         return 0
 
     for row in rows:
         try:
-            # Skip already-resolved alerts
-            if row.get("outcome") is not None:
-                continue
-
             # WATCH alerts have no directional play — skip tracking
             if row.get("direction") == "WATCH":
                 continue
@@ -246,9 +309,6 @@ def run_tracker_cycle() -> int:
             if outcome is None:
                 continue
 
-            # Map EXPIRED → SCRATCH for DB (schema CHECK constraint)
-            db_outcome = "SCRATCH" if outcome == "EXPIRED" else outcome
-
             # Calculate PnL
             entry_level = mapped["entry_level"]
             if outcome in ("WIN", "LOSS"):
@@ -259,13 +319,16 @@ def run_tracker_cycle() -> int:
             else:
                 pnl = 0.0
 
-            update_outcome(row["id"], db_outcome, pnl)
+            pnl_pct = (pnl / entry_level * 100) if entry_level else None
+
+            update_outcome(row["id"], outcome, pnl, pnl_pct=pnl_pct)
             logger.info(
-                "Outcome: %s → %s @ %.2f (pnl=%.4f)",
+                "Outcome: %s → %s @ %.2f (pnl=%.4f, pnl_pct=%.2f%%)",
                 row["symbol"],
                 outcome,
                 price,
                 pnl,
+                pnl_pct or 0.0,
             )
             resolved += 1
         except Exception as exc:
@@ -287,14 +350,12 @@ def _expire_stale_alerts() -> int:
     """
     expired = 0
     try:
-        rows = get_recent_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
+        rows = get_open_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
         now = datetime.now(timezone.utc)
         for row in rows:
-            if row.get("outcome") is not None:
-                continue
             created = row.get("created_at")
             if isinstance(created, datetime) and (now - created).days >= STALE_ALERT_DAYS:
-                update_outcome(row["id"], "SCRATCH", 0.0)
+                update_outcome(row["id"], "EXPIRED", 0.0, pnl_pct=0.0)
                 logger.info(
                     "Expired stale alert %s (id=%s, age=%dd)",
                     row.get("symbol"),

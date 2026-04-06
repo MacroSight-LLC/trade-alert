@@ -120,23 +120,24 @@ def insert_alert(alert: PlaybookAlert, raw_snapshots: list[dict]) -> int:
         _put_conn(conn)
 
 
-def update_outcome(alert_id: int, outcome: str, pnl: float) -> None:
+def update_outcome(alert_id: int, outcome: str, pnl: float, pnl_pct: float | None = None) -> None:
     """Update outcome and PnL for a resolved alert.
 
     Args:
         alert_id: Primary key of the alert row.
-        outcome: One of ``"WIN"``, ``"LOSS"``, ``"SCRATCH"``.
+        outcome: One of ``"WIN"``, ``"LOSS"``, ``"SCRATCH"``, ``"EXPIRED"``.
         pnl: Realized profit/loss value.
+        pnl_pct: PnL as percentage of entry price (optional).
     """
     sql = """
         UPDATE alerts
-        SET outcome = %s, outcome_pnl = %s, updated_at = NOW()
+        SET outcome = %s, outcome_pnl = %s, outcome_pnl_pct = %s, updated_at = NOW()
         WHERE id = %s
     """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, (outcome, pnl, alert_id))
+            cur.execute(sql, (outcome, pnl, pnl_pct, alert_id))
             conn.commit()
     finally:
         _put_conn(conn)
@@ -152,6 +153,27 @@ def get_recent_alerts(limit: int = 50) -> list[dict]:
         List of alert dicts (column-name keyed).
     """
     sql = "SELECT * FROM alerts ORDER BY created_at DESC LIMIT %s"
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (limit,))
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def get_open_alerts(limit: int = 200) -> list[dict]:
+    """Return unresolved alerts (outcome IS NULL), newest first.
+
+    Uses the ``idx_alerts_open_created`` partial index for efficiency.
+
+    Args:
+        limit: Maximum number of rows to return.
+
+    Returns:
+        List of alert dicts with no outcome yet.
+    """
+    sql = "SELECT * FROM alerts WHERE outcome IS NULL ORDER BY created_at DESC LIMIT %s"
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:

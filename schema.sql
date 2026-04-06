@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     raw_snapshots       JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    outcome             VARCHAR(20) CHECK (outcome IN ('WIN','LOSS','SCRATCH')),
-    outcome_pnl         DECIMAL(10,4)
+    outcome             VARCHAR(20) CHECK (outcome IN ('WIN','LOSS','SCRATCH','EXPIRED')),
+    outcome_pnl         DECIMAL(10,4),
+    outcome_pnl_pct     DECIMAL(8,4)
 );
 
 -- Auto-set updated_at on row modification
@@ -97,3 +98,46 @@ FROM alerts
 WHERE outcome IS NOT NULL
 GROUP BY bucket
 ORDER BY bucket DESC;
+
+-- ── Migration helpers (safe to re-run) ──────────────────────────────
+-- Add EXPIRED to outcome CHECK if not already present
+DO $$
+BEGIN
+    ALTER TABLE alerts DROP CONSTRAINT IF EXISTS alerts_outcome_check;
+    ALTER TABLE alerts ADD CONSTRAINT alerts_outcome_check
+        CHECK (outcome IN ('WIN','LOSS','SCRATCH','EXPIRED'));
+EXCEPTION WHEN undefined_object THEN NULL;
+END $$;
+
+-- Add outcome_pnl_pct column for percentage-based PnL tracking
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN outcome_pnl_pct DECIMAL(8,4);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- ── Partitioning prep (run manually when alerts table exceeds ~1M rows) ─────
+-- Convert the alerts table to range-partitioned by created_at.
+-- This is a one-time migration: create the partitioned table, migrate data,
+-- then swap.  Kept here as a reference recipe — NOT auto-executed on init.
+--
+-- Step 1: Create partitioned copy
+--   CREATE TABLE alerts_partitioned (LIKE alerts INCLUDING ALL)
+--       PARTITION BY RANGE (created_at);
+--
+-- Step 2: Create initial partitions (monthly)
+--   CREATE TABLE alerts_y2025m01 PARTITION OF alerts_partitioned
+--       FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+--   -- repeat for each month...
+--   CREATE TABLE alerts_default PARTITION OF alerts_partitioned DEFAULT;
+--
+-- Step 3: Migrate data inside a transaction
+--   BEGIN;
+--     INSERT INTO alerts_partitioned SELECT * FROM alerts;
+--     ALTER TABLE alerts RENAME TO alerts_old;
+--     ALTER TABLE alerts_partitioned RENAME TO alerts;
+--   COMMIT;
+--
+-- Step 4: Auto-create future partitions via pg_partman or a cron job:
+--   CREATE EXTENSION IF NOT EXISTS pg_partman;
+--   SELECT partman.create_parent('public.alerts', 'created_at', 'native', 'monthly');

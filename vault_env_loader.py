@@ -119,7 +119,7 @@ def load_vault_secrets() -> int:
             _loaded = True
             return count
 
-        except Exception as exc:
+        except (hvac.exceptions.VaultError, OSError, ConnectionError) as exc:
             if attempt < 2:
                 import time as _time
 

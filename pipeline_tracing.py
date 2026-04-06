@@ -57,8 +57,7 @@ def create_pipeline_trace(
             timeframe,
         )
         return trace_id
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to create pipeline trace: %s", exc)
+    except (ConnectionError, OSError, ValueError, RuntimeError):
         return None
 
 
@@ -111,7 +110,7 @@ def span_step(
             input=input_data,
             level=level,
         )
-    except Exception as exc:  # noqa: BLE001
+    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
         logger.warning("Failed to open span '%s': %s", name, exc)
 
     try:
@@ -127,7 +126,7 @@ def span_step(
                     level=ctx.get("level", level),
                     metadata={"duration_s": round(elapsed, 3)},
                 )
-            except Exception as exc:  # noqa: BLE001
+            except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
                 logger.warning("Failed to close span '%s': %s", name, exc)
 
         # Post per-step latency score for collector spans so Langfuse
@@ -141,7 +140,7 @@ def span_step(
                     round(elapsed, 3),
                     comment=f"{collector_name} completed in {elapsed:.3f}s",
                 )
-            except Exception:  # noqa: BLE001
+            except (ConnectionError, OSError, RuntimeError):
                 pass
 
 
@@ -169,7 +168,7 @@ def add_score(
         # Deterministic ID so re-runs upsert instead of appending duplicates
         score_id = hashlib.sha256(f"{trace_id}:{name}".encode()).hexdigest()[:32]
         lf.score(id=score_id, trace_id=trace_id, name=name, value=value, comment=comment)
-    except Exception as exc:  # noqa: BLE001
+    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
         logger.warning("Failed to post score '%s' to trace %s: %s", name, trace_id, exc)
 
 
@@ -191,7 +190,7 @@ def tag_trace(trace_id: str | None, tags: list[str]) -> None:
         return
     try:
         lf.trace(id=trace_id, tags=tags)
-    except Exception as exc:  # noqa: BLE001
+    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
         logger.warning("Failed to tag trace %s: %s", trace_id, exc)
 
 
@@ -222,5 +221,5 @@ def end_pipeline_trace(
         )
         lf.flush()
         logger.info("Finalised pipeline trace %s", trace_id)
-    except Exception as exc:  # noqa: BLE001
+    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
         logger.warning("Failed to finalise pipeline trace: %s", exc)

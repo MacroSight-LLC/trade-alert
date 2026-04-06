@@ -242,7 +242,7 @@ def generate_chart(
 
         fig.savefig(buf, format="png", dpi=120, facecolor="#2C2F33")
         chart_bytes = buf.getvalue()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — chart is cosmetic; rendering failure must not block alert delivery
         logger.warning("Chart rendering failed for %s: %s", symbol, exc)
         return None
     finally:

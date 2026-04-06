@@ -652,10 +652,41 @@ services:
       - trade-net
     restart: unless-stopped
 
+  # --- Postgres Backup (daily pg_dump) ---
+
+  pg-backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-trade_alert}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: trade_alert
+      BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-7}
+    volumes:
+      - pg-backups:/backups
+    # Run pg_dump daily at 03:00 UTC; prune backups older than BACKUP_RETAIN_DAYS
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache supercronic > /dev/null 2>&1 || true
+        echo '0 3 * * * /bin/sh -c "pg_dump -Fc > /backups/trade_alert_$$(date +\%Y\%m\%d_\%H\%M\%S).dump && find /backups -name \"*.dump\" -mtime +$${BACKUP_RETAIN_DAYS:-7} -delete && echo \"[pg-backup] dump OK at $$(date)\" || echo \"[pg-backup] dump FAILED at $$(date)\""' > /etc/crontab
+        echo "[pg-backup] Scheduled daily 03:00 UTC dumps to /backups (retain $${BACKUP_RETAIN_DAYS:-7} days)"
+        exec supercronic /etc/crontab || exec crond -f -l 2
+    logging: *default-logging
+    networks:
+      - trade-net
+    restart: unless-stopped
+
 volumes:
   redis-data:
   langfuse-data:
   vault-data:
+  pg-backups:
 
 networks:
   trade-net:

@@ -69,7 +69,7 @@ def get_langfuse_client() -> Langfuse | None:
             except ImportError:
                 logger.warning("langfuse package not installed — client disabled")
                 return None
-            except Exception as exc:  # noqa: BLE001
+            except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
                 last_exc = exc
                 if attempt < 3:
                     import time
@@ -93,7 +93,7 @@ def _shutdown_client() -> None:
     if _client is not None:
         try:
             _client.shutdown()
-        except Exception:  # noqa: BLE001
+        except (OSError, RuntimeError):
             pass
 
 
@@ -103,7 +103,7 @@ def reset_client() -> None:
     if _client is not None:
         try:
             _client.shutdown()
-        except Exception:  # noqa: BLE001
+        except (OSError, RuntimeError):
             pass
     _client = None
     _initialised = False

@@ -15,11 +15,11 @@ from models import PlaybookAlert, Signal, Snapshot
 def sample_signal() -> Signal:
     """A representative Signal for use across tests."""
     return Signal(
-        source="technicals",
-        type="RSI_oversold",
+        source="tradingview",
+        type="technical_trend",
         score=2.0,
         confidence=0.8,
-        detail="RSI at 28 on 15m",
+        reason="RSI at 28 on 15m",
     )
 
 

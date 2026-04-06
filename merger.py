@@ -18,28 +18,12 @@ from pydantic import ValidationError
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from models import Signal, Snapshot
+from redis_client import get_redis as _get_redis
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379")
 _raw_top_n = int(os.getenv("MERGER_TOP_N", "20"))
 MERGER_TOP_N: int = _raw_top_n if _raw_top_n > 0 else 20
-REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "10.0"))
-
-# Module-level Redis connection pool (reused across merge() calls)
-_redis_pool: redis.ConnectionPool | None = None
-
-
-def _get_redis() -> redis.Redis:
-    """Return a Redis client backed by a module-level connection pool."""
-    global _redis_pool  # noqa: PLW0603
-    if _redis_pool is None:
-        _redis_pool = redis.ConnectionPool.from_url(
-            REDIS_URL,
-            decode_responses=True,
-            socket_timeout=REDIS_SOCKET_TIMEOUT,
-        )
-    return redis.Redis(connection_pool=_redis_pool)
 
 
 def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
@@ -60,7 +44,15 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
 
     try:
         r = _get_redis()
-        raw_entries: list[str] = r.lrange(f"snapshots:{timeframe}", 0, -1)
+        _LRANGE_CAP = 500
+        raw_entries: list[str] = r.lrange(f"snapshots:{timeframe}", 0, _LRANGE_CAP - 1)
+        if len(raw_entries) >= _LRANGE_CAP:
+            logger.warning(
+                "Snapshot queue snapshots:%s hit LRANGE cap (%d entries) — "
+                "data may be truncated; check collector flush cadence",
+                timeframe,
+                _LRANGE_CAP,
+            )
     except redis.RedisError as exc:
         logger.error("Redis read failed for snapshots:%s — %s", timeframe, exc)
         return []
@@ -161,7 +153,7 @@ if __name__ == "__main__":
     from models import Signal, Snapshot
 
     try:
-        r = redis.from_url(REDIS_URL)
+        r = _get_redis()
 
         for source in ["tradingview", "polygon", "finnhub"]:
             s = Snapshot(

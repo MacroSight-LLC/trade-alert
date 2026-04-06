@@ -66,7 +66,7 @@ steps:
               result = {"prompt": "", "prompt_version": "skipped"}
 
     # Step 4 — Call Claude Sonnet with ensemble prompt
-    # SSOT §10.1: use Claude 3.5 Sonnet as llm_model
+    # SSOT §10.1: use Claude Sonnet 4 as llm_model
     - name: ensemble-decide
       type: conditional
       condition: '{{ not steps["merge-snapshots"]["skip"] }}'

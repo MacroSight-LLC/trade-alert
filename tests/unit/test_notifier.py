@@ -276,6 +276,130 @@ class TestSendDiscordEmbed:
         assert "json" in call_kwargs.kwargs
 
 
+# ── Discord retry logic ─────────────────────────────────────────
+
+
+class TestSendDiscordEmbedRetry:
+    """Tests for exponential backoff retry on transient Discord errors."""
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_retry_on_429_then_success(
+        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """First call gets 429, second succeeds — should return True."""
+        mock_client = MagicMock()
+        resp_429 = MagicMock(status_code=429)
+        resp_429.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "rate limited",
+            request=MagicMock(),
+            response=resp_429,
+        )
+        resp_ok = MagicMock(status_code=204)
+        resp_ok.raise_for_status = MagicMock()
+        mock_client.post.side_effect = [resp_429, resp_ok]
+        mock_client_fn.return_value = mock_client
+        assert send_discord_embed({"embeds": []}) is True
+        assert mock_client.post.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_retry_on_502_then_success(
+        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """502 on first attempt, success on second."""
+        mock_client = MagicMock()
+        resp_502 = MagicMock(status_code=502)
+        resp_502.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "bad gateway",
+            request=MagicMock(),
+            response=resp_502,
+        )
+        resp_ok = MagicMock(status_code=200)
+        resp_ok.raise_for_status = MagicMock()
+        mock_client.post.side_effect = [resp_502, resp_ok]
+        mock_client_fn.return_value = mock_client
+        assert send_discord_embed({"embeds": []}) is True
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_exhausts_retries_on_persistent_429(
+        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """All 3 attempts get 429 — should return False after exhausting retries."""
+        mock_client = MagicMock()
+        resp_429 = MagicMock(status_code=429)
+        resp_429.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "rate limited",
+            request=MagicMock(),
+            response=resp_429,
+        )
+        mock_client.post.return_value = resp_429
+        mock_client_fn.return_value = mock_client
+        assert send_discord_embed({"embeds": []}) is False
+        assert mock_client.post.call_count == 3
+        # Backoff: 1s then 2s (no sleep on last failure)
+        assert mock_sleep.call_count == 2
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_no_retry_on_4xx_non_429(
+        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """A 403 should fail immediately without retry."""
+        mock_client = MagicMock()
+        resp_403 = MagicMock(status_code=403)
+        resp_403.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "forbidden",
+            request=MagicMock(),
+            response=resp_403,
+        )
+        mock_client.post.return_value = resp_403
+        mock_client_fn.return_value = mock_client
+        assert send_discord_embed({"embeds": []}) is False
+        assert mock_client.post.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_retry_on_request_error_then_success(
+        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Network error on first attempt, success on second."""
+        mock_client = MagicMock()
+        resp_ok = MagicMock(status_code=200)
+        resp_ok.raise_for_status = MagicMock()
+        mock_client.post.side_effect = [httpx.RequestError("timeout"), resp_ok]
+        mock_client_fn.return_value = mock_client
+        assert send_discord_embed({"embeds": []}) is True
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("notifier_and_logger.time.sleep")
+    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier_and_logger._get_discord_client")
+    def test_backoff_doubling(self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock) -> None:
+        """Verify exponential backoff delays: 1s, 2s."""
+        mock_client = MagicMock()
+        resp_500 = MagicMock(status_code=500)
+        resp_500.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "server error",
+            request=MagicMock(),
+            response=resp_500,
+        )
+        mock_client.post.return_value = resp_500
+        mock_client_fn.return_value = mock_client
+        send_discord_embed({"embeds": []})
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1.0, 2.0]
+
+
 # ── send_ops_message ────────────────────────────────────────────
 
 
@@ -552,7 +676,7 @@ class TestThesisSimilarity:
 class TestContentAwareDedup:
     """Tests for _is_duplicate_alert with thesis similarity."""
 
-    @patch("notifier_and_logger._get_redis")
+    @patch("notifier_and_logger.get_redis")
     def test_first_alert_not_duplicate(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
@@ -564,7 +688,7 @@ class TestContentAwareDedup:
         assert result is False
         mock_conn.set.assert_called()
 
-    @patch("notifier_and_logger._get_redis")
+    @patch("notifier_and_logger.get_redis")
     def test_exact_duplicate_suppressed(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
@@ -582,7 +706,7 @@ class TestContentAwareDedup:
         )
         assert result is True
 
-    @patch("notifier_and_logger._get_redis")
+    @patch("notifier_and_logger.get_redis")
     def test_different_thesis_allowed_through(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
@@ -600,7 +724,7 @@ class TestContentAwareDedup:
         )
         assert result is False
 
-    @patch("notifier_and_logger._get_redis")
+    @patch("notifier_and_logger.get_redis")
     def test_no_thesis_defaults_to_suppress(self, mock_get_redis: MagicMock) -> None:
         from notifier_and_logger import _is_duplicate_alert
 
@@ -612,7 +736,7 @@ class TestContentAwareDedup:
         result = _is_duplicate_alert("AAPL", "LONG", "15m")
         assert result is True
 
-    @patch("notifier_and_logger._get_redis")
+    @patch("notifier_and_logger.get_redis")
     def test_redis_error_allows_through(self, mock_get_redis: MagicMock) -> None:
         import redis as _test_redis
 

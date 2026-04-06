@@ -196,9 +196,7 @@ class TestAtomicDedup:
         mock_redis.set.side_effect = [True, None, None]
         mock_redis.get.return_value = "some thesis"
 
-        with patch("notifier_and_logger._redis") as mock_redis_mod:
-            mock_redis_mod.from_url.return_value = mock_redis
-
+        with patch("notifier_and_logger.get_redis", return_value=mock_redis):
             first = _is_duplicate_alert("AAPL", "LONG", "15m", "some thesis")
             assert first is False  # first call succeeds
 

@@ -252,30 +252,76 @@ Cron schedule:
 trade-alert/
   src/cuga/                # from upstream cuga-agent (do not modify)[1]
   models.py
+  db.py
+  merger.py
+  validate_and_filter.py
+  notifier_and_logger.py
+  outcome_tracker.py
+  pipeline_runner.py
+  healthcheck.py
+  discord_bot.py
+  vault_env_loader.py
+  redis_client.py
+  langfuse_client.py
+  langfuse_datasets.py
+  prompt_manager.py
+  decision_helpers.py
+  pipeline_tracing.py
+  trace_analyzer.py
+  alert_quality.py
+  winrate_injector.py
+  chart_gen.py
+  dashboard_api.py
+  dashboard.html
   normalizers/
     __init__.py
     ta_normalizer.py
     flow_normalizer.py
     sentiment_normalizer.py
     macro_normalizer.py
+    events_normalizer.py
+    si_normalizer.py
+    market_normalizer.py
   workflows/
     collector-market.yaml
     collector-ta.yaml
     collector-flow.yaml
     collector-sentiment.yaml
     collector-macro.yaml
+    collector-events.yaml
     decision-15m.yaml
     decision-1h.yaml
     notifier.yaml
-    healthcheck.py
+    orchestrator-15m.yaml
+    orchestrator-1h.yaml
+    outcome-tracker.yaml
   docker/
     Dockerfile.cuga
+    Dockerfile.mcp
   docker-compose.prod.yml
+  docker-compose.yml
+  Dockerfile
   schema.sql
+  pyproject.toml
+  ruff.toml
+  crontab
   logs/
   data/
     postgres/              # volume
-  crontab
+  deployment/
+    vault-entrypoint.sh
+    vault-config.hcl
+    deploy-local.sh
+    deploy-local-postgres.sh
+  scripts/
+    mcp_server.py
+    mcp_servers/
+    seed_langfuse_prompts.py
+    vault-init.sh
+  tests/
+    unit/
+    integration/
+    system/
   SSOT.md (this file, or symlink to it)
 ```
 

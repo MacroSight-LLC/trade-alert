@@ -514,7 +514,7 @@ def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
                 f"{r['timeframe']}, {age_min}m ago)"
             )
         return "; ".join(parts)
-    except Exception:  # noqa: BLE001
+    except (OSError, KeyError, TypeError, RuntimeError):
         return "Unable to fetch recent alerts."
 
 
@@ -593,7 +593,7 @@ def get_decision_prompts(
             merged["performance_context"] = (
                 existing_perf + "\n\n" + wr_section if existing_perf else wr_section
             )
-    except Exception as exc:  # noqa: BLE001
+    except (ImportError, KeyError, TypeError, ValueError, RuntimeError) as exc:
         logger.warning("winrate injection skipped: %s", exc)
 
     # ── Try Langfuse first ───────────────────────────────────────
@@ -616,7 +616,7 @@ def get_decision_prompts(
                 _check_unresolved_placeholders(system, "system")
                 _check_unresolved_placeholders(user, "user")
                 return (system, user)
-            except Exception:  # noqa: BLE001
+            except (KeyError, TypeError, ValueError, RuntimeError):
                 pass  # stale/broken cache entry — refetch below
 
     lf = get_langfuse_client()
@@ -635,7 +635,7 @@ def get_decision_prompts(
             _check_unresolved_placeholders(system, "system")
             _check_unresolved_placeholders(user, "user")
             return (system, user)
-        except Exception as exc:  # noqa: BLE001
+        except (ConnectionError, OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             logger.warning("Langfuse prompt fetch failed — using YAML fallback: %s", exc)
 
     # ── Fallback to built-in templates ───────────────────────────

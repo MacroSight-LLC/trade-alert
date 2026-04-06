@@ -6,13 +6,14 @@ produces an authentication/connection error rather than silently using defaults.
 
 import pytest
 
+cuga = pytest.importorskip("cuga", reason="cuga library not installed")
+
 from cuga.backend.llm.models import (
     LLMManager,
     _ModelSettingsWrap,
     get_current_llm_override,
     set_current_llm_override,
 )
-
 
 BASE_MODEL_SETTINGS = {
     "platform": "openai",
@@ -41,6 +42,7 @@ class TestLLMOverrideMechanism:
         an OpenAI config error — confirming the no-override path reaches _create_llm_instance.
         """
         import os
+
         import openai
 
         os.environ.pop("OPENAI_API_KEY", None)

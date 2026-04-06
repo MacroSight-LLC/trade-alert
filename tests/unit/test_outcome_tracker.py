@@ -205,14 +205,16 @@ class TestGetCurrentPrice:
 class TestRunTrackerCycle:
     """Tests for run_tracker_cycle with mocked DB and price API."""
 
+    @patch("outcome_tracker._is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=195.0)
-    @patch("outcome_tracker.get_recent_alerts")
+    @patch("outcome_tracker.get_open_alerts")
     def test_resolves_winning_alert(
         self,
         mock_alerts: MagicMock,
         _price: MagicMock,
         mock_update: MagicMock,
+        _mkt: MagicMock,
     ) -> None:
         mock_alerts.return_value = [
             {
@@ -231,36 +233,31 @@ class TestRunTrackerCycle:
         assert call_args[0] == 10  # alert_id
         assert call_args[1] == "WIN"
 
+    @patch("outcome_tracker._is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
-    @patch("outcome_tracker.get_recent_alerts")
-    def test_skips_already_resolved(
+    @patch("outcome_tracker.get_open_alerts")
+    def test_no_open_alerts_returns_zero(
         self,
         mock_alerts: MagicMock,
         _price: MagicMock,
         mock_update: MagicMock,
+        _mkt: MagicMock,
     ) -> None:
-        mock_alerts.return_value = [
-            {
-                "id": 11,
-                "symbol": "AAPL",
-                "direction": "LONG",
-                "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-                "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
-                "outcome": "WIN",
-            },
-        ]
+        mock_alerts.return_value = []
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
+    @patch("outcome_tracker._is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
-    @patch("outcome_tracker.get_recent_alerts")
+    @patch("outcome_tracker.get_open_alerts")
     def test_skips_watch_alerts(
         self,
         mock_alerts: MagicMock,
         _price: MagicMock,
         mock_update: MagicMock,
+        _mkt: MagicMock,
     ) -> None:
         mock_alerts.return_value = [
             {
@@ -275,18 +272,21 @@ class TestRunTrackerCycle:
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
-    @patch("outcome_tracker.get_recent_alerts", side_effect=Exception("DB down"))
-    def test_db_error_returns_zero(self, _alerts: MagicMock) -> None:
+    @patch("outcome_tracker._is_market_open", return_value=True)
+    @patch("outcome_tracker.get_open_alerts", side_effect=Exception("DB down"))
+    def test_db_error_returns_zero(self, _alerts: MagicMock, _mkt: MagicMock) -> None:
         assert run_tracker_cycle() == 0
 
+    @patch("outcome_tracker._is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=None)
-    @patch("outcome_tracker.get_recent_alerts")
+    @patch("outcome_tracker.get_open_alerts")
     def test_no_price_skips(
         self,
         mock_alerts: MagicMock,
         _price: MagicMock,
         mock_update: MagicMock,
+        _mkt: MagicMock,
     ) -> None:
         mock_alerts.return_value = [
             {
@@ -301,14 +301,16 @@ class TestRunTrackerCycle:
         assert run_tracker_cycle() == 0
         mock_update.assert_not_called()
 
+    @patch("outcome_tracker._is_market_open", return_value=True)
     @patch("outcome_tracker.update_outcome")
     @patch("outcome_tracker.get_current_price", return_value=186.0)
-    @patch("outcome_tracker.get_recent_alerts")
-    def test_expired_maps_to_scratch(
+    @patch("outcome_tracker.get_open_alerts")
+    def test_expired_stored_directly(
         self,
         mock_alerts: MagicMock,
         _price: MagicMock,
         mock_update: MagicMock,
+        _mkt: MagicMock,
     ) -> None:
         mock_alerts.return_value = [
             {
@@ -323,4 +325,4 @@ class TestRunTrackerCycle:
         resolved = run_tracker_cycle()
         assert resolved == 1
         call_args = mock_update.call_args[0]
-        assert call_args[1] == "SCRATCH"  # EXPIRED → SCRATCH for DB
+        assert call_args[1] == "EXPIRED"  # EXPIRED stored directly

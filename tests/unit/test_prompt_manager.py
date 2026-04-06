@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import prompt_manager as pm
+
+# Auto-mock the DB call that get_decision_prompts makes internally.
+# Without a running Postgres, get_recent_alerts_context would raise.
+_mock_recent_alerts = pytest.fixture(autouse=True)
+
+
+@_mock_recent_alerts
+def _patch_recent_alerts_context():
+    with patch("prompt_manager.get_recent_alerts_context", return_value="None in the last 2 hours."):
+        yield
+
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -159,7 +172,7 @@ class TestLangfuseFirst:
     @patch("prompt_manager.get_langfuse_client")
     def test_falls_back_on_not_found(self, mock_client: MagicMock) -> None:
         lf = MagicMock()
-        lf.get_prompt.side_effect = Exception("Prompt not found")
+        lf.get_prompt.side_effect = RuntimeError("Prompt not found")
         mock_client.return_value = lf
 
         system, user = pm.get_decision_prompts("1h", _base_variables())

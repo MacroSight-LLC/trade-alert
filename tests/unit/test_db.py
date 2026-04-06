@@ -128,7 +128,7 @@ class TestUpdateOutcome:
 
         update_outcome(1, "WIN", 5.0)
         args = mock_cur.execute.call_args[0][1]
-        assert args == ("WIN", 5.0, 1)
+        assert args == ("WIN", 5.0, None, 1)
         mock_conn.commit.assert_called_once()
 
     @patch("db.get_conn")
@@ -141,7 +141,7 @@ class TestUpdateOutcome:
 
         update_outcome(42, "SCRATCH", 0.0)
         args = mock_cur.execute.call_args[0][1]
-        assert args == ("SCRATCH", 0.0, 42)
+        assert args == ("SCRATCH", 0.0, None, 42)
 
     @patch("db.get_conn")
     def test_raises_on_error(self, mock_conn_fn: MagicMock) -> None:

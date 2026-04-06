@@ -49,7 +49,7 @@ def _ensure_dataset(lf: Any, name: str) -> bool:
             lf.create_dataset(name=name, description=f"Auto-captured {name} for trade-alert")
             logger.info("Created Langfuse dataset: %s", name)
             return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — Langfuse is optional; any failure must not halt the pipeline
             logger.warning("Failed to create dataset %s: %s", name, exc)
             return False
 
@@ -134,7 +134,7 @@ def capture_decision_run(
             item_id,
             len(parsed_alerts),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — dataset capture is best-effort; never block the pipeline
         logger.warning("Failed to capture dataset item: %s", exc)
 
 
@@ -165,7 +165,7 @@ def promote_to_golden(
             metadata={**(source.metadata or {}), "source_item_id": dataset_item_id},
         )
         logger.info("Promoted item %s to golden dataset", dataset_item_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — golden-set promotion is advisory; swallow all errors
         logger.warning("Failed to promote to golden dataset: %s", exc)
 
 
@@ -203,6 +203,6 @@ def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
                     }
                 )
         return examples
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — few-shot fetch is optional; return empty on any error
         logger.debug("Golden dataset fetch failed (non-blocking): %s", exc)
         return []

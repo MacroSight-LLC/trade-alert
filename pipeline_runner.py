@@ -26,6 +26,7 @@ import re
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -282,24 +283,74 @@ def _render_params(params: Any, steps: dict[str, Any], extra_vars: dict[str, Any
 
 # ── MCP call helper ──────────────────────────────────────────────────
 
+# Simple in-memory circuit breaker per MCP endpoint (SSOT §0.1).
+_CIRCUIT_FAILURE_THRESHOLD: int = 3
+_CIRCUIT_OPEN_DURATION: float = 300.0  # seconds
+
+
+@dataclass
+class _CircuitState:
+    """Tracks consecutive failures for one MCP endpoint."""
+
+    failures: int = 0
+    open_until: float = 0.0
+
+
+_mcp_circuits: dict[str, _CircuitState] = {}
+
+
+def _get_circuit(tool: str) -> _CircuitState:
+    if tool not in _mcp_circuits:
+        _mcp_circuits[tool] = _CircuitState()
+    return _mcp_circuits[tool]
+
 
 async def _mcp_call_async(
     tool: str, method: str, params: dict[str, Any], client: httpx.AsyncClient | None = None
 ) -> dict[str, Any]:
-    """Call an MCP server tool endpoint."""
+    """Call an MCP server tool endpoint with circuit-breaker protection."""
+    circuit = _get_circuit(tool)
+    if circuit.failures >= _CIRCUIT_FAILURE_THRESHOLD and time.monotonic() < circuit.open_until:
+        logger.warning(
+            "Circuit open for %s — failing fast (resets in %.0fs)",
+            tool,
+            circuit.open_until - time.monotonic(),
+        )
+        return {"error": f"Circuit open for {tool}", "circuit_open": True}
+
     base = _workflow_mcp_endpoints.get(tool) or MCP_ENDPOINTS.get(tool)
     if not base:
         logger.error("Unknown MCP tool: %s", tool)
         return {"error": f"Unknown MCP: {tool}"}
 
     url = f"{base}/tool/{method}"
-    if client:
-        resp = await client.post(url, json=params)
-    else:
-        async with _new_http_client() as c:
-            resp = await c.post(url, json=params)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        if client:
+            resp = await client.post(url, json=params)
+        else:
+            async with _new_http_client() as c:
+                resp = await c.post(url, json=params)
+        resp.raise_for_status()
+        # Success — reset circuit
+        circuit.failures = 0
+        circuit.open_until = 0.0
+        return resp.json()
+    except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        circuit.failures += 1
+        if circuit.failures >= _CIRCUIT_FAILURE_THRESHOLD:
+            circuit.open_until = time.monotonic() + _CIRCUIT_OPEN_DURATION
+            logger.error(
+                "Circuit OPEN for %s after %d consecutive failures (%.0fs cooldown): %s",
+                tool,
+                circuit.failures,
+                _CIRCUIT_OPEN_DURATION,
+                exc,
+            )
+        else:
+            logger.warning(
+                "MCP call failed for %s (%d/%d): %s", tool, circuit.failures, _CIRCUIT_FAILURE_THRESHOLD, exc
+            )
+        return {"error": str(exc)}
 
 
 def mcp_call(tool: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -432,11 +483,71 @@ def _exec_code_step(
     code blocks actually need.
     """
     import builtins as _builtins_mod
+    import importlib as _importlib_mod
+
+    # Modules that workflow code blocks are allowed to import.
+    _IMPORT_ALLOWLIST: set[str] = {
+        # stdlib
+        "json",
+        "logging",
+        "os",
+        "re",
+        "time",
+        "datetime",
+        "math",
+        "hashlib",
+        "copy",
+        "collections",
+        "functools",
+        "itertools",
+        "pathlib",
+        "textwrap",
+        "uuid",
+        # third-party
+        "redis",
+        "httpx",
+        # project modules — normalizers
+        "normalizers",
+        "normalizers.events_normalizer",
+        "normalizers.flow_normalizer",
+        "normalizers.macro_normalizer",
+        "normalizers.market_normalizer",
+        "normalizers.sentiment_normalizer",
+        "normalizers.si_normalizer",
+        "normalizers.ta_normalizer",
+        # project modules — pipeline helpers
+        "decision_helpers",
+        "merger",
+        "healthcheck",
+        "db",
+        "models",
+        "notifier_and_logger",
+        "pipeline_tracing",
+        "langfuse_client",
+        "trace_analyzer",
+        "validate_and_filter",
+        "prompt_manager",
+        "alert_quality",
+        "winrate_injector",
+        "chart_gen",
+    }
+
+    def _safe_import(
+        name: str,
+        globals: dict[str, Any] | None = None,  # noqa: A002
+        locals: dict[str, Any] | None = None,  # noqa: A002
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        """Import gate that only allows whitelisted modules."""
+        if name not in _IMPORT_ALLOWLIST:
+            msg = f"Import of {name!r} is not allowed in workflow code blocks"
+            raise ImportError(msg)
+        return _importlib_mod.import_module(name)
 
     _ALLOWED_BUILTINS = {
         "__build_class__",
         "__name__",
-        "__import__",
         "abs",
         "all",
         "any",
@@ -486,6 +597,7 @@ def _exec_code_step(
     restricted_builtins = {
         k: getattr(_builtins_mod, k) for k in _ALLOWED_BUILTINS if hasattr(_builtins_mod, k)
     }
+    restricted_builtins["__import__"] = _safe_import
 
     local_ns: dict[str, Any] = {
         "steps": steps,
@@ -655,12 +767,13 @@ def run_workflow(
                 step_results[step_name] = result
                 logger.info("  │  ✓ %s completed (%.1fs)", step_name, time.time() - t0)
                 break
-            except Exception:
+            except Exception as exc:
                 logger.error(
-                    "  │  FAIL step=%s attempt=%d/%d\n%s",
+                    "  │  FAIL step=%s attempt=%d/%d: %s\n%s",
                     step_name,
                     attempt,
                     max_attempts,
+                    exc,
                     traceback.format_exc(),
                 )
                 if attempt < max_attempts:
@@ -693,8 +806,8 @@ def run_workflow(
                         trace_id=active_trace_id,
                     )
                     step_results[step_name] = result
-                except Exception:
-                    logger.error("  │  on-failure step %s also failed", step_name)
+                except Exception as exc:
+                    logger.error("  │  on-failure step %s also failed: %s", step_name, exc)
 
     logger.info("■ Finished workflow: %s (failed=%s)", name, workflow_failed)
     return step_results
@@ -792,8 +905,8 @@ def _exec_parallel_workflows(
         path = workflows_dir / wf_file
         try:
             return wf_file, run_workflow(path, trace_id=trace_id)
-        except Exception:
-            logger.error("Parallel workflow %s failed:\n%s", wf_file, traceback.format_exc())
+        except Exception as exc:
+            logger.error("Parallel workflow %s failed: %s\n%s", wf_file, exc, traceback.format_exc())
             if abort_on_failure:
                 raise
             return wf_file, None
@@ -852,8 +965,8 @@ def main() -> None:
     t0 = time.time()
     try:
         run_workflow(wf_path)
-    except Exception:
-        logger.error("Workflow failed:\n%s", traceback.format_exc())
+    except Exception as exc:
+        logger.error("Workflow failed: %s\n%s", exc, traceback.format_exc())
         sys.exit(1)
     finally:
         elapsed = time.time() - t0
