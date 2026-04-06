@@ -1,6 +1,6 @@
 # Trade Alert: Complete Setup & Operations Guide
 
-**Status:** 20 containers, persistent Vault (file backend, auto-unseal), 11 MCP data sources, Langfuse observability.
+**Status:** 24 containers, persistent Vault (file backend, auto-unseal), 12 MCP data sources, Langfuse observability, Prometheus + Grafana monitoring.
 
 ---
 
@@ -19,33 +19,37 @@
 
 ## Current Status
 
-### Running Containers (20 total)
+### Running Containers (24 total)
 
-| Component                 | Status    | Notes                                           |
-| ------------------------- | --------- | ----------------------------------------------- |
-| **Infrastructure**        |           |                                                 |
-| Vault                     | ✅ Healthy | Server mode, file backend, auto-unseal          |
-| Redis                     | ✅ Healthy | Snapshot queues (TTL 900s)                      |
-| PostgreSQL (main)         | ✅ Healthy | Alert logging, win-rate history                 |
-| PostgreSQL (Langfuse)     | ✅ Healthy | Observability traces (persistent volume)        |
-| Langfuse                  | ✅ Healthy | Prompt mgmt + tracing at http://localhost:3000  |
-| **Application**           |           |                                                 |
-| CUGA (app)                | ✅ Healthy | Pipeline engine                                 |
-| Cron                      | ✅ UP      | Scheduled 15m/1h pipeline runs                  |
-| Discord Bot               | ✅ UP      | `!scan`, `!status`, `!last`, `!help`            |
-| Dashboard                 | ✅ Healthy | Analytics at http://localhost:8080              |
-| **MCP Data Sources** (11) |           |                                                 |
-| tradingview-mcp           | ✅ Healthy | Chart patterns, TA signals on :8001             |
-| polygon-mcp               | ✅ Healthy | OHLCV price data, candlestick charts on :8002   |
-| discord-mcp               | ✅ Healthy | Discord API proxy on :8003                      |
-| finnhub-mcp               | ✅ Healthy | Insider trades, earnings, company data on :8004 |
-| rot-mcp                   | ✅ Healthy | Rules-of-thumb signal filtering on :8005        |
-| edgar-mcp                 | ✅ Healthy | SEC filings, institutional holdings on :8006    |
-| yfinance-mcp              | ✅ Healthy | Options flow, short interest on :8007           |
-| trading-mcp               | ✅ Healthy | Position sizing, R:R calculations on :8008      |
-| fred-mcp                  | ✅ Healthy | Macro data (VIX, yield curve, CPI) on :8009     |
-| spamshield-mcp            | ✅ Healthy | Duplicate/noise filtering on :8010              |
-| alpaca-mcp                | ✅ Healthy | Real-time quotes, market status on :8011        |
+| Component                  | Status    | Notes                                           |
+| -------------------------- | --------- | ----------------------------------------------- |
+| **Infrastructure**         |           |                                                 |
+| Vault                      | ✅ Healthy | Server mode, file backend, auto-unseal          |
+| Redis                      | ✅ Healthy | Snapshot queues (TTL 900s)                      |
+| PostgreSQL (main)          | ✅ Healthy | Alert logging, win-rate history                 |
+| PostgreSQL (Langfuse)      | ✅ Healthy | Observability traces (persistent volume)        |
+| Langfuse                   | ✅ Healthy | Prompt mgmt + tracing at http://localhost:3000  |
+| Prometheus                 | ✅ Healthy | Metrics scraping at http://localhost:9090       |
+| Grafana                    | ✅ Healthy | Dashboards at http://localhost:3001             |
+| **Application**            |           |                                                 |
+| CUGA (app)                 | ✅ Healthy | Pipeline engine                                 |
+| Cron                       | ✅ UP      | Scheduled 15m/1h pipeline runs (flock-guarded)  |
+| Discord Bot                | ✅ UP      | `!scan`, `!status`, `!last`, `!help`            |
+| Dashboard                  | ✅ Healthy | Analytics + Prometheus metrics at :8080         |
+| pg-backup                  | ✅ UP      | Daily pg_dump at 03:00 UTC, 7-day retention     |
+| **MCP Data Sources** (12)  |           |                                                 |
+| tradingview-mcp            | ✅ Healthy | Chart patterns, TA signals on :8001             |
+| polygon-mcp                | ✅ Healthy | OHLCV price data, candlestick charts on :8002   |
+| discord-mcp                | ✅ Healthy | Discord API proxy on :8003                      |
+| finnhub-mcp                | ✅ Healthy | Insider trades, earnings, company data on :8004 |
+| rot-mcp                    | ✅ Healthy | Rules-of-thumb signal filtering on :8005        |
+| edgar-mcp                  | ✅ Healthy | SEC filings, institutional holdings on :8006    |
+| yfinance-mcp               | ✅ Healthy | Options flow, short interest on :8007           |
+| trading-mcp                | ✅ Healthy | Position sizing, R:R calculations on :8008      |
+| fred-mcp                   | ✅ Healthy | Macro data (VIX, yield curve, CPI) on :8009     |
+| spamshield-mcp             | ✅ Healthy | Duplicate/noise filtering on :8010              |
+| alpaca-mcp                 | ✅ Healthy | Real-time quotes, market status on :8011        |
+| timesfm-mcp                | ✅ Healthy | Time-series forecasting (torch) on :8012        |
 
 ---
 
@@ -180,7 +184,7 @@ cp .env.example .env.secrets
 # 2. Load secrets into shell environment
 set -a && source .env.secrets && set +a
 
-# 3. Start the full stack (all 20 containers)
+# 3. Start the full stack (all 24 containers)
 docker compose -f docker-compose.prod.yml --profile mcp up -d
 
 # 4. Wait for PostgreSQL to initialize (30-60 seconds)
@@ -285,6 +289,27 @@ curl http://localhost:3000/api/public/health
 
 # MCP services (example: tradingview)
 curl http://localhost:8001/health
+
+# Prometheus targets
+curl http://localhost:9090/api/v1/targets
+```
+
+### Prometheus & Grafana
+
+```bash
+# Prometheus UI → http://localhost:9090
+# Grafana UI   → http://localhost:3001 (admin/admin)
+
+# Exposed metrics (scraped from dashboard :8080/metrics):
+#   pipeline_run_total          — counter of pipeline executions by timeframe
+#   pipeline_run_active         — gauge of currently running pipelines
+#   mcp_call_duration_seconds   — histogram of MCP call latency by endpoint
+#   circuit_breaker_trip_total  — counter of MCP circuit breaker trips
+#   gate_rejection_total        — counter of validation gate rejections by gate name
+#   alerts_per_cycle            — histogram of alerts fired per pipeline run
+#   discord_send_total          — counter of Discord sends (success/fail)
+#   db_insert_total             — counter of alert DB inserts
+#   chart_gen_duration_seconds  — histogram of candlestick chart generation time
 ```
 
 ### View Logs
@@ -401,7 +426,7 @@ variables, not code. Here's what to configure:
 
 By default, `docker-compose.prod.yml` binds internal services to **127.0.0.1**
 (loopback only). This includes Redis, Postgres, Vault, Langfuse-DB, and **MCP servers
-(8001-8011)** — they are NOT publicly accessible. Only containers on the
+(8001-8012)** — they are NOT publicly accessible. Only containers on the
 same Docker network can reach them.
 
 Langfuse UI (:3000) and Dashboard (:8080) default to `0.0.0.0` for browser access.
@@ -472,7 +497,8 @@ For production, place nginx or caddy in front of public-facing services:
 | ----------- | ------------- | --------------------------- |
 | Langfuse UI | 3000          | `langfuse.yourdomain.com`   |
 | Dashboard   | 8080          | `dash.yourdomain.com`       |
-| MCP servers | 8001-8011     | Not proxied (loopback only) |
+| Grafana     | 3001          | `grafana.yourdomain.com`    |
+| MCP servers | 8001-8012     | Not proxied (loopback only) |
 
 MCP servers are bound to `127.0.0.1` by default and should **never** be
 exposed publicly — they're called only by the cuga container over the Docker
@@ -669,4 +695,4 @@ curl http://localhost:8001/health
 
 ---
 
-**Last Updated:** March 2026 | Status: 20 containers, persistent Vault (file backend), 11 MCPs, 10 signal types
+**Last Updated:** April 2026 | Status: 24 containers, persistent Vault (file backend), 12 MCPs, 11 signal types, Prometheus + Grafana monitoring

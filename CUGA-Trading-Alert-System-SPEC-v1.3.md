@@ -79,7 +79,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 11 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 12 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
 
 Output per alert:
 
@@ -226,7 +226,7 @@ class PlaybookAlert(BaseModel):
 Key points:
 
 - Redis and Postgres services as described in v1.1.
-- 11 MCP services bound to ports 8001–8011 (8001–8005 original, 8006 EDGAR, 8007 YFinance, 8008 Trading, 8009 FRED, 8010 SpamShield, 8011 Alpaca).
+- 12 MCP services bound to ports 8001–8012 (8001–8005 original, 8006 EDGAR, 8007 YFinance, 8008 Trading, 8009 FRED, 8010 SpamShield, 8011 Alpaca, 8012 TimesFM).
 - `cuga` service built from `docker/Dockerfile.cuga`, mounting:
     - `./workflows` → `/app/workflows`
     - `./normalizers` → `/app/normalizers`

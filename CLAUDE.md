@@ -14,13 +14,14 @@ The full architecture, schemas, and implementation rules are in:
 - Generate one file at a time, scoped to the section referenced.
 
 ## Stack Reference
-- 20 containers (docker-compose.prod.yml)
-- 11 MCP servers (ports 8001–8011): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca
-- 10 signal types: technical_trend, volume_spike, sentiment_bull, sentiment_bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest
-- 6 collectors, merger, Claude Sonnet 4 decision engine, 7-gate validate_and_filter, notifier with candlestick charts
+- 24 containers (docker-compose.prod.yml)
+- 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM
+- 11 signal types: technical_trend, volume_spike, sentiment_bull, sentiment_bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest, price_forecast
+- 7 collectors, merger, Claude Sonnet 4 decision engine, 7-gate validate_and_filter, notifier with candlestick charts
 - Redis for snapshot queues (TTL 900s)
 - Postgres for alert logging (JSONB) and win-rate history
 - Vault (server mode, file backend, auto-unseal via deployment/vault-entrypoint.sh)
 - Langfuse for prompt management + observability tracing
+- Prometheus + Grafana for metrics and dashboards
 - Discord bot (discord_bot.py) for !scan, !status, !last commands
 - CUGA YAML workflows (collectors + decisions + orchestrators)

@@ -180,11 +180,14 @@ uv sync --dev
 ### trade-alert Tests
 
 ```bash
-# Gate validation tests (45 tests, no infrastructure needed)
-pytest tests/test_validate_and_filter.py -v
+# Unit tests (620+ tests, no infrastructure needed)
+pytest tests/unit/ -q
+
+# Gate validation tests only
+pytest tests/unit/test_validate_and_filter.py -v
 
 # All tests with coverage
-pytest tests/ --cov=. --cov-report=term-missing
+pytest tests/unit/ --cov=. --cov-report=term-missing
 
 # Integration smoke test (needs Docker running)
 python tests/integration_smoke.py

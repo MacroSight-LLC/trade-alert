@@ -16,13 +16,14 @@ All architecture, schemas, file names, and implementation rules are defined in:
 - LLM decision agent outputs must be strict JSON matching `PlaybookAlert`.
 
 ## Stack Reference
-- 20 containers (docker-compose.prod.yml)
-- 11 MCP servers (ports 8001–8011): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca
-- 10 signal types: technical_trend, volume_spike, sentiment_bull/bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest
-- 6 collectors → merger → Claude Sonnet 4 decision → 7-gate validate_and_filter → notifier
+- 24 containers (docker-compose.prod.yml)
+- 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM
+- 11 signal types: technical_trend, volume_spike, sentiment_bull/bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest, price_forecast
+- 7 collectors → merger → Claude Sonnet 4 decision → 7-gate validate_and_filter → notifier
 - Redis for snapshot queues (TTL 900s)
 - Postgres for alert logging (JSONB) and win-rate history
 - Vault (server mode, file backend, auto-unseal)
 - Langfuse for prompt management + observability
+- Prometheus + Grafana for metrics and dashboards
 - Discord bot (discord_bot.py) for ops commands (!scan, !status, !last)
 - Discord notifier with mplfinance candlestick chart attachments

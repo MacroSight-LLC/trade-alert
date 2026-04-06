@@ -5,7 +5,7 @@
 # What it does:
 #   1. Installs Docker CE + Docker Compose plugin (official apt repo)
 #   2. Installs HashiCorp Vault CLI (for vault-init.sh)
-#   3. Configures UFW firewall (SSH, HTTP/S, MCP ports 8001-8011)
+#   3. Configures UFW firewall (SSH, HTTP/S, MCP ports 8001-8012)
 #   4. Creates non-root 'deploy' user with Docker group access
 #   5. Hardens SSH (disable password auth, disable root login)
 #
@@ -62,7 +62,7 @@ ufw default allow outgoing
 ufw allow 22/tcp comment "SSH"
 ufw allow 80/tcp comment "HTTP"
 ufw allow 443/tcp comment "HTTPS"
-ufw allow 8001:8011/tcp comment "MCP servers"
+ufw allow 8001:8012/tcp comment "MCP servers"
 ufw allow 8080/tcp comment "Dashboard API"
 ufw --force enable
 echo "    UFW active — $(ufw status | grep -c ALLOW) rules configured"

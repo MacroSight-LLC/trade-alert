@@ -209,7 +209,7 @@ $DC exec -T cuga python scripts/seed_langfuse_prompts.py --host http://langfuse:
 section "[7/7] MCP services..."
 
 if [ "$ENABLE_MCP" = true ]; then
-    echo "   Starting 11 MCP services..."
+    echo "   Starting 12 MCP services..."
     $DC --profile mcp up -d
     echo "   Waiting for MCP services to initialize..."
     sleep 20

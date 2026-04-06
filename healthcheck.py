@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
-# SSOT §3: all 11 MCP services with /health endpoints
+# SSOT §3: all 12 MCP services with /health endpoints
 # Uses env-var overrides matching pipeline_runner.py pattern
 MCP_SERVICES: list[tuple[str, str]] = [
     ("tradingview-mcp", os.getenv("TRADINGVIEW_MCP_URL", "http://tradingview-mcp:8001") + "/health"),
@@ -41,6 +41,7 @@ MCP_SERVICES: list[tuple[str, str]] = [
     ("fred-mcp", os.getenv("FRED_MCP_URL", "http://fred-mcp:8009") + "/health"),
     ("spamshield-mcp", os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010") + "/health"),
     ("alpaca-mcp", os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011") + "/health"),
+    ("timesfm-mcp", os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012") + "/health"),
 ]
 
 
