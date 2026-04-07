@@ -155,7 +155,8 @@ while IFS= read -r line || [ -n "$line" ]; do
         POSTGRES_USER|\
         GROQ_API_KEY|OPENAI_API_KEY|E2B_API_KEY|CUGA_SECRET_KEY|\
         ALPACA_API_KEY|ALPACA_SECRET_KEY|EDGAR_USER_AGENT|\
-        LANGFUSE_PUBLIC_KEY|LANGFUSE_SECRET_KEY|NEXTAUTH_SECRET|ENCRYPTION_KEY)
+        LANGFUSE_PUBLIC_KEY|LANGFUSE_SECRET_KEY|NEXTAUTH_SECRET|ENCRYPTION_KEY|\
+        LANGFUSE_INIT_USER_PASSWORD)
             if [ "$FIRST" = true ]; then
                 FIRST=false
             else
@@ -211,8 +212,7 @@ echo ""
 
 # ── Generate .env.vault for MCP containers ──────────────────
 echo "📄 Generating .env.vault for Docker Compose MCP services..."
-python3 "$REPO_ROOT/vault_env_loader.py" --dotenv > "$REPO_ROOT/.env.vault" 2>/dev/null
-if [ $? -eq 0 ]; then
+if python3 "$REPO_ROOT/vault_env_loader.py" --dotenv > "$REPO_ROOT/.env.vault" 2>/dev/null; then
     VAULT_COUNT=$(grep -c '=' "$REPO_ROOT/.env.vault" || true)
     echo "   ✅ .env.vault written ($VAULT_COUNT keys)"
 else

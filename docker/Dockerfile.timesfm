@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir \
     httpx \
     hvac \
     redis \
+    structlog \
     numpy \
     pandas
 
@@ -28,6 +29,7 @@ COPY scripts/mcp_server.py /app/mcp_server.py
 COPY scripts/mcp_servers/timesfm_mcp.py /app/mcp_servers/timesfm_mcp.py
 COPY scripts/mcp_servers/__init__.py /app/mcp_servers/__init__.py
 COPY vault_env_loader.py /app/vault_env_loader.py
+COPY log_config.py /app/log_config.py
 
 RUN useradd -r -s /bin/false appuser
 USER appuser

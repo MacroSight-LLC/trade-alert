@@ -66,6 +66,26 @@ wait_healthy() {
     exit 1
 }
 
+wait_vault_ready() {
+    local max_wait="${1:-90}"
+    local elapsed=0
+    printf "   Waiting for vault API..."
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8200/v1/sys/health" || echo "000")
+        # Vault may return 501 before initialization; that still means API is reachable.
+        case "$code" in
+            200|429|472|473|501|503)
+                echo " ✅ reachable (${elapsed}s, HTTP ${code})"
+                return 0
+                ;;
+        esac
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo " ❌ timeout (${max_wait}s)"
+    return 1
+}
+
 section() {
     echo ""
     echo "==> $1"
@@ -117,6 +137,19 @@ if [ ! -f "$REPO_ROOT/.env.secrets" ]; then
     exit 1
 fi
 
+# Create .env from example if missing
+if [ ! -f "$REPO_ROOT/.env" ]; then
+    echo "📄 Creating .env from .env.example..."
+    cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
+fi
+echo "✅ .env present"
+
+# Export .env + .env.secrets so docker compose variable interpolation works.
+set -a
+source "$REPO_ROOT/.env"
+source "$REPO_ROOT/.env.secrets"
+set +a
+
 if [ ! -f "$COMPOSE_FILE" ]; then
     echo "❌ Compose file missing: $COMPOSE_FILE"
     exit 1
@@ -137,7 +170,7 @@ if [ -z "$PG_PASS" ]; then
 fi
 
 MISSING_REQUIRED=0
-for key in VAULT_TOKEN ANTHROPIC_API_KEY DISCORD_BOT_TOKEN DISCORD_ALERT_CHANNEL_ID DISCORD_OPS_CHANNEL_ID LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY NEXTAUTH_SECRET ENCRYPTION_KEY LANGFUSE_INIT_USER_PASSWORD; do
+for key in VAULT_TOKEN ANTHROPIC_API_KEY POLYGON_API_KEY FINNHUB_API_KEY FRED_API_KEY ALPACA_API_KEY ALPACA_SECRET_KEY EDGAR_USER_AGENT DISCORD_BOT_TOKEN DISCORD_ALERT_CHANNEL_ID DISCORD_OPS_CHANNEL_ID LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY NEXTAUTH_SECRET ENCRYPTION_KEY LANGFUSE_INIT_USER_PASSWORD; do
     if ! require_nonempty_env_in_file "$REPO_ROOT/.env.secrets" "$key"; then
         MISSING_REQUIRED=1
     fi
@@ -147,13 +180,6 @@ if [ "$MISSING_REQUIRED" -ne 0 ]; then
     exit 1
 fi
 echo "✅ .env.secrets populated"
-
-# Create .env from example if missing
-if [ ! -f "$REPO_ROOT/.env" ]; then
-    echo "📄 Creating .env from .env.example..."
-    cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
-fi
-echo "✅ .env present"
 
 # Create logs directory
 mkdir -p "$REPO_ROOT/logs"
@@ -171,7 +197,11 @@ fi
 
 section "[2/7] Starting Vault..."
 $DC up vault -d
-wait_healthy vault 60
+wait_vault_ready 60 || {
+    echo "   Last 20 lines of vault logs:"
+    $DC logs --tail=20 vault
+    exit 1
+}
 
 # ── Phase 3: Initialize Vault & seed secrets ─────────────────
 
