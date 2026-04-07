@@ -15,11 +15,32 @@ set -euo pipefail
 
 DEPLOY_USER="deploy"
 
+# Shared utilities used by deployment scripts and day-2 operations.
+BASE_PACKAGES=(
+    apt-transport-https
+    ca-certificates
+    curl
+    git
+    gnupg
+    jq
+    lsb-release
+    openssl
+    python3
+    python3-pip
+    python3-venv
+    software-properties-common
+    ufw
+    unzip
+    wget
+)
+
+echo "==> [0/5] Installing base OS packages"
+apt-get update -qq
+apt-get install -y -qq "${BASE_PACKAGES[@]}"
+echo "    Base packages installed/updated"
+
 echo "==> [1/5] Installing Docker CE + Compose plugin"
 if ! command -v docker &>/dev/null; then
-    apt-get update -qq
-    apt-get install -y -qq ca-certificates curl gnupg lsb-release
-
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -41,8 +62,7 @@ fi
 
 echo "==> [2/5] Installing HashiCorp Vault CLI"
 if ! command -v vault &>/dev/null; then
-    apt-get install -y -qq gpg
-    wget -qO- https://apt.releases.hashicorp.com/gpg \
+    curl -fsSL https://apt.releases.hashicorp.com/gpg \
         | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
       https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
@@ -55,7 +75,6 @@ else
 fi
 
 echo "==> [3/5] Configuring UFW firewall"
-apt-get install -y -qq ufw
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing

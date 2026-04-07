@@ -71,6 +71,18 @@ section() {
     echo "==> $1"
 }
 
+require_nonempty_env_in_file() {
+    local file="$1"
+    local key="$2"
+    local value
+    value=$(grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2- || true)
+    if [ -z "${value}" ]; then
+        echo "❌ Required setting missing in $(basename "$file"): ${key}"
+        return 1
+    fi
+    return 0
+}
+
 # ── Phase 0: Pre-flight ─────────────────────────────────────
 
 echo "╔══════════════════════════════════════════════════╗"
@@ -84,6 +96,12 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 echo "✅ Docker $(docker --version | grep -oP 'Docker version \K[0-9.]+')"
+
+if ! docker compose version &>/dev/null; then
+    echo "❌ Docker Compose plugin not found. Run: bash scripts/bootstrap_vps.sh"
+    exit 1
+fi
+echo "✅ Docker Compose plugin available"
 
 # Vault CLI
 if ! command -v vault &>/dev/null; then
@@ -99,11 +117,33 @@ if [ ! -f "$REPO_ROOT/.env.secrets" ]; then
     exit 1
 fi
 
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "❌ Compose file missing: $COMPOSE_FILE"
+    exit 1
+fi
+
+if ! $DC config >/dev/null; then
+    echo "❌ docker compose config validation failed"
+    exit 1
+fi
+echo "✅ docker compose config is valid"
+
 # Check that at least POSTGRES_PASSWORD is set (basic sanity)
 PG_PASS=$(grep -E '^POSTGRES_PASSWORD=' "$REPO_ROOT/.env.secrets" | head -1 | cut -d= -f2-)
 if [ -z "$PG_PASS" ]; then
     echo "❌ POSTGRES_PASSWORD is empty in .env.secrets"
     echo "   Generate one: openssl rand -base64 24"
+    exit 1
+fi
+
+MISSING_REQUIRED=0
+for key in VAULT_TOKEN ANTHROPIC_API_KEY DISCORD_BOT_TOKEN DISCORD_ALERT_CHANNEL_ID DISCORD_OPS_CHANNEL_ID LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY NEXTAUTH_SECRET ENCRYPTION_KEY LANGFUSE_INIT_USER_PASSWORD; do
+    if ! require_nonempty_env_in_file "$REPO_ROOT/.env.secrets" "$key"; then
+        MISSING_REQUIRED=1
+    fi
+done
+if [ "$MISSING_REQUIRED" -ne 0 ]; then
+    echo "❌ Populate missing required secrets in .env.secrets and re-run deploy"
     exit 1
 fi
 echo "✅ .env.secrets populated"
@@ -170,6 +210,10 @@ wait_healthy redis 60
 wait_healthy postgres 60
 wait_healthy langfuse-db 60
 
+echo "   Applying database schema..."
+$DC exec -T postgres psql -U "${POSTGRES_USER:-trade_alert}" -d trade_alert -f /docker-entrypoint-initdb.d/schema.sql >/dev/null
+echo "   ✅ Schema applied"
+
 $DC up langfuse -d
 wait_healthy langfuse 90
 
@@ -177,7 +221,7 @@ wait_healthy langfuse 90
 
 section "[5/7] Starting application services..."
 
-$DC up cuga cron discord-bot dashboard -d
+$DC up cuga cron discord-bot dashboard pg-backup -d
 wait_healthy cuga 60
 wait_healthy dashboard 60
 
@@ -192,6 +236,13 @@ for svc in cron discord-bot; do
         echo "   ⚠️  $svc state: $STATE"
     fi
 done
+
+STATE=$($DC ps pg-backup --format '{{.State}}' 2>/dev/null || echo "unknown")
+if [ "$STATE" = "running" ]; then
+    echo "   ✅ pg-backup is running"
+else
+    echo "   ⚠️  pg-backup state: $STATE"
+fi
 
 # ── Phase 6: Seed Langfuse prompts ───────────────────────────
 
@@ -212,11 +263,11 @@ if [ "$ENABLE_MCP" = true ]; then
     echo "   Starting 12 MCP services..."
     $DC --profile mcp up -d
     echo "   Waiting for MCP services to initialize..."
-    sleep 20
+    sleep 45
 
     MCP_OK=0
     MCP_FAIL=0
-    for port in 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010 8011; do
+    for port in 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010 8011 8012; do
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${port}/health" 2>/dev/null || echo "000")
         if [ "$HTTP_CODE" = "200" ]; then
             MCP_OK=$((MCP_OK + 1))
@@ -225,7 +276,7 @@ if [ "$ENABLE_MCP" = true ]; then
             echo "   ⚠️  MCP :${port} → HTTP $HTTP_CODE"
         fi
     done
-    echo "   ✅ MCP services: ${MCP_OK}/11 healthy, ${MCP_FAIL}/11 pending"
+    echo "   ✅ MCP services: ${MCP_OK}/12 healthy, ${MCP_FAIL}/12 pending"
 else
     echo "   Skipped (use --mcp to enable)"
     echo "   Or start later: docker compose -f docker-compose.prod.yml --profile mcp up -d"
