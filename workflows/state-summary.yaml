@@ -1,0 +1,240 @@
+# state-summary.yaml
+# SSOT Reference: Section 5 (schedule), Section 10.2 (gate thresholds), Section 11 (Discord)
+# Purpose: Pre-open (9:15 ET) and post-close (16:15 ET) state snapshot sent to the ops
+#   channel.  Emits NO trade alerts.  Reports: VIX, regime, dynamic gate thresholds,
+#   today's session stats, and the active WATCH queue (if any).
+
+name: state-summary
+description: >
+    Pre-open / post-close state summary: VIX, regime, dynamic gates,
+    session stats, and WATCH queue.  Sent to ops channel.  No trade alerts.
+llm_model: claude-sonnet-4-20250514
+mcp_servers:
+    - name: fred-mcp
+      endpoint: http://fred-mcp:8009
+
+steps:
+    # Step 1 — Fetch live VIX from FRED MCP
+    - name: fetch-vix
+      type: tool_call
+      tool: fred-mcp
+      method: vix_level
+      params: {}
+
+    # Step 2 — Read macro regime, session stats, and WATCH queue from Redis;
+    #          classify the current regime based on VIX + macro context.
+    - name: read-state
+      type: code
+      code: |
+          import json, math, logging
+          from datetime import datetime, timezone
+          from zoneinfo import ZoneInfo
+
+          from merger import get_macro_regime
+          from validate_and_filter import (
+              _classify_regime,
+              _dynamic_gates,
+              _GATE_EP,
+              _GATE_SA,
+              _GATE_CONF,
+              _watch_decay_key,
+              _WATCH_DECAY_CYCLES,
+          )
+          from redis_client import get_redis
+
+          logger = logging.getLogger(__name__)
+          _ET = ZoneInfo("America/New_York")
+
+          now_et = datetime.now(timezone.utc).astimezone(_ET)
+          mode = "POST-CLOSE" if now_et.hour >= 16 else "PRE-OPEN"
+          session_date = now_et.date().isoformat()
+
+          macro = get_macro_regime()
+          risk_off = not macro.get("risk_on", True)
+
+          # VIX from Step 1
+          try:
+              vix_raw = steps["fetch-vix"].get("vix_level") or steps["fetch-vix"].get("value")
+              vix = float(vix_raw) if vix_raw is not None else 0.0
+          except Exception:
+              vix = 0.0
+          if not math.isfinite(vix):
+              vix = 35.0
+
+          # Regime classification using VIX + macro; no live signal surface at
+          # pre/post-close times (snapshots are flushed / TTL'd by then).
+          regime = _classify_regime(vix, risk_off, bulls=0, bears=0, trend_strength=0.5)
+
+          ep_gate_15m, sa_gate_15m, conf_gate_15m = _dynamic_gates(
+              _GATE_EP.get("15m", 0.70), _GATE_SA, _GATE_CONF, "15m", regime
+          )
+          ep_gate_1h, sa_gate_1h, conf_gate_1h = _dynamic_gates(
+              _GATE_EP.get("1h", 0.75), _GATE_SA, _GATE_CONF, "1h", regime
+          )
+
+          # Session stats for today
+          r = get_redis()
+          stats = {}
+          for tf in ("15m", "1h"):
+              key = f"session:stats:{session_date}:{tf}"
+              raw = r.hgetall(key)
+              stats[tf] = (
+                  {k: int(v) for k, v in raw.items() if str(v).lstrip("-").isdigit()}
+                  if raw else {}
+              )
+
+          # Active WATCH queue — scan Redis for any live decay keys
+          watch_queue = []
+          for tf in ("15m", "1h"):
+              pattern = f"watch:decay:{tf}:*"
+              try:
+                  for key in r.scan_iter(pattern, count=50):
+                      data = r.hgetall(key)
+                      symbol = key.split(":")[-1]
+                      cycles = int(data.get("cycles", 0))
+                      watch_queue.append({
+                          "symbol": symbol,
+                          "timeframe": tf,
+                          "cycles": cycles,
+                          "last_ep": data.get("last_ep", "?"),
+                          "last_conf": data.get("last_conf", "?"),
+                      })
+              except Exception as exc:
+                  logger.warning("Error scanning watch decay keys: %s", exc)
+          watch_queue.sort(key=lambda x: (-x["cycles"], x["symbol"]))
+
+          result = {
+              "mode": mode,
+              "now_et": now_et.strftime("%H:%M ET"),
+              "session_date": session_date,
+              "vix": vix,
+              "regime": regime,
+              "risk_off": risk_off,
+              "macro_risk_on": macro.get("risk_on", True),
+              "gates_15m": {"ep": ep_gate_15m, "sa": sa_gate_15m, "conf": conf_gate_15m},
+              "gates_1h": {"ep": ep_gate_1h, "sa": sa_gate_1h, "conf": conf_gate_1h},
+              "stats": stats,
+              "watch_queue": watch_queue,
+          }
+
+    # Step 3 — Format rich embed and send to ops channel
+    - name: send-summary
+      type: code
+      code: |
+          import logging
+          from notifier_and_logger import send_ops_embed
+
+          logger = logging.getLogger(__name__)
+          state = steps["read-state"]
+
+          mode        = state["mode"]
+          vix         = state["vix"]
+          regime      = state["regime"]
+          session_date= state["session_date"]
+          now_et      = state["now_et"]
+          stats       = state["stats"]
+          watch_queue = state["watch_queue"]
+          g15 = state["gates_15m"]
+          g1h = state["gates_1h"]
+
+          _REGIME_COLORS = {
+              "extreme":           15158332,   # red
+              "risk_off_high_vix": 15105570,   # orange
+              "choppy":            11393254,   # amber-grey
+              "trending_up":       3066993,    # green
+              "trending_down":     10038562,   # dark-red
+              "neutral":           3447003,    # blue
+          }
+          color = _REGIME_COLORS.get(regime, 3447003)
+
+          def stats_line(tf):
+              s = stats.get(tf, {})
+              runs        = s.get("decision_runs", 0)
+              fired       = s.get("alerts_passed", 0)
+              rejected    = s.get("alerts_rejected", 0)
+              watch_kept  = s.get("watch_kept", 0)
+              decay_drop  = s.get("gate_watch_decay", 0)
+              if runs == 0:
+                  return f"{tf}: no runs yet"
+              return (
+                  f"{tf}: {runs} runs | fired={fired} | rejected={rejected} "
+                  f"| watch_kept={watch_kept} | watch_decay_dropped={decay_drop}"
+              )
+
+          watch_lines = []
+          for w in watch_queue[:5]:
+              cycles = w["cycles"]
+              warn = " ⚠️ stale" if cycles >= 3 else ""
+              watch_lines.append(
+                  f"`{w['symbol']}` [{w['timeframe']}] cycles={cycles} "
+                  f"ep={w['last_ep']} conf={w['last_conf']}{warn}"
+              )
+          watch_block = "\n".join(watch_lines) if watch_lines else "none"
+
+          risk_on_label = "risk-on ✅" if state["macro_risk_on"] else "risk-off ⚠️"
+          title_icon = "🔔" if mode == "PRE-OPEN" else "🔕"
+
+          embed = {
+              "embeds": [{
+                  "title": f"{title_icon} {mode.replace('-', ' ').title()} State Summary  —  {session_date}",
+                  "description": (
+                      f"Generated at **{now_et}**  |  macro: {risk_on_label}"
+                  ),
+                  "color": color,
+                  "fields": [
+                      {
+                          "name": "🌡️ VIX",
+                          "value": f"**{vix:.1f}**",
+                          "inline": True,
+                      },
+                      {
+                          "name": "📊 Regime",
+                          "value": f"**{regime}**",
+                          "inline": True,
+                      },
+                      {
+                          "name": "\u200b",
+                          "value": "\u200b",
+                          "inline": True,
+                      },
+                      {
+                          "name": "15m dynamic gates",
+                          "value": (
+                              f"EP ≥ {g15['ep']:.2f}  ·  "
+                              f"SA ≥ {g15['sa']}  ·  "
+                              f"CONF ≥ {g15['conf']:.2f}"
+                          ),
+                          "inline": True,
+                      },
+                      {
+                          "name": "1h dynamic gates",
+                          "value": (
+                              f"EP ≥ {g1h['ep']:.2f}  ·  "
+                              f"SA ≥ {g1h['sa']}  ·  "
+                              f"CONF ≥ {g1h['conf']:.2f}"
+                          ),
+                          "inline": True,
+                      },
+                      {
+                          "name": "\u200b",
+                          "value": "\u200b",
+                          "inline": True,
+                      },
+                      {
+                          "name": "📈 Session stats",
+                          "value": stats_line("15m") + "\n" + stats_line("1h"),
+                          "inline": False,
+                      },
+                      {
+                          "name": "👁️ Active WATCH queue",
+                          "value": watch_block,
+                          "inline": False,
+                      },
+                  ],
+                  "footer": {"text": "trade-alert  ·  state-summary"},
+              }]
+          }
+
+          ok = send_ops_embed(embed)
+          logger.info("State summary (%s) sent to ops channel: %s", mode, ok)
+          result = {"sent": ok, "mode": mode}
