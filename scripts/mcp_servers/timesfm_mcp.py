@@ -26,6 +26,7 @@ _HORIZON = int(os.getenv("TIMESFM_HORIZON", "24"))
 _QUANTILES = [0.1, 0.5, 0.9]
 _MAX_BATCH = int(os.getenv("TIMESFM_MAX_BATCH", "50"))
 _POLYGON_TIMEOUT = float(os.getenv("TIMESFM_POLYGON_TIMEOUT", "10.0"))
+_HF_REPO = os.getenv("TIMESFM_HF_REPO", "google/timesfm-1.0-200m-pytorch")
 
 # Timeframe → (multiplier, span) for Polygon range endpoint
 _TIMEFRAME_MAP: dict[str, tuple[int, str]] = {
@@ -75,11 +76,16 @@ def _get_model() -> Any:
                 backend="cpu",
             ),
             checkpoint=timesfm.TimesFmCheckpoint(
-                huggingface_repo_id="google/timesfm-2.5-200m-pytorch",
+                huggingface_repo_id=_HF_REPO,
             ),
         )
         _model = tfm
-        logger.info("TimesFM model loaded successfully (horizon=%d, ctx=%d)", _HORIZON, _CONTEXT_LENGTH)
+        logger.info(
+            "TimesFM model loaded successfully (repo=%s, horizon=%d, ctx=%d)",
+            _HF_REPO,
+            _HORIZON,
+            _CONTEXT_LENGTH,
+        )
         return _model
     except Exception as exc:
         logger.error("Failed to load TimesFM model: %s", exc)
@@ -89,7 +95,7 @@ def _get_model() -> Any:
 # ── Polygon OHLCV fetch ──────────────────────────────────────────
 
 
-def _fetch_close_series(symbol: str, timeframe: str) -> list[float]:
+def _fetch_close_series(symbol: str, timeframe: str) -> tuple[list[float], str | None]:
     """Fetch close prices from Polygon for TimesFM input.
 
     Args:
@@ -97,12 +103,12 @@ def _fetch_close_series(symbol: str, timeframe: str) -> list[float]:
         timeframe: Candle timeframe (e.g. ``"15m"``).
 
     Returns:
-        List of close prices (most recent last), or empty list on failure.
+        A tuple of ``(close_prices, error)`` where ``error`` is ``None`` on success.
     """
     api_key = os.getenv("POLYGON_API_KEY", "")
     if not api_key:
         logger.warning("POLYGON_API_KEY not set — cannot fetch bars for %s", symbol)
-        return []
+        return [], "polygon_api_key_missing"
 
     multiplier, span = _TIMEFRAME_MAP.get(timeframe, (15, "minute"))
     # Request extra bars to ensure we get _CONTEXT_LENGTH after filtering
@@ -133,15 +139,18 @@ def _fetch_close_series(symbol: str, timeframe: str) -> list[float]:
         resp = _get_client().get(url, params=params)
         if resp.status_code == 429:
             logger.warning("Polygon 429 for %s — rate limited", symbol)
-            return []
+            return [], "polygon_rate_limited"
         resp.raise_for_status()
         bars = resp.json().get("results", [])
         closes = [float(b["c"]) for b in bars if "c" in b]
         # Take the most recent _CONTEXT_LENGTH bars
-        return closes[-_CONTEXT_LENGTH:]
+        return closes[-_CONTEXT_LENGTH:], None
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Failed to fetch bars for %s: %s", symbol, exc)
+        return [], f"polygon_http_{exc.response.status_code}"
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.warning("Failed to fetch bars for %s: %s", symbol, exc)
-        return []
+        return [], "polygon_fetch_failed"
 
 
 # ── Core forecast logic ──────────────────────────────────────────
@@ -159,7 +168,7 @@ def _run_forecast(symbols: list[str], timeframe: str) -> dict[str, dict[str, Any
     """
     model = _get_model()
     if model is None:
-        return {s: {"error": "model_unavailable"} for s in symbols}
+        return {s: {"symbol": s, "error": "model_unavailable"} for s in symbols}
 
     now = time.monotonic()
     results: dict[str, dict[str, Any]] = {}
@@ -174,9 +183,12 @@ def _run_forecast(symbols: list[str], timeframe: str) -> dict[str, dict[str, Any
             results[symbol] = cached[1]
             continue
 
-        closes = _fetch_close_series(symbol, timeframe)
+        closes, fetch_error = _fetch_close_series(symbol, timeframe)
+        if fetch_error:
+            results[symbol] = {"symbol": symbol, "error": fetch_error}
+            continue
         if len(closes) < 32:  # minimum context for meaningful forecast
-            results[symbol] = {"error": f"insufficient_data ({len(closes)} bars)"}
+            results[symbol] = {"symbol": symbol, "error": f"insufficient_data ({len(closes)} bars)"}
             continue
 
         to_forecast.append(symbol)
@@ -221,7 +233,7 @@ def _run_forecast(symbols: list[str], timeframe: str) -> dict[str, dict[str, Any
         except Exception as exc:
             logger.error("TimesFM batch forecast failed: %s", exc)
             for symbol in to_forecast:
-                results[symbol] = {"error": str(exc)}
+                results[symbol] = {"symbol": symbol, "error": str(exc)}
 
     return results
 

@@ -49,7 +49,7 @@ steps:
       import json
       import os
       import redis
-      from normalizers.forecast_normalizer import normalize
+      from normalizers import normalize_forecast
 
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
@@ -67,7 +67,7 @@ steps:
                   continue
               merged[sym] = item
 
-          snapshots = normalize(merged, timeframe=timeframe)
+          snapshots = normalize_forecast(merged, timeframe=timeframe)
           redis_key = f"snapshots:{timeframe}"
           for snap in snapshots:
               r.lpush(redis_key, snap.model_dump_json())

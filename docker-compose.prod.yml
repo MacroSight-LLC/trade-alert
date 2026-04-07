@@ -510,6 +510,7 @@ services:
       timeout: 5s
       retries: 3
     volumes:
+      - ./scripts:/app/scripts
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
       - ./models.py:/app/models.py

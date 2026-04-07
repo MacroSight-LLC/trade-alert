@@ -23,10 +23,15 @@ import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
 from models import PlaybookAlert
+from redis_client import get_redis
 
 logger = logging.getLogger(__name__)
+_ET = ZoneInfo("America/New_York")
+_SESSION_STATS_TTL_SECONDS = int(os.environ.get("SESSION_STATS_TTL_SECONDS", "604800"))
 
 
 # ── Gate-rejection enum ──────────────────────────────────────────
@@ -46,6 +51,11 @@ class GateRejection(str, Enum):
     FORECAST_CONTRADICTS = "forecast_contradicts"
     TIMEFRAME_INVALID = "timeframe_invalid"
     VOLUME_UNCONFIRMED = "volume_unconfirmed"
+    WATCH_EP_THRESHOLD = "watch_ep_threshold"
+    WATCH_SA_THRESHOLD = "watch_sa_threshold"
+    WATCH_CONF_THRESHOLD = "watch_conf_threshold"
+    WATCH_CAP = "watch_cap"
+    WATCH_DROPPED_DIRECTIONAL_PRESENT = "watch_dropped_directional_present"
 
 
 # Valid alert timeframes
@@ -99,11 +109,15 @@ _GATE_EP: dict[str, float] = {
 _GATE_SA: int = int(os.environ.get("GATE_SA", "3"))
 _GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
 
+# Limited WATCH policy (borderline-only, conservative)
+_WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
+_WATCH_SA_MIN: int = int(os.environ.get("WATCH_SA_MIN", "2"))
+_WATCH_CONF_MIN: float = float(os.environ.get("WATCH_CONF_MIN", "0.60"))
+_WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
+
 # Macro veto bypass thresholds (configurable)
 _MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))
 _MACRO_VETO_EP: float = float(os.environ.get("MACRO_VETO_EP", "0.90"))
-# Macro staleness: imported from constants (centralized)
-from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
 
 # VIX soft-gate bypass thresholds (configurable)
 _VIX_SOFT_THRESHOLD: float = float(os.environ.get("VIX_SOFT_THRESHOLD", "25.0"))
@@ -119,6 +133,36 @@ _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 # Alerts without volume confirmation get confidence downgraded by this amount.
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.10"))
+
+
+def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
+    now_utc = now or datetime.now(timezone.utc)
+    session_date = now_utc.astimezone(_ET).date().isoformat()
+    return f"session:stats:{session_date}:{timeframe}"
+
+
+def _record_session_gate_metrics(
+    timeframe: str,
+    llm_candidates: int,
+    alerts_passed: int,
+    watch_kept: int,
+    rejections: list[tuple[str, GateRejection]],
+) -> None:
+    try:
+        redis_client = get_redis()
+        key = _session_stats_key(timeframe)
+        pipe = redis_client.pipeline()
+        pipe.hincrby(key, "decision_runs", 1)
+        pipe.hincrby(key, "llm_candidates", llm_candidates)
+        pipe.hincrby(key, "alerts_passed", alerts_passed)
+        pipe.hincrby(key, "watch_kept", watch_kept)
+        pipe.hincrby(key, "alerts_rejected", len(rejections))
+        for _symbol, gate in rejections:
+            pipe.hincrby(key, f"gate_{gate.value}", 1)
+        pipe.expire(key, _SESSION_STATS_TTL_SECONDS)
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to record session gate metrics: %s", exc)
 
 
 def _parse_snapshots(snapshots_json: str) -> list[dict[str, Any]]:
@@ -493,33 +537,63 @@ def validate_and_filter(
             )
 
         # ── Gate thresholds (per-timeframe) ──────────────────────
-        if alert.edge_probability < ep_gate:
-            logger.info(
-                "Alert filtered (EP): %s ep=%.2f < gate=%.2f",
-                alert.symbol,
-                alert.edge_probability,
-                ep_gate,
-            )
-            rejections.append((alert.symbol, GateRejection.EP_THRESHOLD))
-            continue
-        if alert.sources_agree < _GATE_SA:
-            logger.info(
-                "Alert filtered (SA): %s sa=%d < gate=%d",
-                alert.symbol,
-                alert.sources_agree,
-                _GATE_SA,
-            )
-            rejections.append((alert.symbol, GateRejection.SA_THRESHOLD))
-            continue
-        if alert.confidence < _GATE_CONF:
-            logger.info(
-                "Alert filtered (CONF): %s conf=%.2f < gate=%.2f",
-                alert.symbol,
-                alert.confidence,
-                _GATE_CONF,
-            )
-            rejections.append((alert.symbol, GateRejection.CONF_THRESHOLD))
-            continue
+        if alert.direction == "WATCH":
+            watch_ep_gate = max(ep_gate - _WATCH_EP_DELTA, 0.50)
+            if alert.edge_probability < watch_ep_gate:
+                logger.info(
+                    "WATCH filtered (EP): %s ep=%.2f < watch_gate=%.2f",
+                    alert.symbol,
+                    alert.edge_probability,
+                    watch_ep_gate,
+                )
+                rejections.append((alert.symbol, GateRejection.WATCH_EP_THRESHOLD))
+                continue
+            if alert.sources_agree < _WATCH_SA_MIN:
+                logger.info(
+                    "WATCH filtered (SA): %s sa=%d < watch_gate=%d",
+                    alert.symbol,
+                    alert.sources_agree,
+                    _WATCH_SA_MIN,
+                )
+                rejections.append((alert.symbol, GateRejection.WATCH_SA_THRESHOLD))
+                continue
+            if alert.confidence < _WATCH_CONF_MIN:
+                logger.info(
+                    "WATCH filtered (CONF): %s conf=%.2f < watch_gate=%.2f",
+                    alert.symbol,
+                    alert.confidence,
+                    _WATCH_CONF_MIN,
+                )
+                rejections.append((alert.symbol, GateRejection.WATCH_CONF_THRESHOLD))
+                continue
+        else:
+            if alert.edge_probability < ep_gate:
+                logger.info(
+                    "Alert filtered (EP): %s ep=%.2f < gate=%.2f",
+                    alert.symbol,
+                    alert.edge_probability,
+                    ep_gate,
+                )
+                rejections.append((alert.symbol, GateRejection.EP_THRESHOLD))
+                continue
+            if alert.sources_agree < _GATE_SA:
+                logger.info(
+                    "Alert filtered (SA): %s sa=%d < gate=%d",
+                    alert.symbol,
+                    alert.sources_agree,
+                    _GATE_SA,
+                )
+                rejections.append((alert.symbol, GateRejection.SA_THRESHOLD))
+                continue
+            if alert.confidence < _GATE_CONF:
+                logger.info(
+                    "Alert filtered (CONF): %s conf=%.2f < gate=%.2f",
+                    alert.symbol,
+                    alert.confidence,
+                    _GATE_CONF,
+                )
+                rejections.append((alert.symbol, GateRejection.CONF_THRESHOLD))
+                continue
 
         # ── R:R gate: reward must be ≥ 2× risk ──────────────────
         risk = abs(alert.entry["level"] - alert.entry["stop"])
@@ -660,6 +734,32 @@ def validate_and_filter(
 
         alerts.append(alert)
 
+    # Keep WATCH output intentionally limited:
+    # - If directional alerts exist, drop WATCH alerts for this run.
+    # - Otherwise cap WATCH alerts to _WATCH_MAX_PER_RUN by quality.
+    directional_alerts = [a for a in alerts if a.direction in ("LONG", "SHORT")]
+    watch_alerts = [a for a in alerts if a.direction == "WATCH"]
+    if directional_alerts and watch_alerts:
+        for w in watch_alerts:
+            rejections.append((w.symbol, GateRejection.WATCH_DROPPED_DIRECTIONAL_PRESENT))
+        alerts = directional_alerts
+    elif len(watch_alerts) > _WATCH_MAX_PER_RUN:
+        watch_alerts.sort(key=lambda a: a.edge_probability * a.confidence, reverse=True)
+        kept_watches = watch_alerts[:_WATCH_MAX_PER_RUN]
+        for w in watch_alerts[_WATCH_MAX_PER_RUN:]:
+            rejections.append((w.symbol, GateRejection.WATCH_CAP))
+        alerts = directional_alerts + kept_watches
+
+    logger.info(
+        "Decision-%s gate summary: llm_candidates=%d passed=%d rejected=%d ep_gate=%.2f sa_gate=%d conf_gate=%.2f",
+        timeframe,
+        len(raw),
+        len(alerts),
+        len(rejections),
+        ep_gate,
+        _GATE_SA,
+        _GATE_CONF,
+    )
     logger.info("Decision-%s: %d alerts passed gates", timeframe, len(alerts))
 
     # ── Log sample rejections per gate for debugging ──────────────
@@ -674,6 +774,17 @@ def validate_and_filter(
             len(symbols),
             ", ".join(sample),
         )
+    if gate_samples:
+        logger.info(
+            "Decision-%s rejection counts: %s",
+            timeframe,
+            ", ".join(
+                f"{gate_name}={len(symbols)}" for gate_name, symbols in sorted(gate_samples.items())
+            ),
+        )
+
+    watch_kept = sum(1 for a in alerts if a.direction == "WATCH")
+    _record_session_gate_metrics(timeframe, len(raw), len(alerts), watch_kept, rejections)
 
     # ── Structured gate telemetry ─────────────────────────────────
     if add_score_fn and trace_id:

@@ -65,7 +65,9 @@ These `.env` variables control pipeline behavior and can be overridden without t
 | `GATE_EP_15M`               | `0.70`  | Minimum edge_probability for 15m alerts                |
 | `GATE_EP_1H`                | `0.75`  | Minimum edge_probability for 1h alerts                 |
 | `GATE_SA`                   | `3`     | Minimum sources_agree for any alert                    |
-| `GATE_CONF`                 | `0.75`  | Minimum average confidence for any alert               |
+| `GATE_CONF`                 | `0.70`  | Minimum average confidence for any alert               |
+| `UNIVERSE_POLYGON_MIN_CLOSE` | `5.0` | Minimum close price for Polygon volume leaders         |
+| `UNIVERSE_POLYGON_MIN_DOLLAR_VOLUME` | `10000000` | Minimum dollar volume for Polygon volume leaders |
 | `MERGER_TOP_N`              | `20`    | Max symbols passed to the decision engine              |
 | `REDIS_SNAPSHOT_TTL`        | `1200`  | TTL (seconds) for Redis snapshot queues                |
 | `OUTCOME_WINDOW_HOURS`      | `4`     | Default alert expiry window (fallback if no timeframe) |

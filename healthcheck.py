@@ -11,15 +11,16 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg2
 import redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
-from constants import SNAPSHOT_KEY_PREFIX, SNAPSHOT_STALE_TTL_THRESHOLD
+from constants import SNAPSHOT_KEY_PREFIX, SNAPSHOT_STALE_TTL_THRESHOLD, is_early_close, is_holiday
 from notifier_and_logger import send_ops_message
 from redis_client import get_redis as _get_redis
 
@@ -53,6 +54,30 @@ REDIS_SNAPSHOT_STALE_THRESHOLD: int = SNAPSHOT_STALE_TTL_THRESHOLD
 
 
 HEALTH_LOG_MAX_LINES: int = int(os.getenv("HEALTH_LOG_MAX_LINES", "2000"))
+_ET = ZoneInfo("America/New_York")
+
+
+def _snapshot_healthcheck_active(now: datetime | None = None) -> bool:
+    """Return True when snapshot freshness should be enforced.
+
+    Snapshot collectors only run during regular market hours. A small grace
+    window after the opening bell avoids false alarms while the 09:30 ET run
+    is still building Redis keys.
+
+    Args:
+        now: Datetime to check. Defaults to current ET time.
+    """
+    if now is None:
+        now = datetime.now(tz=_ET)
+    now_et = now.astimezone(_ET)
+    if now_et.weekday() >= 5:
+        return False
+    if is_holiday(now_et.date()):
+        return False
+
+    open_with_grace = dt_time(9, 32)
+    close_time = dt_time(13, 0) if is_early_close(now_et.date()) else dt_time(16, 0)
+    return open_with_grace <= now_et.time() <= close_time
 
 
 def _append_jsonl(record: dict) -> None:
@@ -111,6 +136,9 @@ def check_redis_snapshot_staleness() -> str | None:
     Returns:
         Warning string if all snapshot keys are stale, else None.
     """
+    if not _snapshot_healthcheck_active():
+        return None
+
     try:
         r = _get_redis()
         keys = r.keys(f"{SNAPSHOT_KEY_PREFIX}*")

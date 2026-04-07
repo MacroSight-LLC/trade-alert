@@ -199,7 +199,13 @@ _EXTRA_RULES: dict[str, str] = {
         "VIX 20-25 is NORMAL volatility — do not treat it as a suppression signal.\n"
         "- 15m stops should be tight (0.5-2% of entry)\n"
         "- Momentum must be FRESH — if the move already happened (score relates to "
-        "a completed move), do not alert on a chase entry."
+        "a completed move), do not alert on a chase entry.\n"
+        "- BORDERLINE WATCH POLICY: If no symbol meets LONG/SHORT quality gates, "
+        "you MAY output at most 1 WATCH alert for the best borderline setup only "
+        "when confidence is near-but-below the directional threshold "
+        "(about 0.60-0.74). Keep WATCH conservative: require at least 2 "
+        "independent aligned sources and edge_probability around gate-minus-0.05 "
+        "or better."
     ),
     "1h": (
         "\nADDITIONAL 1h RULES:\n"
@@ -220,7 +226,12 @@ _EXTRA_RULES: dict[str, str] = {
         "- Prefer setups with fundamental catalysts (earnings surprise, insider "
         "buying cluster, sector rotation) over pure TA patterns.\n"
         "- Thesis MUST reference at least one macro or fundamental factor, "
-        "not just technical indicators."
+        "not just technical indicators.\n"
+        "- BORDERLINE WATCH POLICY: If no symbol meets LONG/SHORT quality gates, "
+        "you MAY output at most 1 WATCH alert for the strongest borderline setup "
+        "when confidence is near-but-below the directional threshold "
+        "(about 0.60-0.74). Require at least 2 aligned sources and "
+        "edge_probability around gate-minus-0.05 or better."
     ),
 }
 
@@ -365,7 +376,7 @@ def get_quality_escalation_rules(timeframe: str) -> str:
                 "- Ensure every thesis is specific and causal, not generic"
             )
         return ""
-    except (ImportError, AttributeError, TypeError, ValueError):
+    except Exception:  # noqa: BLE001 - Langfuse quality lookups must never block prompt generation
         return ""
 
 
@@ -627,7 +638,7 @@ def get_decision_prompts(
             _check_unresolved_placeholders(system, "system")
             _check_unresolved_placeholders(user, "user")
             return (system, user)
-        except (ConnectionError, OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - missing prompts or auth issues should fall back cleanly
             logger.warning("Langfuse prompt fetch failed — using YAML fallback: %s", exc)
 
     # ── Fallback to built-in templates ───────────────────────────

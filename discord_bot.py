@@ -25,12 +25,16 @@ import sys
 import threading
 import time
 from collections import Counter
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
+from constants import get_market_hours_status, is_early_close, is_holiday
 from log_config import configure_logging
+from redis_client import get_redis
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -49,6 +53,7 @@ _scan_lock = threading.Lock()
 
 # Graceful shutdown event
 _shutdown = threading.Event()
+_ET = ZoneInfo("America/New_York")
 
 # Shared HTTP client (reused across all calls)
 _http_client: httpx.Client | None = None
@@ -253,6 +258,10 @@ def _handle_command(content: str, channel_id: str) -> None:
     elif cmd == "!last":
         _send_last_alert(channel_id)
 
+    elif cmd == "!session":
+        _send_message(channel_id, "📊 Building session report...")
+        _send_message(channel_id, _build_session_report())
+
     elif cmd == "!help":
         _send_message(
             channel_id,
@@ -261,9 +270,152 @@ def _handle_command(content: str, channel_id: str) -> None:
             "`!scan 15m` — Run the 15m pipeline (explicit)\n"
             "`!scan 1h` — Run the 1h pipeline\n"
             "`!status` — Show pipeline health & Redis snapshot counts\n"
+            "`!session` — Show alert-rate and gate-rejection summary for the current/last session\n"
             "`!last` — Show most recent fired alert\n"
             "`!help` — Show this message",
         )
+
+
+def _previous_trading_day(start: date) -> date:
+    cursor = start - timedelta(days=1)
+    while cursor.weekday() >= 5 or is_holiday(cursor):
+        cursor -= timedelta(days=1)
+    return cursor
+
+
+def _session_window(now: datetime | None = None) -> tuple[str, datetime, datetime, date]:
+    now_et = (now or datetime.now(timezone.utc)).astimezone(_ET)
+
+    if now_et.weekday() >= 5 or is_holiday(now_et.date()):
+        session_date = _previous_trading_day(now_et.date())
+        label = "Last Completed Session"
+    else:
+        close_time = dt_time(13, 0) if is_early_close(now_et.date()) else dt_time(16, 0)
+        session_open = datetime.combine(now_et.date(), dt_time(9, 30), tzinfo=_ET)
+        session_close = datetime.combine(now_et.date(), close_time, tzinfo=_ET)
+        if now_et < session_open:
+            session_date = _previous_trading_day(now_et.date())
+            label = "Last Completed Session"
+        else:
+            session_date = now_et.date()
+            label = "Current Session So Far" if now_et < session_close else "Last Completed Session"
+
+    close_time = dt_time(13, 0) if is_early_close(session_date) else dt_time(16, 0)
+    start_et = datetime.combine(session_date, dt_time(9, 30), tzinfo=_ET)
+    end_et = datetime.combine(session_date, close_time, tzinfo=_ET)
+    return label, start_et.astimezone(timezone.utc), end_et.astimezone(timezone.utc), session_date
+
+
+def _format_gate_counts(stats: dict[str, str]) -> str:
+    gate_counts: list[tuple[str, int]] = []
+    for key, value in stats.items():
+        if not key.startswith("gate_"):
+            continue
+        try:
+            gate_counts.append((key.removeprefix("gate_"), int(value)))
+        except ValueError:
+            continue
+    if not gate_counts:
+        return "none"
+    gate_counts.sort(key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{name}={count}" for name, count in gate_counts[:5])
+
+
+def _session_stats(timeframe: str, session_date: date) -> dict[str, str]:
+    try:
+        redis_client = get_redis()
+        return redis_client.hgetall(f"session:stats:{session_date.isoformat()}:{timeframe}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to read session stats from Redis: %s", exc)
+        return {}
+
+
+def _build_session_report() -> str:
+    try:
+        import psycopg2
+
+        label, start_utc, end_utc, session_date = _session_window()
+        db_url = os.getenv("DATABASE_URL", "")
+        if not db_url:
+            return "❌ DATABASE_URL not set — cannot build session report"
+
+        conn = psycopg2.connect(db_url, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total,
+                        SUM(CASE WHEN direction = 'LONG' THEN 1 ELSE 0 END) AS longs,
+                        SUM(CASE WHEN direction = 'SHORT' THEN 1 ELSE 0 END) AS shorts,
+                        SUM(CASE WHEN direction = 'WATCH' THEN 1 ELSE 0 END) AS watches
+                    FROM alerts
+                    WHERE created_at >= %s AND created_at < %s
+                    """,
+                    (start_utc, end_utc),
+                )
+                totals = cur.fetchone() or (0, 0, 0, 0)
+
+                cur.execute(
+                    """
+                    SELECT timeframe, COUNT(*)
+                    FROM alerts
+                    WHERE created_at >= %s AND created_at < %s
+                    GROUP BY timeframe
+                    ORDER BY timeframe
+                    """,
+                    (start_utc, end_utc),
+                )
+                timeframe_rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        timeframe_counts = {tf: count for tf, count in timeframe_rows}
+        lines = [
+            f"**{label}**",
+            f"Session: {session_date.isoformat()} ET",
+            f"Market: {get_market_hours_status()}",
+            f"Alerts: **{totals[0]}** total | LONG {totals[1] or 0} | SHORT {totals[2] or 0} | WATCH {totals[3] or 0}",
+        ]
+        if timeframe_counts:
+            lines.append(
+                "By timeframe: " + ", ".join(f"{tf}={count}" for tf, count in sorted(timeframe_counts.items()))
+            )
+
+        total_runs = 0
+        for timeframe in ("15m", "1h"):
+            stats = _session_stats(timeframe, session_date)
+            if not stats:
+                lines.append(f"{timeframe}: no decision telemetry yet")
+                continue
+
+            runs = int(stats.get("decision_runs", "0") or 0)
+            total_runs += runs
+            llm_candidates = int(stats.get("llm_candidates", "0") or 0)
+            alerts_passed = int(stats.get("alerts_passed", "0") or 0)
+            alerts_rejected = int(stats.get("alerts_rejected", "0") or 0)
+            watch_kept = int(stats.get("watch_kept", "0") or 0)
+            watch_dropped_directional_present = int(
+                stats.get("gate_watch_dropped_directional_present", "0") or 0
+            )
+            watch_cap_rejections = int(stats.get("gate_watch_cap", "0") or 0)
+            alert_rate = (alerts_passed / runs) if runs else 0.0
+            pass_rate = (alerts_passed / llm_candidates) if llm_candidates else 0.0
+            lines.append(
+                f"{timeframe}: runs={runs} | llm_candidates={llm_candidates} | passed={alerts_passed} | rejected={alerts_rejected} | alerts/run={alert_rate:.2f} | pass_rate={pass_rate:.0%}"
+            )
+            lines.append(
+                f"{timeframe} watch: kept={watch_kept} | dropped_directional_present={watch_dropped_directional_present} | cap_rejections={watch_cap_rejections}"
+            )
+            lines.append(f"{timeframe} top rejections: {_format_gate_counts(stats)}")
+
+        if totals[0] and total_runs == 0:
+            lines.append("Note: alerts exist for this session, but gate telemetry started after the latest deploy/restart.")
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to build session report: %s", exc)
+        return f"❌ Could not build session report: {exc}"
 
 
 def _send_last_alert(channel_id: str) -> None:

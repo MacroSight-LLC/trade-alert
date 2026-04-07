@@ -31,7 +31,15 @@ COPY scripts/mcp_servers/__init__.py /app/mcp_servers/__init__.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY log_config.py /app/log_config.py
 
-RUN useradd -r -s /bin/false appuser
+RUN useradd -m -r -d /home/appuser -s /bin/false appuser \
+    && mkdir -p /home/appuser/.cache/huggingface /home/appuser/.cache/torch \
+    && chown -R appuser:appuser /home/appuser
+
+ENV HOME=/home/appuser
+ENV XDG_CACHE_HOME=/home/appuser/.cache
+ENV HF_HOME=/home/appuser/.cache/huggingface
+ENV TORCH_HOME=/home/appuser/.cache/torch
+
 USER appuser
 
 EXPOSE 8012

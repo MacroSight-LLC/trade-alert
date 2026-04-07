@@ -61,25 +61,65 @@ steps:
       fallback_equities_str = os.environ.get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
       fallback_equities = [s.strip() for s in fallback_equities_str.split(",")]
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      min_close = float(os.environ.get("UNIVERSE_POLYGON_MIN_CLOSE", "5.0"))
+      min_dollar_volume = float(os.environ.get("UNIVERSE_POLYGON_MIN_DOLLAR_VOLUME", "10000000"))
 
       equity_symbols = set()
+      screen_symbols = set()
+      polygon_kept = 0
+      polygon_filtered_low_price = 0
+      polygon_filtered_low_dollar_volume = 0
+      polygon_missing_price = 0
       for item in steps["fetch-equity-screen"].get("results", []):
           sym = item.get("symbol") or item.get("ticker")
           if sym:
-              equity_symbols.add(sym.upper())
+              sym = sym.upper()
+              equity_symbols.add(sym)
+              screen_symbols.add(sym)
       for item in steps["fetch-polygon-volume-leaders"].get("results", []):
           sym = item.get("symbol") or item.get("ticker")
-          if sym:
-              equity_symbols.add(sym.upper())
+          if not sym:
+            continue
+
+          close = item.get("close")
+          volume = item.get("volume") or 0
+          if close is None:
+            polygon_missing_price += 1
+            continue
+
+          close = float(close)
+          dollar_volume = close * float(volume)
+          if close < min_close:
+            polygon_filtered_low_price += 1
+            continue
+          if dollar_volume < min_dollar_volume:
+            polygon_filtered_low_dollar_volume += 1
+            continue
+
+          equity_symbols.add(sym.upper())
+          polygon_kept += 1
       equity_list = sorted(equity_symbols)[:50]
+      used_fallback = False
 
       if len(equity_list) < 5:
           cached = r.get("universe:equities")
           equity_list = json.loads(cached) if cached else fallback_equities
+          used_fallback = True
 
       r.setex("universe:equities", snapshot_ttl, json.dumps(equity_list))
 
-      result = {"n_equities": len(equity_list)}
+      result = {
+          "n_equities": len(equity_list),
+          "screen_symbols": len(screen_symbols),
+          "polygon_raw": len(steps["fetch-polygon-volume-leaders"].get("results", [])),
+          "polygon_kept": polygon_kept,
+          "polygon_filtered_low_price": polygon_filtered_low_price,
+          "polygon_filtered_low_dollar_volume": polygon_filtered_low_dollar_volume,
+          "polygon_missing_price": polygon_missing_price,
+          "used_fallback": used_fallback,
+          "min_close": min_close,
+          "min_dollar_volume": min_dollar_volume,
+        }
 
   # Step 5 -- Produce signal snapshots from Polygon top movers + insider activity
   # SSOT S7: market_normalizer scores 24h movers as supplementary TA signals
@@ -145,7 +185,23 @@ steps:
       bsu = steps.get("build-and-store-universes") or {}
       ne = bsu.get("n_equities", 0)
       ns = (steps.get("normalize-market-signals") or {}).get("n_snapshots", 0)
-      logging.getLogger(__name__).info("Universe built: %d equities, %d market signal snapshots", ne, ns)
+      logging.getLogger(__name__).info(
+        "Universe built: %d equities, %d market signal snapshots",
+        ne,
+        ns,
+      )
+      logging.getLogger(__name__).info(
+        "Universe filter summary: screen=%d polygon_raw=%d polygon_kept=%d filtered_low_price=%d filtered_low_dollar_volume=%d missing_price=%d fallback=%s min_close=%.2f min_dollar_volume=%.0f",
+        bsu.get("screen_symbols", 0),
+        bsu.get("polygon_raw", 0),
+        bsu.get("polygon_kept", 0),
+        bsu.get("polygon_filtered_low_price", 0),
+        bsu.get("polygon_filtered_low_dollar_volume", 0),
+        bsu.get("polygon_missing_price", 0),
+        bsu.get("used_fallback", False),
+        bsu.get("min_close", 0.0),
+        bsu.get("min_dollar_volume", 0.0),
+      )
       result = f"Universe built: {ne} equities, {ns} market signal snapshots"
 
 error_handling:

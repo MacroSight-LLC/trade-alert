@@ -80,3 +80,15 @@ def normalize_score(score: float, lo: float, hi: float) -> float:
     if span == 0:
         return 0.0
     return clamp(2.0 * (score - lo) / span - 1.0, -1.0, 1.0)
+
+
+def normalize_forecast(raw_results: dict, *, timeframe: str):
+    """Normalize TimesFM forecast results via the forecast normalizer.
+
+    This wrapper exists so workflow code blocks can import a forecast
+    normalizer through the whitelisted ``normalizers`` package entrypoint
+    rather than importing a submodule directly.
+    """
+    from normalizers.forecast_normalizer import normalize
+
+    return normalize(raw_results, timeframe=timeframe)

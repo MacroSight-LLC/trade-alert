@@ -19,7 +19,7 @@
 | **Signal types (11)** | `technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`, `options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`, `catalyst_event`, `short_interest`, `price_forecast`                |
 | **Infra**             | Redis (snapshot queues), Postgres (alert logging), Vault (secrets, file backend), Langfuse (prompt mgmt + tracing), Prometheus + Grafana (metrics)                                                                   |
 | **Output**            | Discord embeds with mplfinance candlestick charts, EMA/ATR overlays, confidence color-coding, historical win-rate stats, tiered channel routing                                                                      |
-| **Ops**               | Discord bot (`!scan`, `!status`, `!last`), cron scheduler, analytics dashboard (:8080), Prometheus (:9090) + Grafana (:3001) monitoring, pg-backup (daily pg_dump)                                                   |
+| **Ops**               | Discord bot (`!scan`, `!status`, `!last`, `!session`), cron scheduler, analytics dashboard (:8080), Prometheus (:9090) + Grafana (:3001) monitoring, pg-backup (daily pg_dump)                                                   |
 
 **24 containers total** — all orchestrated via `docker-compose.prod.yml`.
 
@@ -86,7 +86,7 @@ pytest tests/unit/ -q   # 620+ tests
 | `db.py`                  | Postgres connection pool, insert/update/query for alerts       |
 | `prompt_manager.py`      | Langfuse-first prompt loading with 300s cache + YAML fallback  |
 | `decision_helpers.py`    | Snapshot merging, quality scoring, dataset capture helpers      |
-| `discord_bot.py`         | Discord ops bot (`!scan`, `!status`, `!last`, `!help`)         |
+| `discord_bot.py`         | Discord ops bot (`!scan`, `!status`, `!last`, `!session`, `!help`)         |
 | `healthcheck.py`         | Redis/Postgres/MCP health checks + JSONL logging               |
 | `outcome_tracker.py`     | Resolves open alerts via Polygon/Finnhub/TimesFM price polling |
 | `alert_quality.py`       | Per-alert quality scoring (5 sub-scores) with calibration      |
