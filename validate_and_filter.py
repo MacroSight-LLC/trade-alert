@@ -134,6 +134,113 @@ _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.10"))
 
+# Dynamic gate controls (regime + timeframe overlays)
+_DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
+_REGIME_CHOPPY_EP_BUMP: float = float(os.environ.get("REGIME_CHOPPY_EP_BUMP", "0.03"))
+_REGIME_CHOPPY_CONF_BUMP: float = float(os.environ.get("REGIME_CHOPPY_CONF_BUMP", "0.03"))
+_REGIME_CHOPPY_SA_BUMP: int = int(os.environ.get("REGIME_CHOPPY_SA_BUMP", "1"))
+_REGIME_TRENDING_EP_REDUCE: float = float(os.environ.get("REGIME_TRENDING_EP_REDUCE", "0.01"))
+_REGIME_TRENDING_CONF_REDUCE: float = float(os.environ.get("REGIME_TRENDING_CONF_REDUCE", "0.01"))
+_TF_EP_OFFSET_15M: float = float(os.environ.get("TF_EP_OFFSET_15M", "0.00"))
+_TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
+_TF_CONF_OFFSET_15M: float = float(os.environ.get("TF_CONF_OFFSET_15M", "0.00"))
+_TF_CONF_OFFSET_1H: float = float(os.environ.get("TF_CONF_OFFSET_1H", "0.00"))
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    n = len(vals)
+    mid = n // 2
+    if n % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2.0
+
+
+def _rr(alert: PlaybookAlert) -> float:
+    risk = abs(alert.entry["level"] - alert.entry["stop"])
+    if risk <= 0:
+        return 0.0
+    reward = abs(alert.entry["target"] - alert.entry["level"])
+    return reward / risk
+
+
+def _candidate_distribution(alerts: list[PlaybookAlert]) -> dict[str, float]:
+    return {
+        "count": float(len(alerts)),
+        "median_ep": _median([a.edge_probability for a in alerts]),
+        "median_conf": _median([a.confidence for a in alerts]),
+        "median_rr": _median([_rr(a) for a in alerts]),
+        "median_sa": _median([float(a.sources_agree) for a in alerts]),
+    }
+
+
+def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
+    bulls = 0
+    bears = 0
+    strengths: list[float] = []
+    for snap in snaps:
+        for sig in snap.get("signals", []):
+            st = sig.get("type", "")
+            try:
+                sc = float(sig.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if st in ("technical_trend", "sentiment_bull", "options_flow", "relative_strength") and sc > 0:
+                bulls += 1
+                strengths.append(min(abs(sc) / 3.0, 1.0))
+            elif st in ("sentiment_bear", "macro_risk_off") or (
+                st in ("technical_trend", "options_flow", "relative_strength") and sc < 0
+            ):
+                bears += 1
+                strengths.append(min(abs(sc) / 3.0, 1.0))
+    trend_strength = sum(strengths) / len(strengths) if strengths else 0.0
+    return bulls, bears, trend_strength
+
+
+def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_strength: float) -> str:
+    total = bulls + bears
+    bull_ratio = (bulls / total) if total else 0.5
+    if vix > 30:
+        return "extreme"
+    if risk_off and vix >= 25:
+        return "risk_off_high_vix"
+    if trend_strength < 0.35 or (0.45 <= bull_ratio <= 0.55):
+        return "choppy"
+    if bull_ratio > 0.55 and not risk_off:
+        return "trending_up"
+    if bull_ratio < 0.45 and risk_off:
+        return "trending_down"
+    return "neutral"
+
+
+def _dynamic_gates(base_ep: float, base_sa: int, base_conf: float, timeframe: str, regime: str) -> tuple[float, int, float]:
+    ep = base_ep
+    sa = base_sa
+    conf = base_conf
+    if not _DYNAMIC_GATES_ENABLED:
+        return ep, sa, conf
+    if regime == "choppy":
+        ep += _REGIME_CHOPPY_EP_BUMP
+        sa += _REGIME_CHOPPY_SA_BUMP
+        conf += _REGIME_CHOPPY_CONF_BUMP
+    elif regime in ("trending_up", "trending_down"):
+        ep -= _REGIME_TRENDING_EP_REDUCE
+        conf -= _REGIME_TRENDING_CONF_REDUCE
+
+    if timeframe == "15m":
+        ep += _TF_EP_OFFSET_15M
+        conf += _TF_CONF_OFFSET_15M
+    elif timeframe == "1h":
+        ep += _TF_EP_OFFSET_1H
+        conf += _TF_CONF_OFFSET_1H
+
+    ep = min(max(ep, 0.50), 0.95)
+    sa = max(sa, 1)
+    conf = min(max(conf, 0.50), 0.99)
+    return ep, sa, conf
+
 
 def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
     now_utc = now or datetime.now(timezone.utc)
@@ -369,14 +476,27 @@ def validate_and_filter(
         macro_risk_off_score = 0.0
 
     risk_off = not macro.get("risk_on", True)
-    ep_gate = _GATE_EP.get(timeframe, 0.70)
+    base_ep_gate = _GATE_EP.get(timeframe, 0.70)
+    base_sa_gate = _GATE_SA
+    base_conf_gate = _GATE_CONF
 
     # ── VIX safety: treat NaN/Inf as conservative high-VIX ──────
     if not math.isfinite(vix):
         logger.warning("VIX value non-finite (%.4f), treating as 35.0", vix)
         vix = 35.0
 
+    bulls, bears, trend_strength = _signal_surface(parsed_snaps)
+    regime = _classify_regime(vix, risk_off, bulls, bears, trend_strength)
+    ep_gate, sa_gate, conf_gate = _dynamic_gates(
+        base_ep_gate,
+        base_sa_gate,
+        base_conf_gate,
+        timeframe,
+        regime,
+    )
+
     alerts: list[PlaybookAlert] = []
+    candidates: list[PlaybookAlert] = []
     rejections: list[tuple[str, GateRejection]] = []
 
     for item in raw:
@@ -397,6 +517,8 @@ def validate_and_filter(
             )
             rejections.append((alert.symbol, GateRejection.TIMEFRAME_INVALID))
             continue
+
+        candidates.append(alert)
 
         # ── Entry-order validation (Gate 0) ──────────────────────
         # LONG must have stop < level < target.
@@ -576,21 +698,21 @@ def validate_and_filter(
                 )
                 rejections.append((alert.symbol, GateRejection.EP_THRESHOLD))
                 continue
-            if alert.sources_agree < _GATE_SA:
+            if alert.sources_agree < sa_gate:
                 logger.info(
                     "Alert filtered (SA): %s sa=%d < gate=%d",
                     alert.symbol,
                     alert.sources_agree,
-                    _GATE_SA,
+                    sa_gate,
                 )
                 rejections.append((alert.symbol, GateRejection.SA_THRESHOLD))
                 continue
-            if alert.confidence < _GATE_CONF:
+            if alert.confidence < conf_gate:
                 logger.info(
                     "Alert filtered (CONF): %s conf=%.2f < gate=%.2f",
                     alert.symbol,
                     alert.confidence,
-                    _GATE_CONF,
+                    conf_gate,
                 )
                 rejections.append((alert.symbol, GateRejection.CONF_THRESHOLD))
                 continue
@@ -718,7 +840,7 @@ def validate_and_filter(
             if _vol_score < _VOLUME_CONFIRM_SCORE:
                 alert.confidence = max(alert.confidence - _VOLUME_CONFIRM_PENALTY, 0.0)
                 # Re-check confidence gate after downgrade
-                if alert.confidence < _GATE_CONF:
+                if alert.confidence < conf_gate:
                     logger.info(
                         "Volume unconfirmed: %s %s (vol_score=%.2f < %.2f) "
                         "conf downgraded to %.2f < gate %.2f",
@@ -727,7 +849,7 @@ def validate_and_filter(
                         _vol_score,
                         _VOLUME_CONFIRM_SCORE,
                         alert.confidence,
-                        _GATE_CONF,
+                        conf_gate,
                     )
                     rejections.append((alert.symbol, GateRejection.VOLUME_UNCONFIRMED))
                     continue
@@ -750,15 +872,44 @@ def validate_and_filter(
             rejections.append((w.symbol, GateRejection.WATCH_CAP))
         alerts = directional_alerts + kept_watches
 
+    pre_dist = _candidate_distribution(candidates)
+    post_dist = _candidate_distribution(alerts)
+
     logger.info(
-        "Decision-%s gate summary: llm_candidates=%d passed=%d rejected=%d ep_gate=%.2f sa_gate=%d conf_gate=%.2f",
+        "Decision-%s gate summary: llm_candidates=%d parsed_candidates=%d passed=%d rejected=%d "
+        "regime=%s trend_strength=%.2f breadth=%d/%d "
+        "ep_gate=%.2f(base=%.2f) sa_gate=%d(base=%d) conf_gate=%.2f(base=%.2f)",
         timeframe,
         len(raw),
+        len(candidates),
         len(alerts),
         len(rejections),
+        regime,
+        trend_strength,
+        bulls,
+        bears,
         ep_gate,
-        _GATE_SA,
-        _GATE_CONF,
+        base_ep_gate,
+        sa_gate,
+        base_sa_gate,
+        conf_gate,
+        base_conf_gate,
+    )
+    logger.info(
+        "Decision-%s candidate quality pre-gates: median_ep=%.2f median_conf=%.2f median_rr=%.2f median_sa=%.1f",
+        timeframe,
+        pre_dist["median_ep"],
+        pre_dist["median_conf"],
+        pre_dist["median_rr"],
+        pre_dist["median_sa"],
+    )
+    logger.info(
+        "Decision-%s candidate quality post-gates: median_ep=%.2f median_conf=%.2f median_rr=%.2f median_sa=%.1f",
+        timeframe,
+        post_dist["median_ep"],
+        post_dist["median_conf"],
+        post_dist["median_rr"],
+        post_dist["median_sa"],
     )
     logger.info("Decision-%s: %d alerts passed gates", timeframe, len(alerts))
 
@@ -783,6 +934,24 @@ def validate_and_filter(
             ),
         )
 
+    if len(alerts) == 0:
+        if len(raw) == 0:
+            no_alert_reason = "llm_zero_candidates"
+        elif len(candidates) == 0:
+            no_alert_reason = "all_candidates_invalid"
+        elif gate_samples:
+            top_gate = sorted(gate_samples.items(), key=lambda kv: (-len(kv[1]), kv[0]))[0]
+            no_alert_reason = f"gate_filtered:{top_gate[0]}"
+        else:
+            no_alert_reason = "no_actionable_candidates"
+        logger.info(
+            "Decision-%s no-alert summary: reason=%s parsed_candidates=%d llm_candidates=%d",
+            timeframe,
+            no_alert_reason,
+            len(candidates),
+            len(raw),
+        )
+
     watch_kept = sum(1 for a in alerts if a.direction == "WATCH")
     _record_session_gate_metrics(timeframe, len(raw), len(alerts), watch_kept, rejections)
 
@@ -802,6 +971,42 @@ def validate_and_filter(
             "alerts_fired",
             float(len(alerts)),
             comment=f"{len(alerts)} alerts",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_ep_pre",
+            pre_dist["median_ep"],
+            comment="median edge_probability before gates",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_conf_pre",
+            pre_dist["median_conf"],
+            comment="median confidence before gates",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_rr_pre",
+            pre_dist["median_rr"],
+            comment="median R:R before gates",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_ep_post",
+            post_dist["median_ep"],
+            comment="median edge_probability after gates",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_conf_post",
+            post_dist["median_conf"],
+            comment="median confidence after gates",
+        )
+        add_score_fn(
+            trace_id,
+            "candidate_median_rr_post",
+            post_dist["median_rr"],
+            comment="median R:R after gates",
         )
         add_score_fn(
             trace_id,
