@@ -56,6 +56,7 @@ class GateRejection(str, Enum):
     WATCH_CONF_THRESHOLD = "watch_conf_threshold"
     WATCH_CAP = "watch_cap"
     WATCH_DROPPED_DIRECTIONAL_PRESENT = "watch_dropped_directional_present"
+    WATCH_DECAY = "watch_decay"
 
 
 # Valid alert timeframes
@@ -114,6 +115,9 @@ _WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
 _WATCH_SA_MIN: int = int(os.environ.get("WATCH_SA_MIN", "2"))
 _WATCH_CONF_MIN: float = float(os.environ.get("WATCH_CONF_MIN", "0.60"))
 _WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
+# WATCH decay: drop WATCH alerts that persist unresolved across N pipeline cycles
+_WATCH_DECAY_CYCLES: int = int(os.environ.get("WATCH_DECAY_CYCLES", "4"))
+_WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", str(60 * 60 * 24)))
 
 # Macro veto bypass thresholds (configurable)
 _MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))
@@ -240,6 +244,46 @@ def _dynamic_gates(base_ep: float, base_sa: int, base_conf: float, timeframe: st
     sa = max(sa, 1)
     conf = min(max(conf, 0.50), 0.99)
     return ep, sa, conf
+
+
+# ── WATCH cycle-decay helpers ────────────────────────────────────
+
+def _watch_decay_key(symbol: str, timeframe: str) -> str:
+    return f"watch:decay:{timeframe}:{symbol}"
+
+
+def _get_watch_cycles(symbol: str, timeframe: str) -> int:
+    """Return the number of consecutive pipeline cycles a WATCH has persisted."""
+    try:
+        val = get_redis().hget(_watch_decay_key(symbol, timeframe), "cycles")
+        return int(val) if val else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _incr_watch_cycles(symbol: str, timeframe: str, ep: float, conf: float) -> int:
+    """Increment the watch cycle counter. Returns the new cycle count."""
+    try:
+        r = get_redis()
+        key = _watch_decay_key(symbol, timeframe)
+        pipe = r.pipeline()
+        pipe.hincrby(key, "cycles", 1)
+        pipe.hset(key, mapping={"last_ep": str(ep), "last_conf": str(conf)})
+        pipe.expire(key, _WATCH_DECAY_TTL_SECONDS)
+        results = pipe.execute()
+        return int(results[0])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _reset_watch_cycles(symbols: list[str], timeframe: str) -> None:
+    """Delete watch-cycle state for symbols that graduated to a directional alert."""
+    try:
+        r = get_redis()
+        for sym in symbols:
+            r.delete(_watch_decay_key(sym, timeframe))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
@@ -857,20 +901,72 @@ def validate_and_filter(
         alerts.append(alert)
 
     # Keep WATCH output intentionally limited:
-    # - If directional alerts exist, drop WATCH alerts for this run.
-    # - Otherwise cap WATCH alerts to _WATCH_MAX_PER_RUN by quality.
+    # - If directional alerts exist, drop all WATCH alerts for this run.
+    # - Otherwise rank WATCH candidates by composite score (ep × conf),
+    #   apply stale-cycle decay filter, then cap to _WATCH_MAX_PER_RUN.
     directional_alerts = [a for a in alerts if a.direction in ("LONG", "SHORT")]
     watch_alerts = [a for a in alerts if a.direction == "WATCH"]
     if directional_alerts and watch_alerts:
         for w in watch_alerts:
             rejections.append((w.symbol, GateRejection.WATCH_DROPPED_DIRECTIONAL_PRESENT))
+        watch_alerts = []
         alerts = directional_alerts
-    elif len(watch_alerts) > _WATCH_MAX_PER_RUN:
+    else:
+        # Sort by composite quality score so the best candidate stays
         watch_alerts.sort(key=lambda a: a.edge_probability * a.confidence, reverse=True)
-        kept_watches = watch_alerts[:_WATCH_MAX_PER_RUN]
-        for w in watch_alerts[_WATCH_MAX_PER_RUN:]:
-            rejections.append((w.symbol, GateRejection.WATCH_CAP))
-        alerts = directional_alerts + kept_watches
+
+        # ── Log full ranked WATCH queue for observability ──────────
+        if watch_alerts:
+            ranked_lines = " | ".join(
+                f"#{i + 1} {a.symbol} ep={a.edge_probability:.2f} "
+                f"conf={a.confidence:.2f} score={a.edge_probability * a.confidence:.3f}"
+                for i, a in enumerate(watch_alerts)
+            )
+            logger.info(
+                "Decision-%s WATCH ranked queue (%d): %s",
+                timeframe,
+                len(watch_alerts),
+                ranked_lines,
+            )
+
+        # ── Stale-cycle decay filter ───────────────────────────────
+        # Drop any WATCH that has been kept unresolved for >= N cycles
+        # so stale setups do not crowd out fresh borderline candidates.
+        decay_kept: list[PlaybookAlert] = []
+        for w in watch_alerts:
+            cycles = _get_watch_cycles(w.symbol, timeframe)
+            if cycles >= _WATCH_DECAY_CYCLES:
+                logger.info(
+                    "WATCH_DECAY: %s stale across %d cycles "
+                    "(ep=%.2f conf=%.2f) – dropping",
+                    w.symbol,
+                    cycles,
+                    w.edge_probability,
+                    w.confidence,
+                )
+                rejections.append((w.symbol, GateRejection.WATCH_DECAY))
+            else:
+                decay_kept.append(w)
+        watch_alerts = decay_kept
+
+        # ── Cap to _WATCH_MAX_PER_RUN ──────────────────────────────
+        if len(watch_alerts) > _WATCH_MAX_PER_RUN:
+            for w in watch_alerts[_WATCH_MAX_PER_RUN:]:
+                rejections.append((w.symbol, GateRejection.WATCH_CAP))
+            watch_alerts = watch_alerts[:_WATCH_MAX_PER_RUN]
+
+        alerts = directional_alerts + watch_alerts
+
+    # ── Update Redis WATCH-cycle state ────────────────────────────
+    # Increment cycle count for each kept WATCH alert.
+    for w in [a for a in alerts if a.direction == "WATCH"]:
+        new_cycles = _incr_watch_cycles(w.symbol, timeframe, w.edge_probability, w.confidence)
+        logger.debug("WATCH_CYCLE_INCR: %s cycles=%d", w.symbol, new_cycles)
+    # Reset cycle state for symbols that graduated to a directional alert.
+    directional_symbols = [a.symbol for a in alerts if a.direction in ("LONG", "SHORT")]
+    if directional_symbols:
+        _reset_watch_cycles(directional_symbols, timeframe)
+        logger.debug("WATCH_CYCLE_RESET: %s", ", ".join(directional_symbols))
 
     pre_dist = _candidate_distribution(candidates)
     post_dist = _candidate_distribution(alerts)

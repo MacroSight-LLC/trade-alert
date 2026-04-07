@@ -399,13 +399,14 @@ def _build_session_report() -> str:
                 stats.get("gate_watch_dropped_directional_present", "0") or 0
             )
             watch_cap_rejections = int(stats.get("gate_watch_cap", "0") or 0)
+            watch_decay_rejections = int(stats.get("gate_watch_decay", "0") or 0)
             alert_rate = (alerts_passed / runs) if runs else 0.0
             pass_rate = (alerts_passed / llm_candidates) if llm_candidates else 0.0
             lines.append(
                 f"{timeframe}: runs={runs} | llm_candidates={llm_candidates} | passed={alerts_passed} | rejected={alerts_rejected} | alerts/run={alert_rate:.2f} | pass_rate={pass_rate:.0%}"
             )
             lines.append(
-                f"{timeframe} watch: kept={watch_kept} | dropped_directional_present={watch_dropped_directional_present} | cap_rejections={watch_cap_rejections}"
+                f"{timeframe} watch: kept={watch_kept} | dropped_directional_present={watch_dropped_directional_present} | cap_rejections={watch_cap_rejections} | decay_dropped={watch_decay_rejections}"
             )
             lines.append(f"{timeframe} top rejections: {_format_gate_counts(stats)}")
 
