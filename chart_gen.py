@@ -127,7 +127,7 @@ def generate_chart(
     symbol: str,
     timeframe: str,
     entry: dict[str, float],
-) -> tuple[bytes | None, float | None]:
+) -> tuple[bytes | None, float | None, float | None, str | None]:
     """Generate a candlestick chart PNG with entry/stop/target overlays and EMAs.
 
     Args:
@@ -136,17 +136,24 @@ def generate_chart(
         entry: Dict with keys ``level``, ``stop``, ``target`` (all floats).
 
     Returns:
-        Tuple of (PNG image bytes or None, 14-period ATR value or None).
+        Tuple of:
+          - PNG image bytes or None
+          - 14-period ATR value or None
+          - Most recent close price from fetched candles or None
+          - ISO timestamp for most recent close or None
     """
     df = _fetch_candles(symbol, timeframe)
     if df.empty:
-        return None, None
+        return None, None, None, None
+
+    latest_price = float(df["Close"].iloc[-1])
+    latest_ts = pd.Timestamp(df.index[-1]).isoformat()
 
     try:
         import mplfinance as mpf
     except ImportError:
         logger.warning("mplfinance not installed — skipping chart generation")
-        return None, None
+        return None, None, latest_price, latest_ts
 
     entry_price = entry.get("level", 0)
     stop_price = entry.get("stop", 0)
@@ -273,7 +280,7 @@ def generate_chart(
         chart_bytes = buf.getvalue()
     except Exception as exc:  # noqa: BLE001 — chart is cosmetic; rendering failure must not block alert delivery
         logger.warning("Chart rendering failed for %s: %s", symbol, exc)
-        return None, atr_value
+        return None, atr_value, latest_price, latest_ts
     finally:
         if fig is not None:
             import matplotlib.pyplot as plt
@@ -284,4 +291,4 @@ def generate_chart(
     logger.info(
         "Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0
     )
-    return chart_bytes, atr_value
+    return chart_bytes, atr_value, latest_price, latest_ts

@@ -332,7 +332,13 @@ def _route_channel_for_alert(alert: PlaybookAlert) -> str | None:
     return None
 
 
-def format_embed(alert: PlaybookAlert, *, hist_stats: str = "") -> dict:
+def format_embed(
+    alert: PlaybookAlert,
+    *,
+    hist_stats: str = "",
+    current_price: float | None = None,
+    current_price_ts: str | None = None,
+) -> dict:
     """Format a PlaybookAlert as a rich Discord embed payload.
 
     Produces a visually dense, multi-section embed with:
@@ -364,6 +370,41 @@ def format_embed(alert: PlaybookAlert, *, hist_stats: str = "") -> dict:
     target_price = alert.entry.get("target", 0)
     risk_per_share = abs(entry_price - stop_price)
     reward_per_share = abs(target_price - entry_price)
+
+    # Current price context (from latest fetched candle, when available)
+    delta_vs_entry: float | None = None
+    delta_vs_entry_pct: float | None = None
+    if current_price is not None and entry_price > 0:
+        delta_vs_entry = current_price - entry_price
+        delta_vs_entry_pct = (delta_vs_entry / entry_price) * 100.0
+
+    if current_price is None or delta_vs_entry is None or delta_vs_entry_pct is None:
+        current_price_field = "_Unavailable_"
+    else:
+        if alert.direction == "LONG":
+            favorable = delta_vs_entry >= 0
+        elif alert.direction == "SHORT":
+            favorable = delta_vs_entry <= 0
+        else:
+            favorable = None
+
+        if favorable is None:
+            delta_emoji = "⚪"
+        else:
+            delta_emoji = "🟢" if favorable else "🔴"
+
+        delta_sign = "+" if delta_vs_entry >= 0 else ""
+        pct_sign = "+" if delta_vs_entry_pct >= 0 else ""
+        current_price_field = (
+            f"**${current_price:,.2f}**\n"
+            f"{delta_emoji} {delta_sign}${delta_vs_entry:,.2f} ({pct_sign}{delta_vs_entry_pct:.2f}%) vs entry"
+        )
+        if current_price_ts:
+            try:
+                ts_fmt = datetime.fromisoformat(current_price_ts).astimezone(timezone.utc).strftime("%H:%M UTC")
+            except ValueError:
+                ts_fmt = current_price_ts
+            current_price_field += f"\nAs of: {ts_fmt}"
 
     # Historical win-rate context (pre-fetched by caller or per-alert fallback)
     if not hist_stats:
@@ -412,6 +453,11 @@ def format_embed(alert: PlaybookAlert, *, hist_stats: str = "") -> dict:
         {
             "name": "\U0001f3c6 Target",
             "value": f"```${target_price:,.2f}```",
+            "inline": True,
+        },
+        {
+            "name": "📍 Current Price",
+            "value": current_price_field,
             "inline": True,
         },
         {
@@ -821,6 +867,8 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
     batch_stats = _batch_similar_alert_stats(valid_alerts)
     chart_map: dict[str, bytes | None] = {}
     atr_map: dict[str, float | None] = {}
+    current_price_map: dict[str, float | None] = {}
+    current_price_ts_map: dict[str, str | None] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         future_to_sym = {
             pool.submit(generate_chart, alert.symbol, alert.timeframe, alert.entry): alert.symbol
@@ -829,19 +877,25 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         for future in concurrent.futures.as_completed(future_to_sym):
             sym = future_to_sym[future]
             try:
-                chart_bytes, atr_val = future.result()
+                chart_bytes, atr_val, current_price, current_price_ts = future.result()
                 chart_map[sym] = chart_bytes
                 atr_map[sym] = atr_val
+                current_price_map[sym] = current_price
+                current_price_ts_map[sym] = current_price_ts
             except Exception as exc:
                 logger.warning("Chart generation failed for %s: %s", sym, exc)
                 chart_map[sym] = None
                 atr_map[sym] = None
+                current_price_map[sym] = None
+                current_price_ts_map[sym] = None
 
     for alert in valid_alerts:
         try:
             embed = format_embed(
                 alert,
                 hist_stats=batch_stats.get(f"{alert.symbol}:{alert.direction}", ""),
+                current_price=current_price_map.get(alert.symbol),
+                current_price_ts=current_price_ts_map.get(alert.symbol),
             )
             chart_png = chart_map.get(alert.symbol)
             atr_val = atr_map.get(alert.symbol)
