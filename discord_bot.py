@@ -209,6 +209,7 @@ def _get_status() -> str:
         8009: "FRED",
         8010: "SpamShield",
         8011: "Alpaca",
+        8012: "TimesFM",
     }
     for port, name in mcp_ports.items():
         host = name.lower().replace(" ", "-") + "-mcp"
