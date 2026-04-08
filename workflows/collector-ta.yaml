@@ -33,7 +33,8 @@ steps:
 
   # Step 2 -- TradingView ta_scan for equities (15m), batched to respect MCP cap
   # NOTE: tradingview.py caps at 8 symbols per call (symbols[:8]).
-  # We split the universe into 8-symbol batches so symbols 11-50 are not dropped.
+  # We split into a limited number of 8-symbol batches to widen coverage
+  # while avoiding TradingView timeout/rate-limit saturation.
   - name: fetch-tv-ta-batches
     type: parallel_tool_calls
     abort_on_failure: false
@@ -47,31 +48,6 @@ steps:
         method: ta_scan
         params:
           symbols: "{{ steps['read-universes']['equities'][8:16] }}"
-          timeframe: "15m"
-      - tool: tradingview-mcp
-        method: ta_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][16:24] }}"
-          timeframe: "15m"
-      - tool: tradingview-mcp
-        method: ta_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][24:32] }}"
-          timeframe: "15m"
-      - tool: tradingview-mcp
-        method: ta_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][32:40] }}"
-          timeframe: "15m"
-      - tool: tradingview-mcp
-        method: ta_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][40:48] }}"
-          timeframe: "15m"
-      - tool: tradingview-mcp
-        method: ta_scan
-        params:
-          symbols: "{{ steps['read-universes']['equities'][48:56] }}"
           timeframe: "15m"
 
   # Step 3 -- trading-mcp screen for fundamental context on equities only
@@ -99,45 +75,45 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
-        # Aggregated ta_scan batches from fetch-tv-ta-batches.
-        # Each result contains both RSI and BB fields per symbol.
-        raw_eq_ta_batches = steps.get("fetch-tv-ta-batches") or []
+      # Aggregated ta_scan batches from fetch-tv-ta-batches.
+      # Each result contains both RSI and BB fields per symbol.
+      raw_eq_ta_batches = steps.get("fetch-tv-ta-batches") or []
 
-        raw_eq_ta_items = []
-        for batch in raw_eq_ta_batches:
+      raw_eq_ta_items = []
+      for batch in raw_eq_ta_batches:
           if isinstance(batch, dict):
-            raw_eq_ta_items.extend(batch.get("results", []) or [])
+              raw_eq_ta_items.extend(batch.get("results", []) or [])
 
       n_pushed = 0
       for timeframe in ["15m", "1h"]:
           merged = {}
 
-            # Merge TA results (equities)
-            for item in raw_eq_ta_items:
+          # Merge TA results (equities)
+          for item in raw_eq_ta_items:
               sym = item.get("symbol", "")
               if not sym:
-                continue
+                  continue
               merged.setdefault(sym, {"indicators": {}, "patterns": []})
 
               # Bollinger data
               bb_pos = item.get("bb_position")
               squeeze = item.get("squeeze")
               if bb_pos is not None:
-                merged[sym]["indicators"]["bb_position"] = bb_pos
-                merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
+                  merged[sym]["indicators"]["bb_position"] = bb_pos
+                  merged[sym]["indicators"]["bb_width"] = round(abs(bb_pos - 0.5) * 2, 4)
               if squeeze is not None:
-                merged[sym]["indicators"]["bb_squeeze"] = squeeze
-                if squeeze and "bb_squeeze" not in merged[sym]["patterns"]:
-                  merged[sym]["patterns"].append("bb_squeeze")
+                  merged[sym]["indicators"]["bb_squeeze"] = squeeze
+                  if squeeze and "bb_squeeze" not in merged[sym]["patterns"]:
+                      merged[sym]["patterns"].append("bb_squeeze")
 
               # RSI data
               rsi = item.get("rsi")
               if rsi is not None:
-                merged[sym]["indicators"]["rsi"] = rsi
-                merged[sym]["rating"] = round((rsi - 50) / 50 * 3, 2)
-                if rsi < 30 or rsi > 70:
-                  if "trend_change" not in merged[sym]["patterns"]:
-                    merged[sym]["patterns"].append("trend_change")
+                  merged[sym]["indicators"]["rsi"] = rsi
+                  merged[sym]["rating"] = round((rsi - 50) / 50 * 3, 2)
+                  if rsi < 30 or rsi > 70:
+                      if "trend_change" not in merged[sym]["patterns"]:
+                          merged[sym]["patterns"].append("trend_change")
 
           # Fallback: for symbols with BB data but no RSI, derive rating from bb_position
           for sym, data in merged.items():
