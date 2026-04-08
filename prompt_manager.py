@@ -162,6 +162,12 @@ Output format — a JSON array (may be empty []):
 [
   {
     "symbol": "AAPL",
+
+CRITICAL OUTPUT RULES:
+- Return ONLY raw JSON (the array above).
+- Do NOT wrap output in markdown/code fences.
+- Do NOT add any commentary, prefixes, or suffixes.
+- If no setup qualifies, return exactly: []
     "direction": "LONG",
     "edge_probability": 0.78,
     "confidence": 0.80,

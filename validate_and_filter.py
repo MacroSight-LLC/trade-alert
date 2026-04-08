@@ -452,7 +452,7 @@ def _get_volume_spike_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def validate_and_filter(
-    llm_response: str,
+    llm_response: Any,
     snapshots_json: str,
     macro: dict[str, Any],
     vix: float,
@@ -487,8 +487,41 @@ def validate_and_filter(
         Tuple of (list of passing PlaybookAlerts, JSON string of alerts).
     """
     # ── Parse LLM JSON ───────────────────────────────────────────
+    # Some providers return fenced markdown (```json ... ```) or wrap
+    # JSON in explanatory text. Extract the array payload defensively.
+    def _extract_json_array_text(payload: Any) -> str:
+        if isinstance(payload, str):
+            text = payload.strip()
+        elif isinstance(payload, list):
+            return json.dumps(payload)
+        elif isinstance(payload, dict):
+            content = payload.get("content")
+            if isinstance(content, str):
+                text = content.strip()
+            else:
+                return json.dumps(payload)
+        else:
+            text = str(payload or "").strip()
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        if not text.startswith("["):
+            start = text.find("[")
+            end = text.rfind("]")
+            if start != -1 and end > start:
+                text = text[start : end + 1]
+
+        return text
+
     try:
-        raw = json.loads(llm_response)
+        llm_json_text = _extract_json_array_text(llm_response)
+        raw = json.loads(llm_json_text)
         if not isinstance(raw, list):
             raise ValueError(f"Expected list, got {type(raw).__name__}")
     except Exception as e:

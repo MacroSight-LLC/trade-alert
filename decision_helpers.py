@@ -117,7 +117,7 @@ def build_prompt(
 
 def validate_and_filter_step(
     timeframe: str,
-    llm_response: str,
+    llm_response: Any,
     merge_result: dict[str, Any],
     fred_results: list[dict[str, Any]],
     trace_id: str | None,
@@ -126,7 +126,7 @@ def validate_and_filter_step(
 
     Args:
         timeframe: Pipeline timeframe.
-        llm_response: Raw LLM output string.
+        llm_response: Raw LLM output payload.
         merge_result: Output from :func:`merge_snapshots`.
         fred_results: FRED MCP results.
         trace_id: Langfuse trace ID (may be None).
