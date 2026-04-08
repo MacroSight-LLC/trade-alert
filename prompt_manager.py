@@ -167,7 +167,8 @@ CRITICAL OUTPUT RULES:
 - Return ONLY raw JSON (the array above).
 - Do NOT wrap output in markdown/code fences.
 - Do NOT add any commentary, prefixes, or suffixes.
-- If no setup qualifies, return exactly: []
+- If no LONG/SHORT qualifies, you MUST still check for the required WATCH fallback before returning [].
+- Return exactly [] ONLY when no LONG/SHORT qualifies AND no symbol satisfies the WATCH fallback rules.
     "direction": "LONG",
     "edge_probability": 0.78,
     "confidence": 0.80,
@@ -192,7 +193,7 @@ CRITICAL CHECKS before outputting each alert:
 
 {{few_shot_examples}}
 
-Return [] if no symbols meet ALL requirements.
+Return [] only if no symbols meet LONG/SHORT requirements and no symbol qualifies for the WATCH fallback.
 Return ONLY the JSON array. No other text."""
 
 # Per-timeframe extra rules injected into {{extra_rules}}

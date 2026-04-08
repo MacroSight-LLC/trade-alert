@@ -126,8 +126,8 @@ _MACRO_VETO_EP: float = float(os.environ.get("MACRO_VETO_EP", "0.90"))
 
 # VIX soft-gate bypass thresholds (configurable)
 _VIX_SOFT_THRESHOLD: float = float(os.environ.get("VIX_SOFT_THRESHOLD", "25.0"))
-_VIX_SOFT_SA: int = int(os.environ.get("VIX_SOFT_SA", "4"))
-_VIX_SOFT_EP: float = float(os.environ.get("VIX_SOFT_EP", "0.80"))
+_VIX_SOFT_SA: int = int(os.environ.get("VIX_SOFT_SA", "3"))
+_VIX_SOFT_EP: float = float(os.environ.get("VIX_SOFT_EP", "0.72"))
 
 # Forecast contradiction gate thresholds (configurable)
 _FORECAST_GATE_SCORE_THRESHOLD: float = float(os.environ.get("FORECAST_GATE_SCORE_THRESHOLD", "0.8"))
