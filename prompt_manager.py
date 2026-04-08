@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from constants import get_market_hours_status  # noqa: F811 — re-exported
-from langfuse_client import get_langfuse_client
+from langfuse_client import get_langfuse_client, register_langfuse_failure
 
 logger = logging.getLogger(__name__)
 
@@ -647,6 +647,7 @@ def get_decision_prompts(
             _check_unresolved_placeholders(user, "user")
             return (system, user)
         except Exception as exc:  # noqa: BLE001 - missing prompts or auth issues should fall back cleanly
+            register_langfuse_failure(exc)
             logger.warning("Langfuse prompt fetch failed — using YAML fallback: %s", exc)
 
     # ── Fallback to built-in templates ───────────────────────────

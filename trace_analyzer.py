@@ -14,7 +14,7 @@ import os
 from datetime import datetime, timezone
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
-from langfuse_client import get_langfuse_client
+from langfuse_client import get_langfuse_client, register_langfuse_failure
 from models import PlaybookAlert, TraceAnalysis
 from prompt_manager import get_prompt_version
 
@@ -90,6 +90,7 @@ def fetch_latest_trace(session_id: str) -> dict | None:
             "observations": obs_list,
         }
     except Exception as exc:  # noqa: BLE001
+        register_langfuse_failure(exc)
         logger.warning("Langfuse trace fetch failed: %s", exc)
         return None
 
@@ -243,6 +244,7 @@ def score_trace(trace_id: str, score: float, comment: str) -> None:
         )
         logger.info("Scored trace %s: %.2f", trace_id, score)
     except Exception as exc:  # noqa: BLE001
+        register_langfuse_failure(exc)
         logger.warning("Failed to score trace %s: %s", trace_id, exc)
 
 
@@ -300,6 +302,7 @@ def _check_alert_quality_scores(trace_id: str) -> list[str]:
                 if name == "llm_json_valid" and value is not None and value < 1.0:
                     issues.append("LLM produced invalid JSON — prompt compliance issue")
     except Exception as exc:  # noqa: BLE001
+        register_langfuse_failure(exc)
         logger.debug("Could not fetch quality scores for trace %s: %s", trace_id, exc)
 
     return issues

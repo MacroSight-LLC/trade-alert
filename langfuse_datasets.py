@@ -23,12 +23,24 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from langfuse_client import get_langfuse_client
+from langfuse_client import get_langfuse_client, register_langfuse_failure
 
 logger = logging.getLogger(__name__)
 
 DATASET_NAME = "decision-runs"
 GOLDEN_DATASET_NAME = "decision-golden"
+
+
+def _list_dataset_names(lf: Any) -> set[str] | None:
+    """Return visible dataset names, or ``None`` on API failure."""
+    try:
+        response = lf.api.datasets.list(page=1, limit=100)
+        data = getattr(response, "data", None) or []
+        return {str(item.name) for item in data if getattr(item, "name", None)}
+    except Exception as exc:  # noqa: BLE001 — Langfuse is optional; callers decide whether to continue
+        register_langfuse_failure(exc)
+        logger.warning("Failed to list Langfuse datasets: %s", exc)
+        return None
 
 
 def _ensure_dataset(lf: Any, name: str) -> bool:
@@ -41,17 +53,21 @@ def _ensure_dataset(lf: Any, name: str) -> bool:
     Returns:
         True if dataset exists or was created, False on error.
     """
-    try:
-        lf.get_dataset(name)
+    dataset_names = _list_dataset_names(lf)
+    if dataset_names is None:
+        return False
+
+    if name in dataset_names:
         return True
-    except Exception:
-        try:
-            lf.create_dataset(name=name, description=f"Auto-captured {name} for trade-alert")
-            logger.info("Created Langfuse dataset: %s", name)
-            return True
-        except Exception as exc:  # noqa: BLE001 — Langfuse is optional; any failure must not halt the pipeline
-            logger.warning("Failed to create dataset %s: %s", name, exc)
-            return False
+
+    try:
+        lf.create_dataset(name=name, description=f"Auto-captured {name} for trade-alert")
+        logger.info("Created Langfuse dataset: %s", name)
+        return True
+    except Exception as exc:  # noqa: BLE001 — Langfuse is optional; any failure must not halt the pipeline
+        register_langfuse_failure(exc)
+        logger.warning("Failed to create dataset %s: %s", name, exc)
+        return False
 
 
 def capture_decision_run(
@@ -135,6 +151,7 @@ def capture_decision_run(
             len(parsed_alerts),
         )
     except Exception as exc:  # noqa: BLE001 — dataset capture is best-effort; never block the pipeline
+        register_langfuse_failure(exc)
         logger.warning("Failed to capture dataset item: %s", exc)
 
 
@@ -166,6 +183,7 @@ def promote_to_golden(
         )
         logger.info("Promoted item %s to golden dataset", dataset_item_id)
     except Exception as exc:  # noqa: BLE001 — golden-set promotion is advisory; swallow all errors
+        register_langfuse_failure(exc)
         logger.warning("Failed to promote to golden dataset: %s", exc)
 
 
@@ -186,6 +204,10 @@ def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
     if lf is None:
         return []
 
+    dataset_names = _list_dataset_names(lf)
+    if dataset_names is None or GOLDEN_DATASET_NAME not in dataset_names:
+        return []
+
     try:
         dataset = lf.get_dataset(GOLDEN_DATASET_NAME)
         items = dataset.items or []
@@ -204,6 +226,7 @@ def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
                 )
         return examples
     except Exception as exc:  # noqa: BLE001 — few-shot fetch is optional; return empty on any error
+        register_langfuse_failure(exc)
         logger.debug("Golden dataset fetch failed (non-blocking): %s", exc)
         return []
 
@@ -301,5 +324,6 @@ def auto_promote_to_golden(
         )
         return True
     except Exception as exc:  # noqa: BLE001 — golden promotion is best-effort
+        register_langfuse_failure(exc)
         logger.warning("Auto-promote to golden dataset failed: %s", exc)
         return False

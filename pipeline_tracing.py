@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Generator
 
-from langfuse_client import get_langfuse_client
+from langfuse_client import get_langfuse_client, register_langfuse_failure
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,8 @@ def create_pipeline_trace(
             timeframe,
         )
         return trace_id
-    except (ConnectionError, OSError, ValueError, RuntimeError):
+    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+        register_langfuse_failure(exc)
         return None
 
 
@@ -111,6 +112,7 @@ def span_step(
             level=level,
         )
     except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+        register_langfuse_failure(exc)
         logger.warning("Failed to open span '%s': %s", name, exc)
 
     try:
@@ -127,6 +129,7 @@ def span_step(
                     metadata={"duration_s": round(elapsed, 3)},
                 )
             except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+                register_langfuse_failure(exc)
                 logger.warning("Failed to close span '%s': %s", name, exc)
 
         # Post per-step latency score for collector spans so Langfuse
@@ -169,6 +172,7 @@ def add_score(
         score_id = hashlib.sha256(f"{trace_id}:{name}".encode()).hexdigest()[:32]
         lf.score(id=score_id, trace_id=trace_id, name=name, value=value, comment=comment)
     except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+        register_langfuse_failure(exc)
         logger.warning("Failed to post score '%s' to trace %s: %s", name, trace_id, exc)
 
 
@@ -191,6 +195,7 @@ def tag_trace(trace_id: str | None, tags: list[str]) -> None:
     try:
         lf.trace(id=trace_id, tags=tags)
     except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+        register_langfuse_failure(exc)
         logger.warning("Failed to tag trace %s: %s", trace_id, exc)
 
 
@@ -222,4 +227,5 @@ def end_pipeline_trace(
         lf.flush()
         logger.info("Finalised pipeline trace %s", trace_id)
     except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
+        register_langfuse_failure(exc)
         logger.warning("Failed to finalise pipeline trace: %s", exc)

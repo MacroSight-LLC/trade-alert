@@ -21,6 +21,7 @@ import redis
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from constants import SNAPSHOT_KEY_PREFIX, SNAPSHOT_STALE_TTL_THRESHOLD, is_early_close, is_holiday
+from langfuse_client import get_langfuse_client, register_langfuse_failure
 from notifier_and_logger import send_ops_message
 from redis_client import get_redis as _get_redis
 
@@ -258,7 +259,11 @@ def check_langfuse() -> str:
     """Check Langfuse observability service connectivity.
 
     Sends HTTP GET to ``LANGFUSE_HOST/api/public/health``.
-    Returns ``"OK"`` on 200, ``"DEGRADED"`` on any failure.
+    Then performs a lightweight authenticated SDK call to verify runtime keys
+    are accepted by Langfuse.
+
+    Returns ``"OK"`` on successful transport + auth checks, ``"DEGRADED"``
+    on any failure.
     Langfuse is non-critical — a failure should never block alerts.
 
     Returns:
@@ -268,12 +273,27 @@ def check_langfuse() -> str:
     try:
         resp = httpx.get(url, timeout=5.0)
         if resp.status_code == 200:
-            logger.info("Healthcheck: Langfuse OK")
-            return "OK"
-        logger.warning("Healthcheck: Langfuse returned %d", resp.status_code)
-        return "DEGRADED"
+            logger.info("Healthcheck: Langfuse transport OK")
+        else:
+            logger.warning("Healthcheck: Langfuse returned %d", resp.status_code)
+            return "DEGRADED"
     except httpx.HTTPError as exc:
         logger.warning("Healthcheck: Langfuse unreachable — %s", exc)
+        return "DEGRADED"
+
+    # Runtime auth probe: catches key drift where /health is green but SDK calls fail with 401.
+    lf = get_langfuse_client()
+    if lf is None:
+        logger.warning("Healthcheck: Langfuse auth unavailable (client disabled)")
+        return "DEGRADED"
+
+    try:
+        lf.fetch_traces(session_id="orchestrator-15m", limit=1, order_by="timestamp.DESC")
+        logger.info("Healthcheck: Langfuse auth OK")
+        return "OK"
+    except Exception as exc:  # noqa: BLE001
+        register_langfuse_failure(exc)
+        logger.warning("Healthcheck: Langfuse auth failed — %s", exc)
         return "DEGRADED"
 
 

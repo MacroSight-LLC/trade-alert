@@ -7,9 +7,9 @@
 #   2. Build Docker images
 #   3. Start Vault → init + seed secrets
 #   4. Start infrastructure (Redis, Postgres, Langfuse)
-#   5. Start application (cuga, cron, discord-bot, dashboard)
-#   6. Seed Langfuse prompts
-#   7. Start MCP services (optional: --mcp)
+#   5. Start core application (cuga, dashboard)
+#   6. Seed Langfuse prompts + run doctor
+#   7. Start automation services and optional MCP stack
 #
 # Usage:
 #   ./scripts/deploy.sh              # core stack (no MCPs)
@@ -249,11 +249,35 @@ wait_healthy langfuse 90
 
 # ── Phase 5: Start application ───────────────────────────────
 
-section "[5/7] Starting application services..."
+section "[5/7] Starting core application services..."
 
-$DC up cuga cron discord-bot dashboard pg-backup -d
+$DC up cuga dashboard -d
 wait_healthy cuga 60
 wait_healthy dashboard 60
+
+# ── Phase 6: Seed Langfuse prompts and verify readiness ──────
+
+section "[6/7] Seeding Langfuse prompts and verifying readiness..."
+
+$DC exec -T cuga python scripts/seed_langfuse_prompts.py --host http://langfuse:3000 && {
+    echo "   ✅ Prompts seeded"
+} || {
+    echo "   ⚠️  Prompt seeding failed (non-fatal — may already exist)"
+    echo "   Run manually: docker compose -f docker-compose.prod.yml exec cuga python scripts/seed_langfuse_prompts.py --update --host http://langfuse:3000"
+}
+
+$DC exec -T cuga python scripts/langfuse_doctor.py && {
+    echo "   ✅ Langfuse doctor passed"
+} || {
+    echo "   ❌ Langfuse doctor failed"
+    exit 1
+}
+
+# ── Phase 7: Automation services and MCP stack ──────────────
+
+section "[7/7] Starting automation services and MCP stack..."
+
+$DC up cron discord-bot pg-backup -d
 
 # cron and discord-bot don't expose health endpoints the same way;
 # verify they're running (not restarting)
@@ -273,21 +297,6 @@ if [ "$STATE" = "running" ]; then
 else
     echo "   ⚠️  pg-backup state: $STATE"
 fi
-
-# ── Phase 6: Seed Langfuse prompts ───────────────────────────
-
-section "[6/7] Seeding Langfuse prompts..."
-
-$DC exec -T cuga python scripts/seed_langfuse_prompts.py --host http://langfuse:3000 && {
-    echo "   ✅ Prompts seeded"
-} || {
-    echo "   ⚠️  Prompt seeding failed (non-fatal — may already exist)"
-    echo "   Run manually: docker compose -f docker-compose.prod.yml exec cuga python scripts/seed_langfuse_prompts.py --update --host http://langfuse:3000"
-}
-
-# ── Phase 7: MCP services (optional) ────────────────────────
-
-section "[7/7] MCP services..."
 
 if [ "$ENABLE_MCP" = true ]; then
     echo "   Starting 12 MCP services..."

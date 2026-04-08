@@ -12,6 +12,7 @@ import atexit
 import logging
 import os
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
@@ -24,6 +25,44 @@ logger = logging.getLogger(__name__)
 _client: Langfuse | None = None
 _initialised: bool = False
 _lock = threading.Lock()
+_auth_disabled_until: float = 0.0
+_last_backoff_log: float = 0.0
+_AUTH_BACKOFF_SECONDS: float = float(os.getenv("LANGFUSE_AUTH_BACKOFF_SECONDS", "300"))
+
+
+def is_langfuse_auth_error(exc: Exception | str) -> bool:
+    """Return whether *exc* looks like a Langfuse authentication failure."""
+    msg = str(exc).lower()
+    return any(
+        needle in msg
+        for needle in (
+            "invalid credentials",
+            "unauthorized",
+            "status_code: 401",
+            "no key found for public key",
+            "configured the correct host",
+        )
+    )
+
+
+def register_langfuse_failure(exc: Exception | str) -> None:
+    """Trip a temporary Langfuse backoff after auth failures.
+
+    This avoids hammering Langfuse with repeated 401 calls across prompt,
+    tracing, and dataset paths during credential drift or bootstrap outages.
+    """
+    global _client, _auth_disabled_until  # noqa: PLW0603
+
+    if not is_langfuse_auth_error(exc):
+        return
+
+    with _lock:
+        _client = None
+        _auth_disabled_until = time.monotonic() + _AUTH_BACKOFF_SECONDS
+    logger.warning(
+        "Langfuse auth failed; suppressing Langfuse calls for %.0fs",
+        _AUTH_BACKOFF_SECONDS,
+    )
 
 
 def get_langfuse_client() -> Langfuse | None:
@@ -37,9 +76,17 @@ def get_langfuse_client() -> Langfuse | None:
         A configured ``Langfuse`` client, or ``None`` when credentials
         are not available.
     """
-    global _client, _initialised  # noqa: PLW0603
+    global _client, _initialised, _last_backoff_log  # noqa: PLW0603
 
     with _lock:
+        now = time.monotonic()
+        if _auth_disabled_until > now:
+            if (now - _last_backoff_log) > 60:
+                remaining = int(_auth_disabled_until - now)
+                logger.info("Langfuse client temporarily disabled (%ds remaining)", remaining)
+                _last_backoff_log = now
+            return None
+
         if _initialised:
             return _client
 
@@ -72,8 +119,6 @@ def get_langfuse_client() -> Langfuse | None:
             except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
                 last_exc = exc
                 if attempt < 3:
-                    import time
-
                     backoff = 2**attempt
                     logger.warning(
                         "Langfuse init attempt %d/3 failed (%s), retrying in %ds",
@@ -99,7 +144,7 @@ def _shutdown_client() -> None:
 
 def reset_client() -> None:
     """Reset the cached client (useful for testing)."""
-    global _client, _initialised  # noqa: PLW0603
+    global _client, _initialised, _auth_disabled_until, _last_backoff_log  # noqa: PLW0603
     if _client is not None:
         try:
             _client.shutdown()
@@ -107,3 +152,5 @@ def reset_client() -> None:
             pass
     _client = None
     _initialised = False
+    _auth_disabled_until = 0.0
+    _last_backoff_log = 0.0

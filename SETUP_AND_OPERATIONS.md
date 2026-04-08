@@ -153,22 +153,91 @@ Expected keys (17):
 | Polygon.io        | https://polygon.io/dashboard/keys (free tier available) | 5 min |
 | Alpaca            | https://app.alpaca.markets/paper/dashboard/overview     | 5 min |
 
-### Langfuse Setup (After First Run)
+### Langfuse Bootstrap (Current Working Path)
 
-1. **Access Langfuse UI** → http://localhost:3000
-2. **Create account** (any email/password)
-3. **Generate API keys** → Settings → API Keys
-4. **Add to `.env.secrets`:**
-   ```bash
-   LANGFUSE_PUBLIC_KEY=pk-xxxxx
-   LANGFUSE_SECRET_KEY=sk-xxxxx
-   NEXTAUTH_SECRET=$(openssl rand -hex 16)
-   ENCRYPTION_KEY=$(openssl rand -hex 16)
-   ```
-5. **Re-seed Vault:**
-   ```bash
-   ./scripts/vault-init.sh
-   ```
+Langfuse in this stack is expected to run as a first-class subsystem for:
+- prompt management (`decision-system`, `decision-user`)
+- trace ingestion and session browsing
+- dataset capture (`decision-runs`)
+- post-run trace analysis and scoring
+
+The working bootstrap path is:
+
+1. **Put the Langfuse keys and secrets into `.env.secrets`**
+  ```bash
+  LANGFUSE_PUBLIC_KEY=pk-lf-...
+  LANGFUSE_SECRET_KEY=sk-lf-...
+  NEXTAUTH_SECRET=$(openssl rand -hex 16)
+  ENCRYPTION_KEY=$(openssl rand -hex 32)
+  LANGFUSE_INIT_USER_PASSWORD=<strong-password>
+  ```
+2. **Re-seed Vault** so runtime services receive the same values:
+  ```bash
+  ./scripts/vault-init.sh
+  ```
+3. **Start or recreate Langfuse and the app services**:
+  ```bash
+  set -a && source .env.secrets && set +a
+  docker compose -f docker-compose.prod.yml up -d --force-recreate langfuse cuga cron discord-bot
+  ```
+4. **Seed production prompts**:
+  ```bash
+  docker compose -f docker-compose.prod.yml exec -T cuga \
+    python scripts/seed_langfuse_prompts.py
+  ```
+5. **Run the doctor script** from the CUGA runtime context:
+  ```bash
+  docker compose -f docker-compose.prod.yml exec -T cuga \
+    python scripts/langfuse_doctor.py
+  ```
+
+The production deploy script runs this doctor check automatically after prompt
+seeding and before cron/automation services are started, so prompt/runtime
+readiness is validated before scheduled workflows begin.
+
+Expected result:
+- transport `OK`
+- auth `OK`
+- `decision-system` and `decision-user` prompts available under the `production` label
+- `decision-runs` dataset visible or created on first successful decision cycle
+- recent traces visible for at least the active timeframe
+
+### Langfuse Bootstrap Repair (If `/health` is Green but Runtime Auth Fails)
+
+Symptom pattern:
+- `http://localhost:3000/api/public/health` returns 200
+- but CUGA gets 401 / `Invalid credentials. Confirm that you've configured the correct host.`
+
+This means Langfuse is reachable, but its project/API-key rows do not match the
+runtime `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` values.
+
+Run this sequence:
+
+1. **Check doctor output**
+  ```bash
+  docker compose -f docker-compose.prod.yml exec -T cuga \
+    python scripts/langfuse_doctor.py --strict
+  ```
+2. **Re-seed Vault and recreate services**
+  ```bash
+  ./scripts/vault-init.sh
+  set -a && source .env.secrets && set +a
+  docker compose -f docker-compose.prod.yml up -d --force-recreate langfuse cuga cron discord-bot
+  ```
+3. **Re-seed prompts**
+  ```bash
+  docker compose -f docker-compose.prod.yml exec -T cuga \
+    python scripts/seed_langfuse_prompts.py
+  ```
+4. **Run doctor again**
+  ```bash
+  docker compose -f docker-compose.prod.yml exec -T cuga \
+    python scripts/langfuse_doctor.py --strict
+  ```
+
+If runtime auth still fails after this, Langfuse DB bootstrap is incomplete and
+must be repaired before prompt management, trace analysis, and dataset capture
+will work correctly.
 
 ---
 
@@ -224,6 +293,84 @@ docker compose -f docker-compose.prod.yml exec cuga \
 
 After seeding, edit prompts live at http://localhost:3000 → Prompts. Changes
 propagate within 300s (the `prompt_manager.py` TTL cache).
+
+### Langfuse Verification Commands
+
+Quick post-deploy verification:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T cuga \
+  python scripts/langfuse_doctor.py
+```
+
+Automated path:
+
+```bash
+./scripts/deploy.sh
+```
+
+This now seeds prompts, runs the Langfuse doctor automatically, and only then
+starts cron / automation services.
+
+Machine-readable output:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T cuga \
+  python scripts/langfuse_doctor.py --json
+```
+
+Strict mode for CI / deploy checks:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T cuga \
+  python scripts/langfuse_doctor.py --strict
+```
+
+Live end-to-end proof runs:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T cuga \
+  python pipeline_runner.py workflows/orchestrator-15m.yaml
+
+docker compose -f docker-compose.prod.yml exec -T cuga \
+  python pipeline_runner.py workflows/orchestrator-1h.yaml
+```
+
+After a successful run, confirm recent traces directly:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T cuga sh -lc 'python - <<"PY"
+from langfuse_client import reset_client, get_langfuse_client
+reset_client()
+lf = get_langfuse_client()
+for tf in ("15m", "1h"):
+    traces = lf.fetch_traces(session_id=f"orchestrator-{tf}", limit=1, order_by="timestamp.DESC")
+    latest = traces.data[0].id if getattr(traces, "data", None) else "none"
+    print(tf, latest)
+PY'
+```
+
+### Intermittent Langfuse Internal Errors
+
+You may still see intermittent messages like:
+
+```text
+Internal error occurred. This is an unusual occurrence and we are monitoring it closely.
+```
+
+Observed behavior in this repo:
+- prompts can still load successfully from Langfuse
+- dataset capture can still succeed
+- trace scoring/finalization can still succeed
+- Discord alert delivery is not blocked
+
+Treat this as **degraded but non-blocking** unless one of these starts failing:
+- prompt fetch returns 401/404 unexpectedly
+- doctor reports `auth=fail`
+- traces stop appearing for active sessions
+- datasets stop receiving new items
+
+Use the doctor script first before taking any reset action.
 
 ### Restart Running Stack
 
