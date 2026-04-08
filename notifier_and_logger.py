@@ -378,7 +378,38 @@ def format_embed(
         delta_vs_entry = current_price - entry_price
         delta_vs_entry_pct = (delta_vs_entry / entry_price) * 100.0
 
-    if current_price is None or delta_vs_entry is None or delta_vs_entry_pct is None:
+    # Hard freshness gates by alert timeframe: if quote is older than these
+    # windows, don't present it as "Current Price" because it can mislead entry context.
+    max_price_age_seconds = {
+        "5m": 60 * 60,
+        "15m": 2 * 60 * 60,
+        "1h": 6 * 60 * 60,
+        "4h": 24 * 60 * 60,
+        "1D": 72 * 60 * 60,
+    }
+    hard_stale = False
+    hard_age_mins: int | None = None
+
+    if current_price_ts:
+        try:
+            parsed_ts = datetime.fromisoformat(current_price_ts)
+            if parsed_ts.tzinfo is None:
+                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+            ts_utc = parsed_ts.astimezone(timezone.utc)
+            age_seconds = max(0.0, (datetime.now(timezone.utc) - ts_utc).total_seconds())
+            hard_threshold = max_price_age_seconds.get(alert.timeframe, 2 * 60 * 60)
+            if age_seconds > hard_threshold:
+                hard_stale = True
+                hard_age_mins = int(round(age_seconds / 60.0))
+        except ValueError:
+            pass
+
+    if hard_stale:
+        current_price_field = (
+            "_Unavailable (stale market data)_"
+            + (f"\nLast quote age: {hard_age_mins}m" if hard_age_mins is not None else "")
+        )
+    elif current_price is None or delta_vs_entry is None or delta_vs_entry_pct is None:
         current_price_field = "_Unavailable_"
     else:
         if alert.direction == "LONG":

@@ -11,7 +11,7 @@ import io
 import logging
 import os
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import matplotlib
@@ -162,6 +162,19 @@ def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
     if ts_raw is None:
         return price, None
 
+
+def _parse_iso_utc(ts: str | None) -> datetime | None:
+    """Parse an ISO timestamp into a timezone-aware UTC datetime."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
     # Polygon trade timestamp may be in ns/us/ms depending on endpoint variant.
     # Infer scale by magnitude and convert to UTC ISO8601.
     try:
@@ -209,11 +222,22 @@ def generate_chart(
     latest_price = float(df["Close"].iloc[-1])
     latest_ts = pd.Timestamp(df.index[-1]).isoformat()
 
-    # Prefer the live trade quote for "Current Price" context if available.
+    # Use the freshest timestamped market source:
+    # live trade quote (when recent) vs latest candle close.
+    candle_dt = _parse_iso_utc(latest_ts)
+    live_dt = _parse_iso_utc(live_ts)
     if live_price is not None:
-        latest_price = live_price
-        if live_ts:
-            latest_ts = live_ts
+        if live_dt and candle_dt:
+            if live_dt >= candle_dt:
+                latest_price = live_price
+                latest_ts = live_ts or latest_ts
+        elif live_dt and not candle_dt:
+            latest_price = live_price
+            latest_ts = live_ts or latest_ts
+        elif live_ts is None:
+            # Last-trade endpoint returned price without timestamp; avoid
+            # overriding a candle-derived timestamped quote with unknown recency.
+            pass
 
     try:
         import mplfinance as mpf
