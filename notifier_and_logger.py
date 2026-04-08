@@ -401,10 +401,27 @@ def format_embed(
         )
         if current_price_ts:
             try:
-                ts_fmt = datetime.fromisoformat(current_price_ts).astimezone(timezone.utc).strftime("%H:%M UTC")
+                parsed_ts = datetime.fromisoformat(current_price_ts)
+                if parsed_ts.tzinfo is None:
+                    parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                ts_utc = parsed_ts.astimezone(timezone.utc)
+                ts_fmt = ts_utc.strftime("%H:%M UTC")
+
+                age_seconds = max(0.0, (datetime.now(timezone.utc) - ts_utc).total_seconds())
+                stale_thresholds = {
+                    "5m": 15 * 60,
+                    "15m": 30 * 60,
+                    "1h": 2 * 60 * 60,
+                    "4h": 6 * 60 * 60,
+                    "1D": 48 * 60 * 60,
+                }
+                threshold = stale_thresholds.get(alert.timeframe, 30 * 60)
+                age_mins = int(round(age_seconds / 60.0))
+                stale_suffix = f" (stale {age_mins}m)" if age_seconds > threshold else ""
             except ValueError:
                 ts_fmt = current_price_ts
-            current_price_field += f"\nAs of: {ts_fmt}"
+                stale_suffix = ""
+            current_price_field += f"\nAs of: {ts_fmt}{stale_suffix}"
 
     # Historical win-rate context (pre-fetched by caller or per-alert fallback)
     if not hist_stats:

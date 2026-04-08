@@ -90,12 +90,11 @@ def _fetch_candles(symbol: str, timeframe: str) -> pd.DataFrame:
         "limit": num_bars,
         "apiKey": api_key,
     }
+    log_params = {k: v for k, v in params.items() if k != "apiKey"}
 
     try:
         client = _get_chart_client()
         data: dict = {}
-        # Build safe params (without API key for logging)
-        log_params = {k: v for k, v in params.items() if k != "apiKey"}
         for attempt in range(_MAX_RETRIES + 1):
             resp = client.get(url, params=params)
             if resp.status_code == 429 and attempt < _MAX_RETRIES:
@@ -123,6 +122,65 @@ def _fetch_candles(symbol: str, timeframe: str) -> pd.DataFrame:
     return df
 
 
+def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
+    """Fetch the most recent trade price/timestamp from Polygon.
+
+    Returns:
+        Tuple of (price, ISO timestamp), or (None, None) on failure.
+    """
+    api_key = os.getenv("POLYGON_API_KEY", "")
+    if not api_key:
+        return None, None
+
+    url = f"{POLYGON_BASE_URL}/v2/last/trade/{symbol}"
+    params: dict[str, Any] = {"apiKey": api_key}
+
+    try:
+        client = _get_chart_client()
+        data: dict = {}
+        for attempt in range(_MAX_RETRIES + 1):
+            resp = client.get(url, params=params)
+            if resp.status_code == 429 and attempt < _MAX_RETRIES:
+                logger.info("Polygon 429 for last trade %s, backing off %.0fs", symbol, _RETRY_BACKOFF)
+                time.sleep(_RETRY_BACKOFF)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            break
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.debug("Last trade fetch failed for %s: %s", symbol, exc)
+        return None, None
+
+    # Polygon response can include either "results" (v2) or "last" (older variants)
+    payload = data.get("results") or data.get("last") or {}
+    try:
+        price = float(payload.get("p"))
+    except (TypeError, ValueError):
+        return None, None
+
+    ts_raw = payload.get("t")
+    if ts_raw is None:
+        return price, None
+
+    # Polygon trade timestamp may be in ns/us/ms depending on endpoint variant.
+    # Infer scale by magnitude and convert to UTC ISO8601.
+    try:
+        ts_int = int(ts_raw)
+        if ts_int > 10_000_000_000_000_000:  # ns
+            seconds = ts_int / 1_000_000_000
+        elif ts_int > 10_000_000_000_000:  # us
+            seconds = ts_int / 1_000_000
+        elif ts_int > 10_000_000_000:  # ms
+            seconds = ts_int / 1_000
+        else:
+            seconds = float(ts_int)
+
+        ts_iso = pd.to_datetime(seconds, unit="s", utc=True).isoformat()
+        return price, ts_iso
+    except (TypeError, ValueError, OverflowError):
+        return price, None
+
+
 def generate_chart(
     symbol: str,
     timeframe: str,
@@ -135,19 +193,27 @@ def generate_chart(
         timeframe: Alert timeframe (e.g. ``"15m"``, ``"1h"``).
         entry: Dict with keys ``level``, ``stop``, ``target`` (all floats).
 
-    Returns:
+        Returns:
         Tuple of:
           - PNG image bytes or None
           - 14-period ATR value or None
-          - Most recent close price from fetched candles or None
-          - ISO timestamp for most recent close or None
+                    - Most recent market price (live trade preferred, candle close fallback) or None
+                    - ISO timestamp for the selected market price or None
     """
     df = _fetch_candles(symbol, timeframe)
+    live_price, live_ts = _fetch_last_trade(symbol)
+
     if df.empty:
-        return None, None, None, None
+        return None, None, live_price, live_ts
 
     latest_price = float(df["Close"].iloc[-1])
     latest_ts = pd.Timestamp(df.index[-1]).isoformat()
+
+    # Prefer the live trade quote for "Current Price" context if available.
+    if live_price is not None:
+        latest_price = live_price
+        if live_ts:
+            latest_ts = live_ts
 
     try:
         import mplfinance as mpf
@@ -288,7 +354,5 @@ def generate_chart(
             plt.close(fig)
         buf.close()
 
-    logger.info(
-        "Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0
-    )
+    logger.info("Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0)
     return chart_bytes, atr_value, latest_price, latest_ts
