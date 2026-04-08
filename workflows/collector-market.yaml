@@ -65,16 +65,23 @@ steps:
       min_dollar_volume = float(os.environ.get("UNIVERSE_POLYGON_MIN_DOLLAR_VOLUME", "10000000"))
 
       equity_symbols = set()
+      ordered_symbols = []
       screen_symbols = set()
       polygon_kept = 0
       polygon_filtered_low_price = 0
       polygon_filtered_low_dollar_volume = 0
       polygon_missing_price = 0
+
+      def add_symbol(sym: str) -> None:
+          if sym not in equity_symbols:
+              equity_symbols.add(sym)
+              ordered_symbols.append(sym)
+
       for item in steps["fetch-equity-screen"].get("results", []):
           sym = item.get("symbol") or item.get("ticker")
           if sym:
               sym = sym.upper()
-              equity_symbols.add(sym)
+              add_symbol(sym)
               screen_symbols.add(sym)
       for item in steps["fetch-polygon-volume-leaders"].get("results", []):
           sym = item.get("symbol") or item.get("ticker")
@@ -96,9 +103,9 @@ steps:
             polygon_filtered_low_dollar_volume += 1
             continue
 
-          equity_symbols.add(sym.upper())
+          add_symbol(sym.upper())
           polygon_kept += 1
-      equity_list = sorted(equity_symbols)[:50]
+      equity_list = ordered_symbols[:50]
       used_fallback = False
 
       if len(equity_list) < 5:

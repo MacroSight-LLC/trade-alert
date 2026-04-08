@@ -137,7 +137,7 @@ _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 # Volume confirmation: minimum volume_spike score required for LONG/SHORT.
 # Alerts without volume confirmation get confidence downgraded by this amount.
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
-_VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.10"))
+_VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.05"))
 
 # Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
 _ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.08"))
