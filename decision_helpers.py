@@ -9,9 +9,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_MERGE_LIMIT_15M: int = int(os.environ.get("MERGE_LIMIT_15M", "30"))
+_MERGE_LIMIT_1H: int = int(os.environ.get("MERGE_LIMIT_1H", "20"))
+
+
+def _merge_limit_for_timeframe(timeframe: str) -> int:
+    if timeframe == "15m":
+        return _MERGE_LIMIT_15M
+    if timeframe == "1h":
+        return _MERGE_LIMIT_1H
+    return 20
 
 
 def merge_snapshots(
@@ -43,14 +55,20 @@ def merge_snapshots(
 
     from merger import get_macro_regime, merge
 
-    snapshots = merge(timeframe, limit=20)
+    merge_limit = _merge_limit_for_timeframe(timeframe)
+    snapshots = merge(timeframe, limit=merge_limit)
     macro = get_macro_regime()
     if len(snapshots) == 0:
         logger.info("No snapshots available for %s decision — skipping", timeframe)
         return {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
 
     snapshots_json = json.dumps([snap.model_dump() for snap in snapshots], indent=2)
-    logger.info("Decision-%s: merged %d symbols for evaluation", timeframe, len(snapshots))
+    logger.info(
+        "Decision-%s: merged %d symbols for evaluation (limit=%d)",
+        timeframe,
+        len(snapshots),
+        merge_limit,
+    )
     return {"skip": False, "snapshots_json": snapshots_json, "macro": macro, "n": len(snapshots)}
 
 
