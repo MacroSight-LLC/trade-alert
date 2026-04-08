@@ -50,6 +50,7 @@ class GateRejection(str, Enum):
     VIX_SOFT = "vix_soft"
     FORECAST_CONTRADICTS = "forecast_contradicts"
     TIMEFRAME_INVALID = "timeframe_invalid"
+    ENTRY_MARKET_DRIFT = "entry_market_drift"
     VOLUME_UNCONFIRMED = "volume_unconfirmed"
     WATCH_EP_THRESHOLD = "watch_ep_threshold"
     WATCH_SA_THRESHOLD = "watch_sa_threshold"
@@ -137,6 +138,9 @@ _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 # Alerts without volume confirmation get confidence downgraded by this amount.
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.10"))
+
+# Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
+_ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.08"))
 
 # Dynamic gate controls (regime + timeframe overlays)
 _DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
@@ -451,6 +455,47 @@ def _get_volume_spike_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
     return scores
 
 
+def _get_reference_prices(snaps: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract per-symbol latest reference prices from snapshot signal raw payloads.
+
+    Preference order:
+      1) timesfm price_forecast raw.current_price
+      2) any signal raw current_price/price/close/last/last_price
+    """
+    prices: dict[str, float] = {}
+    fallback: dict[str, float] = {}
+    for s in snaps:
+        sym = s.get("symbol", "")
+        if not sym:
+            continue
+        for sig in s.get("signals", []):
+            raw = sig.get("raw") or {}
+            if not isinstance(raw, dict):
+                continue
+
+            if sig.get("type") == "price_forecast":
+                try:
+                    cp = float(raw.get("current_price", 0.0))
+                    if cp > 0:
+                        prices[sym] = cp
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+            for k in ("current_price", "price", "close", "last", "last_price"):
+                try:
+                    v = float(raw.get(k, 0.0))
+                    if v > 0:
+                        fallback[sym] = v
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+    for sym, px in fallback.items():
+        prices.setdefault(sym, px)
+    return prices
+
+
 def validate_and_filter(
     llm_response: Any,
     snapshots_json: str,
@@ -544,6 +589,8 @@ def validate_and_filter(
     forecast_scores = _get_forecast_scores(parsed_snaps)
     # ── Build per-symbol volume spike index ───────────────────
     volume_scores = _get_volume_spike_scores(parsed_snaps)
+    # ── Build per-symbol reference price index ────────────────
+    ref_prices = _get_reference_prices(parsed_snaps)
     # 1h-specific: pre-compute macro_risk_off score for macro veto
     macro_risk_off_score = _get_macro_risk_off_score(parsed_snaps) if timeframe == "1h" else 0.0
 
@@ -630,6 +677,26 @@ def validate_and_filter(
                 )
                 rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
                 continue
+
+        # ── Entry-vs-market drift gate ─────────────────────────
+        # Reject LONG/SHORT alerts whose proposed entry is too far
+        # from latest reference price from snapshots.
+        if alert.direction in ("LONG", "SHORT"):
+            ref_price = ref_prices.get(alert.symbol)
+            if ref_price and ref_price > 0:
+                drift_pct = abs(alert.entry["level"] - ref_price) / ref_price
+                if drift_pct > _ENTRY_MARKET_DRIFT_MAX_PCT:
+                    logger.info(
+                        "Entry drift filtered: %s %s entry=%.2f ref=%.2f drift=%.1f%% > max=%.1f%%",
+                        alert.symbol,
+                        alert.direction,
+                        alert.entry["level"],
+                        ref_price,
+                        drift_pct * 100.0,
+                        _ENTRY_MARKET_DRIFT_MAX_PCT * 100.0,
+                    )
+                    rejections.append((alert.symbol, GateRejection.ENTRY_MARKET_DRIFT))
+                    continue
         elif alert.direction == "SHORT":
             if not (alert.entry["target"] < alert.entry["level"] < alert.entry["stop"]):
                 logger.warning(
