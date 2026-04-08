@@ -208,12 +208,11 @@ _EXTRA_RULES: dict[str, str] = {
         "- Momentum must be FRESH — if the move already happened (score relates to "
         "a completed move), do not alert on a chase entry.\n"
         "- Prefer pullback/retest entries over stretched breakouts when risk-off+high-VIX is present.\n"
-        "- BORDERLINE WATCH POLICY: If no symbol meets LONG/SHORT quality gates, "
-        "you MAY output at most 1 WATCH alert for the best borderline setup only "
-        "when confidence is near-but-below the directional threshold "
-        "(about 0.60-0.74). Keep WATCH conservative: require at least 2 "
-        "independent aligned sources and edge_probability around gate-minus-0.05 "
-        "or better."
+        "- BORDERLINE WATCH POLICY: When no LONG/SHORT qualifies, you MUST output "
+        "exactly 1 WATCH alert if ALL criteria are met: sources_agree >= 2, "
+        "confidence >= 0.60, edge_probability >= (gate - 0.05). "
+        "DO NOT return [] if these criteria are met — issue the WATCH. "
+        "WATCH direction is the consensus direction from aligned sources."
     ),
     "1h": (
         "\nADDITIONAL 1h RULES:\n"
@@ -235,11 +234,11 @@ _EXTRA_RULES: dict[str, str] = {
         "buying cluster, sector rotation) over pure TA patterns.\n"
         "- Thesis MUST reference at least one macro or fundamental factor, "
         "not just technical indicators.\n"
-        "- BORDERLINE WATCH POLICY: If no symbol meets LONG/SHORT quality gates, "
-        "you MAY output at most 1 WATCH alert for the strongest borderline setup "
-        "when confidence is near-but-below the directional threshold "
-        "(about 0.60-0.74). Require at least 2 aligned sources and "
-        "edge_probability around gate-minus-0.05 or better."
+        "- BORDERLINE WATCH POLICY: When no LONG/SHORT qualifies, you MUST output "
+        "exactly 1 WATCH alert if ALL criteria are met: sources_agree >= 2, "
+        "confidence >= 0.60, edge_probability >= (gate - 0.05). "
+        "DO NOT return [] if these criteria are met — issue the WATCH. "
+        "WATCH direction is the consensus direction from aligned sources."
     ),
 }
 
