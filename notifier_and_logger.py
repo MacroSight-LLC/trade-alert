@@ -322,6 +322,11 @@ def _route_channel_for_alert(alert: PlaybookAlert) -> str | None:
     Returns:
         Channel ID string, or ``None`` to use the default channel.
     """
+    # Always route WATCH alerts to the watch channel when configured so
+    # low-priority context never competes with actionable channels.
+    if alert.direction == "WATCH" and _DISCORD_CHANNEL_WATCH:
+        return _DISCORD_CHANNEL_WATCH
+
     quality = alert.edge_probability * alert.confidence
     if quality >= 0.65 and _DISCORD_CHANNEL_HIGH:
         return _DISCORD_CHANNEL_HIGH
@@ -330,6 +335,43 @@ def _route_channel_for_alert(alert: PlaybookAlert) -> str | None:
     if _DISCORD_CHANNEL_WATCH:
         return _DISCORD_CHANNEL_WATCH
     return None
+
+
+def _format_watch_embed(alert: PlaybookAlert) -> dict:
+    """Format a compact WATCH embed to minimize distraction.
+
+    WATCH posts are intentionally lightweight context and should not look
+    equivalent to actionable LONG/SHORT alerts.
+    """
+    direction_emoji = _DIRECTION_EMOJI.get("WATCH", "⚪")
+    return {
+        "embeds": [
+            {
+                "title": f"{direction_emoji} {alert.symbol} WATCH | Context Only",
+                "description": _truncate_field(alert.thesis, max_len=280),
+                "color": _COLOR_MAP.get("WATCH", 3447003),
+                "fields": [
+                    {
+                        "name": "Setup",
+                        "value": (
+                            f"TF: **{alert.timeframe}**\n"
+                            f"EP: **{alert.edge_probability:.2f}** | "
+                            f"CONF: **{alert.confidence:.2f}** | "
+                            f"SA: **{alert.sources_agree}/10**"
+                        ),
+                        "inline": False,
+                    },
+                    {
+                        "name": "Note",
+                        "value": "Non-actionable context. Directional alerts (LONG/SHORT) take precedence.",
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "trade-alert • WATCH"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    }
 
 
 def format_embed(
@@ -895,20 +937,36 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         except (ValidationError, redis.RedisError, KeyError, TypeError) as exc:
             logger.error("Notifier alert processing failed: %s", exc)
 
-    # Cap alerts per cycle to prevent Discord spam (sort by quality)
-    if len(valid_alerts) > MAX_ALERTS_PER_CYCLE:
-        valid_alerts.sort(
+    # Protect directional delivery: cap LONG/SHORT independently so WATCH
+    # can never consume actionable alert capacity.
+    directional_alerts = [a for a in valid_alerts if a.direction in ("LONG", "SHORT")]
+    watch_alerts = [a for a in valid_alerts if a.direction == "WATCH"]
+
+    if len(directional_alerts) > MAX_ALERTS_PER_CYCLE:
+        directional_alerts.sort(
             key=lambda a: a.edge_probability * a.confidence,
             reverse=True,
         )
-        dropped = len(valid_alerts) - MAX_ALERTS_PER_CYCLE
-        valid_alerts = valid_alerts[:MAX_ALERTS_PER_CYCLE]
+        dropped = len(directional_alerts) - MAX_ALERTS_PER_CYCLE
+        directional_alerts = directional_alerts[:MAX_ALERTS_PER_CYCLE]
         logger.warning(
-            "Capped alerts: dropped %d of %d (kept top %d by EP*conf)",
+            "Capped directional alerts: dropped %d of %d (kept top %d by EP*conf)",
             dropped,
             dropped + MAX_ALERTS_PER_CYCLE,
             MAX_ALERTS_PER_CYCLE,
         )
+
+    # Keep WATCH strictly minimal in output volume too.
+    if len(watch_alerts) > 1:
+        watch_alerts.sort(
+            key=lambda a: a.edge_probability * a.confidence,
+            reverse=True,
+        )
+        dropped_watch = len(watch_alerts) - 1
+        watch_alerts = watch_alerts[:1]
+        logger.info("Capped WATCH alerts: dropped %d (kept top 1)", dropped_watch)
+
+    valid_alerts = directional_alerts + watch_alerts
 
     # Pre-generate candlestick charts in parallel (I/O-bound: Polygon API + mplfinance render)
     # Also batch-fetch historical win-rate stats (single DB query instead of N+1)
@@ -939,18 +997,21 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
 
     for alert in valid_alerts:
         try:
-            embed = format_embed(
-                alert,
-                hist_stats=batch_stats.get(f"{alert.symbol}:{alert.direction}", ""),
-                current_price=current_price_map.get(alert.symbol),
-                current_price_ts=current_price_ts_map.get(alert.symbol),
-            )
+            if alert.direction == "WATCH":
+                embed = _format_watch_embed(alert)
+            else:
+                embed = format_embed(
+                    alert,
+                    hist_stats=batch_stats.get(f"{alert.symbol}:{alert.direction}", ""),
+                    current_price=current_price_map.get(alert.symbol),
+                    current_price_ts=current_price_ts_map.get(alert.symbol),
+                )
             chart_png = chart_map.get(alert.symbol)
             atr_val = atr_map.get(alert.symbol)
-            if chart_png:
+            if chart_png and alert.direction != "WATCH":
                 embed["embeds"][0]["image"] = {"url": "attachment://chart.png"}
             # Add ATR-based position sizing hint
-            if atr_val and atr_val > 0:
+            if atr_val and atr_val > 0 and alert.direction != "WATCH":
                 embed["embeds"][0]["fields"].append(
                     {
                         "name": "\U0001f4b0 ATR Risk Guide",
