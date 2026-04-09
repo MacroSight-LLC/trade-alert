@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 _raw_top_n = int(os.getenv("MERGER_TOP_N", "20"))
 MERGER_TOP_N: int = _raw_top_n if _raw_top_n > 0 else 20
+_MERGER_MIN_TYPES_15M: int = int(os.getenv("MERGER_MIN_TYPES_15M", "2"))
+_MERGER_MIN_TYPES_1H: int = int(os.getenv("MERGER_MIN_TYPES_1H", "3"))
 
 # Diversity multiplier weight — controls how strongly the merger penalises
 # signals clustered in a single signal type.  1.0 = full sqrt-diversity
@@ -58,6 +60,12 @@ _SOURCE_FAMILIES: dict[str, str] = {
 def _signal_family(sig: Signal) -> str:
     """Return the source family for a signal (for distinct-family counting)."""
     return _SOURCE_FAMILIES.get(sig.source, sig.source)
+
+
+def _min_types_for_timeframe(timeframe: str) -> int:
+    if timeframe == "1h":
+        return _MERGER_MIN_TYPES_1H
+    return _MERGER_MIN_TYPES_15M
 
 
 def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
@@ -150,15 +158,18 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
                 best[key] = sig
         deduped = list(best.values())
 
-        # Pre-LLM filter: drop symbols with < 3 distinct signal types.
-        # The SA >= 3 gate requires at least 3 aligned sources, so
-        # sending symbols with fewer types wastes LLM tokens.
+        # Pre-LLM filter: drop symbols with too little signal-type breadth.
+        # 15m can be broader to preserve useful borderline/WATCH context,
+        # while 1h remains stricter.
         unique_types = {s.type for s in deduped}
-        if len(unique_types) < 3:
+        min_types = _min_types_for_timeframe(timeframe)
+        if len(unique_types) < min_types:
             logger.debug(
-                "Merger pre-filter: dropping %s (%d signal type(s))",
+                "Merger pre-filter: dropping %s (%d signal type(s) < %d min for %s)",
                 symbol,
                 len(unique_types),
+                min_types,
+                timeframe,
             )
             continue
 
