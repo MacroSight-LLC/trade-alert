@@ -217,6 +217,12 @@ _EXTRA_RULES: dict[str, str] = {
     ),
     "1h": (
         "\nADDITIONAL 1h RULES:\n"
+        "- Treat this as a higher-timeframe swing decision layer. Use 1h structure as primary, "
+        "and require confirmation from at least one longer horizon context (4h trend, daily trend, "
+        "or fundamental/macro regime persistence).\n"
+        "- Do NOT base a 1h alert primarily on 15m-only trigger language (e.g., '15m breakout', "
+        "'next 2-4 candles', 'scalp momentum'). 15m may be used only for execution timing after "
+        "a 1h thesis is already established.\n"
         "- A strong macro_risk_off signal should HEAVILY DISCOUNT long setups — "
         "require 4+ sources for LONG when macro is risk-off, but do NOT refuse "
         "to alert entirely. Exceptional confluences can override macro headwinds.\n"
@@ -235,6 +241,10 @@ _EXTRA_RULES: dict[str, str] = {
         "buying cluster, sector rotation) over pure TA patterns.\n"
         "- Thesis MUST reference at least one macro or fundamental factor, "
         "not just technical indicators.\n"
+        "- 1h timeframe_rationale must describe an expected holding window in hours/days, "
+        "not minutes.\n"
+        "- OUTPUT CONTRACT: Return ONLY strict JSON. Start with '[' and end with ']'. "
+        "No markdown fences, no prose, no prefixed labels, no trailing commentary.\n"
         "- BORDERLINE WATCH POLICY: When no LONG/SHORT qualifies, you MUST output "
         "exactly 1 WATCH alert if ALL criteria are met: sources_agree >= 2, "
         "confidence >= 0.60, edge_probability >= (gate - 0.05). "

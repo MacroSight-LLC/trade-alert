@@ -567,6 +567,14 @@ def validate_and_filter(
     try:
         llm_json_text = _extract_json_array_text(llm_response)
         raw = json.loads(llm_json_text)
+        # Accept common wrapped shapes produced by LLMs, e.g.
+        # {"alerts": [...]} or {"result": [...]}.
+        if isinstance(raw, dict):
+            for key in ("alerts", "result", "results", "data"):
+                candidate = raw.get(key)
+                if isinstance(candidate, list):
+                    raw = candidate
+                    break
         if not isinstance(raw, list):
             raise ValueError(f"Expected list, got {type(raw).__name__}")
     except Exception as e:
