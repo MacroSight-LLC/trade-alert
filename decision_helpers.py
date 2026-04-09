@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 
 _MERGE_LIMIT_15M: int = int(os.environ.get("MERGE_LIMIT_15M", "30"))
 _MERGE_LIMIT_1H: int = int(os.environ.get("MERGE_LIMIT_1H", "20"))
+_PRUNE_ENABLED: bool = os.environ.get("PRUNE_ENABLED", "1") == "1"
 _PRUNE_MIN_TYPES_15M: int = int(os.environ.get("PRUNE_MIN_TYPES_15M", "3"))
 _PRUNE_MIN_TYPES_1H: int = int(os.environ.get("PRUNE_MIN_TYPES_1H", "3"))
 _PRUNE_MIN_STRENGTH_15M: float = float(os.environ.get("PRUNE_MIN_STRENGTH_15M", "2.0"))
 _PRUNE_MIN_STRENGTH_1H: float = float(os.environ.get("PRUNE_MIN_STRENGTH_1H", "2.5"))
+_PRUNE_RESCUE_TOP_K: int = int(os.environ.get("PRUNE_RESCUE_TOP_K", "3"))
 
 
 def _merge_limit_for_timeframe(timeframe: str) -> int:
@@ -64,6 +66,15 @@ def _prune_snapshots_for_llm(
     snapshots: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Drop weak candidates before prompt construction to reduce LLM noise/cost."""
+    if not _PRUNE_ENABLED:
+        return snapshots, {
+            "input": len(snapshots),
+            "kept": len(snapshots),
+            "dropped_low_types": 0,
+            "dropped_low_strength": 0,
+            "rescued": 0,
+        }
+
     min_types, min_strength = _prune_thresholds(timeframe)
 
     kept: list[dict[str, Any]] = []
@@ -85,8 +96,22 @@ def _prune_snapshots_for_llm(
         "kept": len(kept),
         "dropped_low_types": dropped_low_types,
         "dropped_low_strength": dropped_low_strength,
+        "rescued": 0,
     }
     return kept, stats
+
+
+def _rescue_top_candidates(
+    snapshots: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Return top-k snapshots by deterministic strength score."""
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for snap in snapshots:
+        _type_count, strength = _snapshot_strength(snap)
+        ranked.append((strength, snap))
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    return [snap for _score, snap in ranked[:top_k]]
 
 
 def merge_snapshots(
@@ -109,6 +134,13 @@ def merge_snapshots(
     if _inp_json and _inp_n is not None:
         snapshots_json = _inp_json
         macro = _inp_macro or {}
+        prune_stats = {
+            "input": 0,
+            "kept": 0,
+            "dropped_low_types": 0,
+            "dropped_low_strength": 0,
+            "rescued": 0,
+        }
         try:
             n = int(_inp_n)
         except (ValueError, TypeError):
@@ -119,22 +151,39 @@ def merge_snapshots(
             parsed = json.loads(_inp_json)
             if isinstance(parsed, list):
                 pruned, stats = _prune_snapshots_for_llm(timeframe, parsed)
+                prune_stats = dict(stats)
+                if len(pruned) == 0 and parsed:
+                    rescue_n = max(1, _PRUNE_RESCUE_TOP_K)
+                    pruned = _rescue_top_candidates(parsed, rescue_n)
+                    prune_stats["rescued"] = len(pruned)
+                    logger.warning(
+                        "Decision-%s pre-LLM prune rescued %d candidate(s) to avoid empty cycle",
+                        timeframe,
+                        len(pruned),
+                    )
                 snapshots_json = json.dumps(pruned, indent=2)
                 n = len(pruned)
                 logger.info(
                     "Decision-%s pre-LLM prune (orchestrator): input=%d kept=%d "
-                    "drop_types=%d drop_strength=%d",
+                    "drop_types=%d drop_strength=%d rescued=%d",
                     timeframe,
                     stats["input"],
-                    stats["kept"],
+                    len(pruned),
                     stats["dropped_low_types"],
                     stats["dropped_low_strength"],
+                    prune_stats["rescued"],
                 )
         except (json.JSONDecodeError, TypeError, ValueError):
             logger.warning("Decision-%s: unable to parse pre-merged snapshots for pruning", timeframe)
 
         logger.info("Decision-%s: using %d pre-merged symbols from orchestrator", timeframe, n)
-        return {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
+        return {
+            "skip": n == 0,
+            "snapshots_json": snapshots_json,
+            "macro": macro,
+            "n": n,
+            "prune_stats": prune_stats,
+        }
 
     from merger import get_macro_regime, merge
 
@@ -143,30 +192,53 @@ def merge_snapshots(
     macro = get_macro_regime()
     if len(snapshots) == 0:
         logger.info("No snapshots available for %s decision — skipping", timeframe)
-        return {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
+        return {
+            "skip": True,
+            "snapshots_json": "[]",
+            "macro": {},
+            "n": 0,
+            "prune_stats": {
+                "input": 0,
+                "kept": 0,
+                "dropped_low_types": 0,
+                "dropped_low_strength": 0,
+                "rescued": 0,
+            },
+        }
 
     snapshot_dicts = [snap.model_dump() for snap in snapshots]
     pruned, stats = _prune_snapshots_for_llm(timeframe, snapshot_dicts)
     if len(pruned) == 0:
-        logger.info(
-            "Decision-%s pre-LLM prune dropped all candidates: input=%d "
-            "drop_types=%d drop_strength=%d",
+        rescue_n = max(1, _PRUNE_RESCUE_TOP_K)
+        pruned = _rescue_top_candidates(snapshot_dicts, rescue_n)
+        stats["rescued"] = len(pruned)
+        logger.warning(
+            "Decision-%s pre-LLM prune dropped all candidates; rescued top %d by strength",
             timeframe,
-            stats["input"],
-            stats["dropped_low_types"],
-            stats["dropped_low_strength"],
+            len(pruned),
         )
-        return {"skip": True, "snapshots_json": "[]", "macro": macro, "n": 0}
+    else:
+        stats["rescued"] = 0
 
     snapshots_json = json.dumps(pruned, indent=2)
     logger.info(
-        "Decision-%s: merged %d symbols for evaluation (limit=%d), kept %d after pre-LLM prune",
+        "Decision-%s: merged %d symbols for evaluation (limit=%d), kept %d after pre-LLM prune "
+        "(drop_types=%d drop_strength=%d rescued=%d)",
         timeframe,
         len(snapshots),
         merge_limit,
         len(pruned),
+        stats["dropped_low_types"],
+        stats["dropped_low_strength"],
+        stats["rescued"],
     )
-    return {"skip": False, "snapshots_json": snapshots_json, "macro": macro, "n": len(pruned)}
+    return {
+        "skip": False,
+        "snapshots_json": snapshots_json,
+        "macro": macro,
+        "n": len(pruned),
+        "prune_stats": stats,
+    }
 
 
 def build_prompt(
@@ -262,6 +334,21 @@ def validate_and_filter_step(
     _macro = merge_result.get("macro") or {}
 
     from validate_and_filter import validate_and_filter as _vf
+
+    if add_score and trace_id:
+        _ps = merge_result.get("prune_stats") or {}
+        _in = float(_ps.get("input", 0))
+        _kept = float(_ps.get("kept", 0))
+        _d_types = float(_ps.get("dropped_low_types", 0))
+        _d_strength = float(_ps.get("dropped_low_strength", 0))
+        _rescued = float(_ps.get("rescued", 0))
+        add_score(trace_id, "pre_llm_candidates_input", _in, comment=f"{timeframe} pre-LLM candidates")
+        add_score(trace_id, "pre_llm_candidates_kept", _kept, comment=f"{timeframe} candidates kept")
+        add_score(trace_id, "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity")
+        add_score(trace_id, "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength")
+        add_score(trace_id, "pre_llm_prune_rescued", _rescued, comment="rescued top candidates when prune emptied set")
+        if _in > 0:
+            add_score(trace_id, "pre_llm_keep_rate", _kept / _in, comment="pre-LLM candidate keep ratio")
 
     alerts, alerts_json = _vf(
         llm_response=llm_response,

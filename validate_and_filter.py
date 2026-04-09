@@ -565,8 +565,11 @@ def validate_and_filter(
 
         return text
 
+    parse_used_repair = False
+
     def _json_loads_with_repairs(text: str) -> Any:
         """Parse JSON with light deterministic repairs for common LLM artifacts."""
+        nonlocal parse_used_repair
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -574,6 +577,7 @@ def validate_and_filter(
 
         # Repair trailing commas before ] or }.
         repaired = re.sub(r",(\s*[\]}])", r"\1", text)
+        parse_used_repair = True
         return json.loads(repaired)
 
     try:
@@ -598,6 +602,12 @@ def validate_and_filter(
 
     if add_score_fn and trace_id:
         add_score_fn(trace_id, "llm_json_valid", 1.0, comment="valid JSON array")
+        add_score_fn(
+            trace_id,
+            "llm_json_repaired",
+            1.0 if parse_used_repair else 0.0,
+            comment="1 if lightweight parser repair was required",
+        )
 
     # ── Parse snapshots once ──────────────────────────────────────
     parsed_snaps = _parse_snapshots(snapshots_json)
