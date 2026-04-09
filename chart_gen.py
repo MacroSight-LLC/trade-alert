@@ -162,19 +162,6 @@ def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
     if ts_raw is None:
         return price, None
 
-
-def _parse_iso_utc(ts: str | None) -> datetime | None:
-    """Parse an ISO timestamp into a timezone-aware UTC datetime."""
-    if not ts:
-        return None
-    try:
-        dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except ValueError:
-        return None
-
     # Polygon trade timestamp may be in ns/us/ms depending on endpoint variant.
     # Infer scale by magnitude and convert to UTC ISO8601.
     try:
@@ -192,6 +179,19 @@ def _parse_iso_utc(ts: str | None) -> datetime | None:
         return price, ts_iso
     except (TypeError, ValueError, OverflowError):
         return price, None
+
+
+def _parse_iso_utc(ts: str | None) -> datetime | None:
+    """Parse an ISO timestamp into a timezone-aware UTC datetime."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 def generate_chart(
