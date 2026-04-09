@@ -16,6 +16,7 @@ Implements SSOT §4 (PlaybookAlert validation) and §10.2/10.3 gates:
 
 from __future__ import annotations
 
+import re
 import json
 import logging
 import math
@@ -564,9 +565,20 @@ def validate_and_filter(
 
         return text
 
+    def _json_loads_with_repairs(text: str) -> Any:
+        """Parse JSON with light deterministic repairs for common LLM artifacts."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Repair trailing commas before ] or }.
+        repaired = re.sub(r",(\s*[\]}])", r"\1", text)
+        return json.loads(repaired)
+
     try:
         llm_json_text = _extract_json_array_text(llm_response)
-        raw = json.loads(llm_json_text)
+        raw = _json_loads_with_repairs(llm_json_text)
         # Accept common wrapped shapes produced by LLMs, e.g.
         # {"alerts": [...]} or {"result": [...]}.
         if isinstance(raw, dict):
@@ -685,6 +697,17 @@ def validate_and_filter(
                 )
                 rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
                 continue
+        elif alert.direction == "SHORT":
+            if not (alert.entry["target"] < alert.entry["level"] < alert.entry["stop"]):
+                logger.warning(
+                    "Entry order invalid: %s SHORT target=%.2f level=%.2f stop=%.2f",
+                    alert.symbol,
+                    alert.entry["target"],
+                    alert.entry["level"],
+                    alert.entry["stop"],
+                )
+                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
+                continue
 
         # ── Entry-vs-market drift gate ─────────────────────────
         # Reject LONG/SHORT alerts whose proposed entry is too far
@@ -705,17 +728,6 @@ def validate_and_filter(
                     )
                     rejections.append((alert.symbol, GateRejection.ENTRY_MARKET_DRIFT))
                     continue
-        elif alert.direction == "SHORT":
-            if not (alert.entry["target"] < alert.entry["level"] < alert.entry["stop"]):
-                logger.warning(
-                    "Entry order invalid: %s SHORT target=%.2f level=%.2f stop=%.2f",
-                    alert.symbol,
-                    alert.entry["target"],
-                    alert.entry["level"],
-                    alert.entry["stop"],
-                )
-                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
-                continue
 
         # ── VIX universal hard gate ──────────────────────────────
         # When VIX > 30 the market is in extreme stress.  Reject ALL

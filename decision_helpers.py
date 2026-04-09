@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _MERGE_LIMIT_15M: int = int(os.environ.get("MERGE_LIMIT_15M", "30"))
 _MERGE_LIMIT_1H: int = int(os.environ.get("MERGE_LIMIT_1H", "20"))
+_PRUNE_MIN_TYPES_15M: int = int(os.environ.get("PRUNE_MIN_TYPES_15M", "3"))
+_PRUNE_MIN_TYPES_1H: int = int(os.environ.get("PRUNE_MIN_TYPES_1H", "3"))
+_PRUNE_MIN_STRENGTH_15M: float = float(os.environ.get("PRUNE_MIN_STRENGTH_15M", "2.0"))
+_PRUNE_MIN_STRENGTH_1H: float = float(os.environ.get("PRUNE_MIN_STRENGTH_1H", "2.5"))
 
 
 def _merge_limit_for_timeframe(timeframe: str) -> int:
@@ -24,6 +28,65 @@ def _merge_limit_for_timeframe(timeframe: str) -> int:
     if timeframe == "1h":
         return _MERGE_LIMIT_1H
     return 20
+
+
+def _prune_thresholds(timeframe: str) -> tuple[int, float]:
+    if timeframe == "1h":
+        return _PRUNE_MIN_TYPES_1H, _PRUNE_MIN_STRENGTH_1H
+    return _PRUNE_MIN_TYPES_15M, _PRUNE_MIN_STRENGTH_15M
+
+
+def _snapshot_strength(snapshot: dict[str, Any]) -> tuple[int, float]:
+    signals = snapshot.get("signals", [])
+    if not isinstance(signals, list):
+        return 0, 0.0
+
+    types: set[str] = set()
+    strength = 0.0
+    for sig in signals:
+        if not isinstance(sig, dict):
+            continue
+        sig_type = sig.get("type")
+        if isinstance(sig_type, str) and sig_type:
+            types.add(sig_type)
+        try:
+            score = abs(float(sig.get("score", 0.0)))
+            conf = max(float(sig.get("confidence", 0.0)), 0.0)
+        except (TypeError, ValueError):
+            continue
+        strength += score * conf
+
+    return len(types), strength
+
+
+def _prune_snapshots_for_llm(
+    timeframe: str,
+    snapshots: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Drop weak candidates before prompt construction to reduce LLM noise/cost."""
+    min_types, min_strength = _prune_thresholds(timeframe)
+
+    kept: list[dict[str, Any]] = []
+    dropped_low_types = 0
+    dropped_low_strength = 0
+
+    for snap in snapshots:
+        type_count, strength = _snapshot_strength(snap)
+        if type_count < min_types:
+            dropped_low_types += 1
+            continue
+        if strength < min_strength:
+            dropped_low_strength += 1
+            continue
+        kept.append(snap)
+
+    stats = {
+        "input": len(snapshots),
+        "kept": len(kept),
+        "dropped_low_types": dropped_low_types,
+        "dropped_low_strength": dropped_low_strength,
+    }
+    return kept, stats
 
 
 def merge_snapshots(
@@ -50,6 +113,26 @@ def merge_snapshots(
             n = int(_inp_n)
         except (ValueError, TypeError):
             n = 0
+
+        # Deterministic pre-LLM pruning even for orchestrator-provided merges.
+        try:
+            parsed = json.loads(_inp_json)
+            if isinstance(parsed, list):
+                pruned, stats = _prune_snapshots_for_llm(timeframe, parsed)
+                snapshots_json = json.dumps(pruned, indent=2)
+                n = len(pruned)
+                logger.info(
+                    "Decision-%s pre-LLM prune (orchestrator): input=%d kept=%d "
+                    "drop_types=%d drop_strength=%d",
+                    timeframe,
+                    stats["input"],
+                    stats["kept"],
+                    stats["dropped_low_types"],
+                    stats["dropped_low_strength"],
+                )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("Decision-%s: unable to parse pre-merged snapshots for pruning", timeframe)
+
         logger.info("Decision-%s: using %d pre-merged symbols from orchestrator", timeframe, n)
         return {"skip": n == 0, "snapshots_json": snapshots_json, "macro": macro, "n": n}
 
@@ -62,14 +145,28 @@ def merge_snapshots(
         logger.info("No snapshots available for %s decision — skipping", timeframe)
         return {"skip": True, "snapshots_json": "[]", "macro": {}, "n": 0}
 
-    snapshots_json = json.dumps([snap.model_dump() for snap in snapshots], indent=2)
+    snapshot_dicts = [snap.model_dump() for snap in snapshots]
+    pruned, stats = _prune_snapshots_for_llm(timeframe, snapshot_dicts)
+    if len(pruned) == 0:
+        logger.info(
+            "Decision-%s pre-LLM prune dropped all candidates: input=%d "
+            "drop_types=%d drop_strength=%d",
+            timeframe,
+            stats["input"],
+            stats["dropped_low_types"],
+            stats["dropped_low_strength"],
+        )
+        return {"skip": True, "snapshots_json": "[]", "macro": macro, "n": 0}
+
+    snapshots_json = json.dumps(pruned, indent=2)
     logger.info(
-        "Decision-%s: merged %d symbols for evaluation (limit=%d)",
+        "Decision-%s: merged %d symbols for evaluation (limit=%d), kept %d after pre-LLM prune",
         timeframe,
         len(snapshots),
         merge_limit,
+        len(pruned),
     )
-    return {"skip": False, "snapshots_json": snapshots_json, "macro": macro, "n": len(snapshots)}
+    return {"skip": False, "snapshots_json": snapshots_json, "macro": macro, "n": len(pruned)}
 
 
 def build_prompt(
