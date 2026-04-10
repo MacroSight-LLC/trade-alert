@@ -357,7 +357,7 @@ def _format_watch_embed(alert: PlaybookAlert) -> dict:
                             f"TF: **{alert.timeframe}**\n"
                             f"EP: **{alert.edge_probability:.2f}** | "
                             f"CONF: **{alert.confidence:.2f}** | "
-                            f"SA: **{alert.sources_agree}/10**"
+                            f"SA: **{alert.sources_agree}/7**"
                         ),
                         "inline": False,
                     },
@@ -423,11 +423,11 @@ def format_embed(
     # Hard freshness gates by alert timeframe: if quote is older than these
     # windows, don't present it as "Current Price" because it can mislead entry context.
     max_price_age_seconds = {
-        "5m": 60 * 60,
-        "15m": 2 * 60 * 60,
-        "1h": 6 * 60 * 60,
-        "4h": 24 * 60 * 60,
-        "1D": 72 * 60 * 60,
+        "5m": int(os.environ.get("ALERT_MAX_PRICE_AGE_5M", str(60 * 60))),
+        "15m": int(os.environ.get("ALERT_MAX_PRICE_AGE_15M", str(45 * 60))),
+        "1h": int(os.environ.get("ALERT_MAX_PRICE_AGE_1H", str(6 * 60 * 60))),
+        "4h": int(os.environ.get("ALERT_MAX_PRICE_AGE_4H", str(24 * 60 * 60))),
+        "1D": int(os.environ.get("ALERT_MAX_PRICE_AGE_1D", str(72 * 60 * 60))),
     }
     hard_stale = False
     hard_age_mins: int | None = None
@@ -586,8 +586,8 @@ def format_embed(
         },
         {
             "name": "\U0001f4ca Source Alignment",
-            "value": f"```{_score_bar(alert.sources_agree / 10, segments=10)}```"
-            f"**{alert.sources_agree}/10** independent sources aligned",
+            "value": f"```{_score_bar(alert.sources_agree / 7, segments=7)}```"
+            f"**{alert.sources_agree}/7** independent signal families aligned",
             "inline": False,
         },
     ]
@@ -979,6 +979,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
         future_to_sym = {
             pool.submit(generate_chart, alert.symbol, alert.timeframe, alert.entry): alert.symbol
             for alert in valid_alerts
+            if alert.direction != "WATCH"
         }
         for future in concurrent.futures.as_completed(future_to_sym):
             sym = future_to_sym[future]

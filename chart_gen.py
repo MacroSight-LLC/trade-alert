@@ -26,11 +26,17 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 POLYGON_BASE_URL = "https://api.polygon.io"
-POLYGON_TIMEOUT = 10.0
+ALPACA_BASE_URL = "https://data.alpaca.markets"
+POLYGON_TIMEOUT = float(os.getenv("POLYGON_TIMEOUT", "10.0"))
+POLYGON_LAST_TRADE_TIMEOUT = float(os.getenv("POLYGON_LAST_TRADE_TIMEOUT", "3.0"))
+ALPACA_TIMEOUT = float(os.getenv("ALPACA_TIMEOUT", "5.0"))
 _MAX_RETRIES = 1
 _RETRY_BACKOFF = 13.0  # slightly over Polygon's 12s free-tier rate window
+_LAST_TRADE_MAX_RETRIES = int(os.getenv("POLYGON_LAST_TRADE_RETRIES", "2"))
+_LAST_TRADE_BACKOFF = float(os.getenv("POLYGON_LAST_TRADE_BACKOFF", "0.5"))
 
 _chart_client: httpx.Client | None = None
+_alpaca_client: httpx.Client | None = None
 
 
 def _get_chart_client() -> httpx.Client:
@@ -39,6 +45,14 @@ def _get_chart_client() -> httpx.Client:
     if _chart_client is None or _chart_client.is_closed:
         _chart_client = httpx.Client(timeout=POLYGON_TIMEOUT)
     return _chart_client
+
+
+def _get_alpaca_client() -> httpx.Client:
+    """Return a module-level HTTP client for Alpaca price fallback requests."""
+    global _alpaca_client  # noqa: PLW0603
+    if _alpaca_client is None or _alpaca_client.is_closed:
+        _alpaca_client = httpx.Client(timeout=ALPACA_TIMEOUT)
+    return _alpaca_client
 
 
 # Timeframe → (multiplier, span, num_bars) for Polygon range endpoint
@@ -138,11 +152,12 @@ def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
     try:
         client = _get_chart_client()
         data: dict = {}
-        for attempt in range(_MAX_RETRIES + 1):
-            resp = client.get(url, params=params)
-            if resp.status_code == 429 and attempt < _MAX_RETRIES:
-                logger.info("Polygon 429 for last trade %s, backing off %.0fs", symbol, _RETRY_BACKOFF)
-                time.sleep(_RETRY_BACKOFF)
+        for attempt in range(_LAST_TRADE_MAX_RETRIES + 1):
+            resp = client.get(url, params=params, timeout=POLYGON_LAST_TRADE_TIMEOUT)
+            if resp.status_code == 429 and attempt < _LAST_TRADE_MAX_RETRIES:
+                backoff = _LAST_TRADE_BACKOFF * (2**attempt)
+                logger.info("Polygon 429 for last trade %s, backing off %.1fs", symbol, backoff)
+                time.sleep(backoff)
                 continue
             resp.raise_for_status()
             data = resp.json()
@@ -181,6 +196,74 @@ def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
         return price, None
 
 
+def _alpaca_timeframe(timeframe: str) -> str:
+    """Map alert timeframe to Alpaca bars timeframe string."""
+    return {
+        "5m": "5Min",
+        "15m": "15Min",
+        "1h": "1Hour",
+        "4h": "4Hour",
+        "1D": "1Day",
+    }.get(timeframe, "15Min")
+
+
+def _fetch_alpaca_last_close(symbol: str, timeframe: str) -> tuple[float | None, str | None]:
+    """Fetch latest bar close from Alpaca as fallback quote source.
+
+    Returns:
+        Tuple of (close_price, ISO timestamp), or (None, None) on failure.
+    """
+    api_key = os.getenv("ALPACA_API_KEY", "")
+    secret_key = os.getenv("ALPACA_SECRET_KEY", "")
+    if not api_key or not secret_key:
+        return None, None
+
+    timeframe_param = _alpaca_timeframe(timeframe)
+    now_utc = datetime.now(timezone.utc)
+    start = (now_utc - timedelta(days=3)).isoformat()
+
+    url = f"{ALPACA_BASE_URL}/v2/stocks/{symbol}/bars"
+    params: dict[str, Any] = {
+        "timeframe": timeframe_param,
+        "start": start,
+        "limit": 1,
+        "adjustment": "raw",
+        "feed": "iex",
+        "sort": "desc",
+    }
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
+    }
+
+    try:
+        resp = _get_alpaca_client().get(url, headers=headers, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.debug("Alpaca fallback fetch failed for %s: %s", symbol, exc)
+        return None, None
+
+    bars = data.get("bars") or []
+    if not bars:
+        return None, None
+
+    latest = bars[0]
+    try:
+        close = float(latest.get("c"))
+    except (TypeError, ValueError):
+        return None, None
+
+    ts = latest.get("t")
+    if isinstance(ts, str):
+        try:
+            parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return close, parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            return close, None
+    return close, None
+
+
 def _parse_iso_utc(ts: str | None) -> datetime | None:
     """Parse an ISO timestamp into a timezone-aware UTC datetime."""
     if not ts:
@@ -215,29 +298,66 @@ def generate_chart(
     """
     df = _fetch_candles(symbol, timeframe)
     live_price, live_ts = _fetch_last_trade(symbol)
+    alpaca_price, alpaca_ts = _fetch_alpaca_last_close(symbol, timeframe)
+
+    latest_price: float | None = None
+    latest_ts: str | None = None
+    selected_source = "none"
+
+    candle_price: float | None = None
+    candle_ts: str | None = None
+    if not df.empty:
+        candle_price = float(df["Close"].iloc[-1])
+        candle_ts = pd.Timestamp(df.index[-1]).isoformat()
+
+    # Primary quote source: Polygon last trade.
+    if live_price is not None:
+        latest_price = live_price
+        latest_ts = live_ts
+        selected_source = "polygon_last_trade"
+    # Secondary: Alpaca latest close.
+    elif alpaca_price is not None:
+        latest_price = alpaca_price
+        latest_ts = alpaca_ts
+        selected_source = "alpaca_last_close"
+    # Last resort: chart candle close.
+    elif candle_price is not None:
+        latest_price = candle_price
+        latest_ts = candle_ts
+        selected_source = "polygon_candle_close"
+
+    # If we have multiple timestamped sources, keep the freshest timestamp.
+    candidate_quotes: list[tuple[float, str | None, str]] = []
+    if live_price is not None:
+        candidate_quotes.append((live_price, live_ts, "polygon_last_trade"))
+    if alpaca_price is not None:
+        candidate_quotes.append((alpaca_price, alpaca_ts, "alpaca_last_close"))
+    if candle_price is not None:
+        candidate_quotes.append((candle_price, candle_ts, "polygon_candle_close"))
+
+    freshest_dt: datetime | None = None
+    for price_val, ts_val, src in candidate_quotes:
+        dt_val = _parse_iso_utc(ts_val)
+        if dt_val is None:
+            continue
+        if freshest_dt is None or dt_val > freshest_dt:
+            freshest_dt = dt_val
+            latest_price = price_val
+            latest_ts = ts_val
+            selected_source = src
+
+    logger.info(
+        "Price source %s for %s tf=%s (live=%s alpaca=%s candle=%s)",
+        selected_source,
+        symbol,
+        timeframe,
+        "yes" if live_price is not None else "no",
+        "yes" if alpaca_price is not None else "no",
+        "yes" if candle_price is not None else "no",
+    )
 
     if df.empty:
-        return None, None, live_price, live_ts
-
-    latest_price = float(df["Close"].iloc[-1])
-    latest_ts = pd.Timestamp(df.index[-1]).isoformat()
-
-    # Use the freshest timestamped market source:
-    # live trade quote (when recent) vs latest candle close.
-    candle_dt = _parse_iso_utc(latest_ts)
-    live_dt = _parse_iso_utc(live_ts)
-    if live_price is not None:
-        if live_dt and candle_dt:
-            if live_dt >= candle_dt:
-                latest_price = live_price
-                latest_ts = live_ts or latest_ts
-        elif live_dt and not candle_dt:
-            latest_price = live_price
-            latest_ts = live_ts or latest_ts
-        elif live_ts is None:
-            # Last-trade endpoint returned price without timestamp; avoid
-            # overriding a candle-derived timestamped quote with unknown recency.
-            pass
+        return None, None, latest_price, latest_ts
 
     try:
         import mplfinance as mpf

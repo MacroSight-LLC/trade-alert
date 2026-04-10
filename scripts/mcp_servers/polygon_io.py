@@ -23,8 +23,8 @@ API_KEY: str = os.getenv("POLYGON_API_KEY", "")
 BASE_URL = "https://api.polygon.io"
 TIMEOUT = 10.0
 
-# Free-tier: 5 requests/min → 12s between individual API calls
-_REQUEST_DELAY = 12.5
+# Free-tier: 5 requests/min (~12s between calls). Set POLYGON_REQUEST_DELAY=0.5 in .env after plan upgrade.
+_REQUEST_DELAY = float(os.getenv("POLYGON_REQUEST_DELAY", "12.5"))
 _MAX_429_RETRIES = 2
 _429_BACKOFF = 15.0
 

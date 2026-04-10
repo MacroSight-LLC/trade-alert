@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 _MERGE_LIMIT_15M: int = int(os.environ.get("MERGE_LIMIT_15M", "30"))
 _MERGE_LIMIT_1H: int = int(os.environ.get("MERGE_LIMIT_1H", "20"))
 _PRUNE_ENABLED: bool = os.environ.get("PRUNE_ENABLED", "1") == "1"
-_PRUNE_MIN_TYPES_15M: int = int(os.environ.get("PRUNE_MIN_TYPES_15M", "3"))
+_PRUNE_MIN_TYPES_15M: int = int(os.environ.get("PRUNE_MIN_TYPES_15M", "4"))
 _PRUNE_MIN_TYPES_1H: int = int(os.environ.get("PRUNE_MIN_TYPES_1H", "3"))
-_PRUNE_MIN_STRENGTH_15M: float = float(os.environ.get("PRUNE_MIN_STRENGTH_15M", "2.0"))
+_PRUNE_MIN_STRENGTH_15M: float = float(os.environ.get("PRUNE_MIN_STRENGTH_15M", "2.5"))
 _PRUNE_MIN_STRENGTH_1H: float = float(os.environ.get("PRUNE_MIN_STRENGTH_1H", "2.5"))
 _PRUNE_RESCUE_TOP_K: int = int(os.environ.get("PRUNE_RESCUE_TOP_K", "3"))
 
@@ -268,6 +268,43 @@ def build_prompt(
     snapshots_json = merge_result["snapshots_json"]
     n = merge_result["n"]
 
+    def _market_reference_context(snaps_json: str, limit: int = 20) -> str:
+        """Extract symbol->reference price lines from snapshot raw payloads for prompt context."""
+        try:
+            snaps = json.loads(snaps_json)
+        except (TypeError, ValueError):
+            return ""
+
+        refs: dict[str, float] = {}
+        for snap in snaps:
+            sym = str(snap.get("symbol", "")).upper()
+            if not sym or sym in refs:
+                continue
+            for sig in snap.get("signals", []):
+                raw = sig.get("raw") or {}
+                if not isinstance(raw, dict):
+                    continue
+                for key in ("current_price", "last", "last_price", "price", "close"):
+                    try:
+                        px = float(raw.get(key, 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if px > 0:
+                        refs[sym] = px
+                        break
+                if sym in refs:
+                    break
+
+        if not refs:
+            return ""
+
+        lines: list[str] = []
+        for i, sym in enumerate(sorted(refs.keys())):
+            if i >= limit:
+                break
+            lines.append(f"- {sym}: ${refs[sym]:,.2f}")
+        return "\n".join(lines)
+
     _fred_vix = fred_results[0] if len(fred_results) > 0 else {}
     _fred_yc = fred_results[1] if len(fred_results) > 1 else {}
     vix = _fred_vix.get("vix_level") or _fred_vix.get("value", "N/A")
@@ -292,6 +329,7 @@ def build_prompt(
             "yc": yc,
             "n": n,
             "snapshots_json": snapshots_json,
+            "market_reference_context": _market_reference_context(snapshots_json),
             "data_freshness": data_freshness,
             "performance_context": perf_ctx,
             "few_shot_examples": format_golden_examples(),

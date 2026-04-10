@@ -343,6 +343,82 @@ class TestGateIntegration:
         results, _ = _run([a], snaps=snaps, timeframe="1h")
         assert len(results) == 0
 
+
+class TestEntryMarketDrift:
+    """Entry-vs-market drift defaults should enforce 3% tolerance."""
+
+    def test_entry_within_3pct_passes(self) -> None:
+        snaps = [
+            {
+                "symbol": "AAPL",
+                "timeframe": "15m",
+                "timestamp": _recent_ts(),
+                "signals": [
+                    {
+                        "source": "test",
+                        "type": "technical_trend",
+                        "score": 1.8,
+                        "confidence": 0.8,
+                        "reason": "trend",
+                        "raw": {"current_price": 100.0},
+                    },
+                    {
+                        "source": "test",
+                        "type": "volume_spike",
+                        "score": 1.5,
+                        "confidence": 0.8,
+                        "reason": "vol",
+                    },
+                    {
+                        "source": "test",
+                        "type": "sentiment_bull",
+                        "score": 1.2,
+                        "confidence": 0.8,
+                        "reason": "sent",
+                    },
+                ],
+            }
+        ]
+        a = _alert(entry={"level": 102.9, "stop": 100.0, "target": 108.7})
+        results, _ = _run([a], snaps=snaps)
+        assert len(results) == 1
+
+    def test_entry_above_3pct_rejected(self) -> None:
+        snaps = [
+            {
+                "symbol": "AAPL",
+                "timeframe": "15m",
+                "timestamp": _recent_ts(),
+                "signals": [
+                    {
+                        "source": "test",
+                        "type": "technical_trend",
+                        "score": 1.8,
+                        "confidence": 0.8,
+                        "reason": "trend",
+                        "raw": {"current_price": 100.0},
+                    },
+                    {
+                        "source": "test",
+                        "type": "volume_spike",
+                        "score": 1.5,
+                        "confidence": 0.8,
+                        "reason": "vol",
+                    },
+                    {
+                        "source": "test",
+                        "type": "sentiment_bull",
+                        "score": 1.2,
+                        "confidence": 0.8,
+                        "reason": "sent",
+                    },
+                ],
+            }
+        ]
+        a = _alert(entry={"level": 103.2, "stop": 100.0, "target": 109.6})
+        results, _ = _run([a], snaps=snaps)
+        assert len(results) == 0
+
     def test_invalid_json_returns_empty(self) -> None:
         """Invalid LLM JSON → empty result."""
         results, json_str = validate_and_filter(

@@ -17,7 +17,6 @@ RUN pip install --no-cache-dir \
     hvac \
     redis \
     structlog \
-    tradingview-ta \
     yfinance
 
 COPY scripts/mcp_server.py /app/mcp_server.py

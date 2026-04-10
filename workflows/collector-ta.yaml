@@ -31,13 +31,11 @@ steps:
 
       result = {"equities": equities}
 
-  # Step 2 -- TradingView ta_scan for equities (15m), batched to respect MCP cap
-  # NOTE: tradingview.py caps at 8 symbols per call (symbols[:8]).
-  # We split into a limited number of 8-symbol batches to widen coverage
-  # while avoiding TradingView timeout/rate-limit saturation.
+  # Step 2 -- TradingView ta_scan for equities (15m), 3 batches in parallel.
+  # The MCP server now enforces safe Alpaca cadence internally, so the workflow
+  # can dispatch all 3 batches at once without reintroducing provider pressure.
   - name: fetch-tv-ta-batches
     type: parallel_tool_calls
-    abort_on_failure: false
     calls:
       - tool: tradingview-mcp
         method: ta_scan
@@ -48,6 +46,16 @@ steps:
         method: ta_scan
         params:
           symbols: "{{ steps['read-universes']['equities'][8:16] }}"
+          timeframe: "15m"
+      - tool: tradingview-mcp
+        method: ta_scan
+        params:
+          symbols: "{{ steps['read-universes']['equities'][16:24] }}"
+          timeframe: "15m"
+      - tool: tradingview-mcp
+        method: ta_scan
+        params:
+          symbols: "{{ steps['read-universes']['equities'][24:32] }}"
           timeframe: "15m"
 
   # Step 3 -- trading-mcp screen for fundamental context on equities only
@@ -75,16 +83,38 @@ steps:
       r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
       snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
 
-      # Aggregated ta_scan batches from fetch-tv-ta-batches.
-      # Each result contains both RSI and BB fields per symbol.
-      raw_eq_ta_batches = steps.get("fetch-tv-ta-batches") or []
+      # Aggregate ta_scan batches from the parallel step output.
+      raw_eq_ta_batches = []
+      fetched = steps.get("fetch-tv-ta-batches") or []
+      if isinstance(fetched, list):
+          for batch in fetched:
+              if batch is not None:
+                  raw_eq_ta_batches.append(batch)
+
+      equities = (steps.get("read-universes") or {}).get("equities", [])
+      requested_symbols = equities[:32]
+      batch_count = len(raw_eq_ta_batches)
+
+      batch_failures = 0
 
       raw_eq_ta_items = []
       for batch in raw_eq_ta_batches:
-          if isinstance(batch, dict):
-              raw_eq_ta_items.extend(batch.get("results", []) or [])
+          if not isinstance(batch, dict):
+              batch_failures += 1
+              continue
+          if batch.get("error"):
+              batch_failures += 1
+              continue
+          raw_eq_ta_items.extend(batch.get("results", []) or [])
+
+      returned_symbols = {
+          (item.get("symbol") or item.get("ticker") or "").upper()
+          for item in raw_eq_ta_items
+          if item.get("symbol") or item.get("ticker")
+      }
 
       n_pushed = 0
+      normalized_symbols = set()
       for timeframe in ["15m", "1h"]:
           merged = {}
 
@@ -94,6 +124,14 @@ steps:
               if not sym:
                   continue
               merged.setdefault(sym, {"indicators": {}, "patterns": []})
+
+              latest_close = item.get("close")
+              if latest_close is not None:
+                merged[sym]["close"] = latest_close
+
+              current_price = item.get("current_price")
+              if current_price is not None:
+                merged[sym]["current_price"] = current_price
 
               # Bollinger data
               bb_pos = item.get("bb_position")
@@ -129,20 +167,43 @@ steps:
           snapshots = normalize(merged, timeframe=timeframe)
           redis_key = f"snapshots:{timeframe}"
           for snap in snapshots:
+              normalized_symbols.add(snap.symbol.upper())
               r.lpush(redis_key, snap.model_dump_json())
               r.expire(redis_key, snapshot_ttl)
               n_pushed += 1
 
-      result = {"n_snapshots": n_pushed}
+      result = {
+          "n_snapshots": n_pushed,
+          "universe_total": len(equities),
+          "requested_ta_symbols": len(requested_symbols),
+          "batch_count": batch_count,
+          "batch_failures": batch_failures,
+          "symbols_returned": len(returned_symbols),
+          "symbols_normalized": len(normalized_symbols),
+      }
 
   # Step 5 -- Log completion
   - name: log-completion
     type: code
     code: |
       import logging
-      n = (steps.get("normalize-and-store-snapshots") or {}).get("n_snapshots", 0)
-      logging.getLogger(__name__).info("TA collector: %d snapshots pushed to Redis", n)
-      result = f"TA collector: {n} snapshots pushed to Redis"
+      _ns = steps.get("normalize-and-store-snapshots") or {}
+      n = _ns.get("n_snapshots", 0)
+      u = _ns.get("universe_total", 0)
+      req = _ns.get("requested_ta_symbols", 0)
+      b = _ns.get("batch_count", 0)
+      bf = _ns.get("batch_failures", 0)
+      ret = _ns.get("symbols_returned", 0)
+      norm = _ns.get("symbols_normalized", 0)
+
+      logging.getLogger(__name__).info(
+        "TA collector: snapshots=%d universe=%d requested=%d batches=%d batch_failures=%d returned=%d normalized=%d",
+        n, u, req, b, bf, ret, norm
+      )
+      result = (
+        f"TA collector: snapshots={n} universe={u} requested={req} "
+        f"batches={b} batch_failures={bf} returned={ret} normalized={norm}"
+      )
 
 error_handling:
   # SSOT S8: skip symbols where TradingView returns rate limit errors; continue with partial results.

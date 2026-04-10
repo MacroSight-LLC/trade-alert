@@ -7,7 +7,8 @@ Implements SSOT §4 (PlaybookAlert validation) and §10.2/10.3 gates:
   - edge_probability, sources_agree, confidence thresholds
   - EP ceiling by actual source count (prevents LLM inflation)
   - VIX hard gate (universal reject when VIX > 30)
-  - Source-hallucination detection (delta ≥ 2 → hard reject)
+    - Symbol hallucination detection (symbol absent from merged snapshots)
+    - Deterministic server-side sources_agree from aligned signal families
   - R:R minimum (2:1 for actionable alerts)
   - R:R zero-risk rejection (stop == level → hard reject)
   - VIX + risk-off soft gate (VIX > 25 suppresses weak longs/shorts)
@@ -27,6 +28,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
+from constants import get_market_hours_status
 from models import PlaybookAlert
 from redis_client import get_redis
 
@@ -59,6 +61,7 @@ class GateRejection(str, Enum):
     WATCH_CAP = "watch_cap"
     WATCH_DROPPED_DIRECTIONAL_PRESENT = "watch_dropped_directional_present"
     WATCH_DECAY = "watch_decay"
+    MARKET_SESSION_CLOSED = "market_session_closed"
 
 
 # Valid alert timeframes
@@ -109,7 +112,10 @@ _GATE_EP: dict[str, float] = {
     "15m": float(os.environ.get("GATE_EP_15M", "0.70")),
     "1h": float(os.environ.get("GATE_EP_1H", "0.75")),
 }
-_GATE_SA: int = int(os.environ.get("GATE_SA", "3"))
+# SA gate = minimum number of independent signal families aligned to direction.
+# 7 families exist (trend, volume, sentiment, flow, events, macro, positioning);
+# requiring 4 ensures meaningful multi-family conviction.
+_GATE_SA: int = int(os.environ.get("GATE_SA", "4"))
 _GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
 
 # Limited WATCH policy (borderline-only, conservative)
@@ -120,6 +126,17 @@ _WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
 # WATCH decay: drop WATCH alerts that persist unresolved across N pipeline cycles
 _WATCH_DECAY_CYCLES: int = int(os.environ.get("WATCH_DECAY_CYCLES", "4"))
 _WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", str(60 * 60 * 24)))
+
+# Deterministic sources_agree from server-side family alignment.
+# Minimum mean family score to count a family as directionally aligned.
+# Scores range 0–3; 0.25 = ~8% of max, requiring at least weak directional commitment.
+_SA_FAMILY_MIN_SCORE: float = float(os.environ.get("SA_FAMILY_MIN_SCORE", "0.25"))
+
+# Server-side market-session gating controls.
+_MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED", "1") == "1"
+_SESSION_PREPOST_EP_BUMP: float = float(os.environ.get("SESSION_PREPOST_EP_BUMP", "0.03"))
+_SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.03"))
+_SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "1"))
 
 # Macro veto bypass thresholds (configurable)
 _MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))
@@ -141,7 +158,7 @@ _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.05"))
 
 # Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
-_ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.08"))
+_ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.03"))
 
 # Dynamic gate controls (regime + timeframe overlays)
 _DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
@@ -154,6 +171,20 @@ _TF_EP_OFFSET_15M: float = float(os.environ.get("TF_EP_OFFSET_15M", "0.00"))
 _TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
 _TF_CONF_OFFSET_15M: float = float(os.environ.get("TF_CONF_OFFSET_15M", "0.00"))
 _TF_CONF_OFFSET_1H: float = float(os.environ.get("TF_CONF_OFFSET_1H", "0.00"))
+
+_TYPE_FAMILY: dict[str, str] = {
+    "technical_trend": "trend",
+    "relative_strength": "trend",
+    "price_forecast": "trend",
+    "volume_spike": "volume",
+    "sentiment_bull": "sentiment",
+    "sentiment_bear": "sentiment",
+    "options_flow": "flow",
+    "insider_activity": "events",
+    "catalyst_event": "events",
+    "macro_risk_off": "macro",
+    "short_interest": "positioning",
+}
 
 
 def _median(values: list[float]) -> float:
@@ -196,13 +227,24 @@ def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
                 sc = float(sig.get("score", 0.0))
             except (TypeError, ValueError):
                 continue
-            if st in ("technical_trend", "sentiment_bull", "options_flow", "relative_strength") and sc > 0:
+            if sc > 0 and st in (
+                "technical_trend", "sentiment_bull", "options_flow", "relative_strength",
+                "price_forecast", "insider_activity", "catalyst_event",
+            ):
                 bulls += 1
                 strengths.append(min(abs(sc) / 3.0, 1.0))
-            elif st in ("sentiment_bear", "macro_risk_off") or (
-                st in ("technical_trend", "options_flow", "relative_strength") and sc < 0
+            elif sc < 0 and st in (
+                "technical_trend", "options_flow", "relative_strength",
+                "price_forecast", "insider_activity", "catalyst_event",
             ):
                 bears += 1
+                strengths.append(min(abs(sc) / 3.0, 1.0))
+            elif st in ("sentiment_bear", "macro_risk_off") and sc > 0:
+                bears += 1
+                strengths.append(min(abs(sc) / 3.0, 1.0))
+            elif st == "short_interest" and sc > 0:
+                # High short interest amplifies existing bulls (squeeze potential)
+                bulls += 1
                 strengths.append(min(abs(sc) / 3.0, 1.0))
     trend_strength = sum(strengths) / len(strengths) if strengths else 0.0
     return bulls, bears, trend_strength
@@ -300,9 +342,10 @@ def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
 def _record_session_gate_metrics(
     timeframe: str,
     llm_candidates: int,
-    alerts_passed: int,
+    directional_passed: int,
     watch_kept: int,
-    rejections: list[tuple[str, GateRejection]],
+    directional_rejections: list[tuple[str, GateRejection]],
+    watch_rejections: list[tuple[str, GateRejection]],
 ) -> None:
     try:
         redis_client = get_redis()
@@ -310,15 +353,57 @@ def _record_session_gate_metrics(
         pipe = redis_client.pipeline()
         pipe.hincrby(key, "decision_runs", 1)
         pipe.hincrby(key, "llm_candidates", llm_candidates)
-        pipe.hincrby(key, "alerts_passed", alerts_passed)
+        pipe.hincrby(key, "alerts_passed", directional_passed)
+        pipe.hincrby(key, "alerts_passed_directional", directional_passed)
+        pipe.hincrby(key, "alerts_passed_total", directional_passed + watch_kept)
         pipe.hincrby(key, "watch_kept", watch_kept)
-        pipe.hincrby(key, "alerts_rejected", len(rejections))
-        for _symbol, gate in rejections:
+        total_rejections = len(directional_rejections) + len(watch_rejections)
+        pipe.hincrby(key, "alerts_rejected", total_rejections)
+        pipe.hincrby(key, "alerts_rejected_directional", len(directional_rejections))
+        pipe.hincrby(key, "alerts_rejected_watch", len(watch_rejections))
+        for _symbol, gate in directional_rejections:
+            pipe.hincrby(key, f"gate_dir_{gate.value}", 1)
+            pipe.hincrby(key, f"gate_{gate.value}", 1)
+        for _symbol, gate in watch_rejections:
+            pipe.hincrby(key, f"gate_watch_{gate.value}", 1)
             pipe.hincrby(key, f"gate_{gate.value}", 1)
         pipe.expire(key, _SESSION_STATS_TTL_SECONDS)
         pipe.execute()
     except Exception as exc:  # noqa: BLE001
         logger.debug("Failed to record session gate metrics: %s", exc)
+
+
+def _market_session_bucket(now: datetime | None = None) -> str:
+    status = get_market_hours_status(now)
+    lower = status.lower()
+    if lower.startswith("regular trading hours"):
+        return "regular"
+    if lower.startswith("pre-market"):
+        return "pre"
+    if lower.startswith("after-hours"):
+        return "after"
+    return "closed"
+
+
+def _apply_market_session_gate_overlays(
+    ep_gate: float,
+    sa_gate: int,
+    conf_gate: float,
+    timeframe: str,
+    now: datetime | None = None,
+) -> tuple[float, int, float, str]:
+    session_bucket = _market_session_bucket(now)
+    if not _MARKET_HOURS_GATES_ENABLED:
+        return ep_gate, sa_gate, conf_gate, session_bucket
+
+    if timeframe == "15m" and session_bucket in {"pre", "after"}:
+        return (
+            min(ep_gate + _SESSION_PREPOST_EP_BUMP, 0.95),
+            sa_gate + _SESSION_PREPOST_SA_BUMP,
+            min(conf_gate + _SESSION_PREPOST_CONF_BUMP, 0.99),
+            session_bucket,
+        )
+    return ep_gate, sa_gate, conf_gate, session_bucket
 
 
 def _parse_snapshots(snapshots_json: str) -> list[dict[str, Any]]:
@@ -354,6 +439,54 @@ def _build_snap_type_index(snaps: list[dict[str, Any]]) -> dict[str, set[str]]:
         for sig in s.get("signals", []):
             snap_types.setdefault(sym, set()).add(sig.get("type", ""))
     return snap_types
+
+
+def _signal_directional_score(sig_type: str, score: float) -> float:
+    if sig_type == "sentiment_bear":
+        return -abs(score)
+    if sig_type == "macro_risk_off":
+        return -abs(score)
+    return score
+
+
+def _build_symbol_family_scores(snaps: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    family_accum: dict[str, dict[str, list[float]]] = {}
+    for snap in snaps:
+        symbol = str(snap.get("symbol", ""))
+        if not symbol:
+            continue
+        for sig in snap.get("signals", []):
+            if not isinstance(sig, dict):
+                continue
+            sig_type = str(sig.get("type", ""))
+            family = _TYPE_FAMILY.get(sig_type)
+            if family is None:
+                continue
+            try:
+                raw_score = float(sig.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
+            score = _signal_directional_score(sig_type, raw_score)
+            family_accum.setdefault(symbol, {}).setdefault(family, []).append(score)
+
+    family_means: dict[str, dict[str, float]] = {}
+    for symbol, fam_map in family_accum.items():
+        family_means[symbol] = {
+            family: (sum(scores) / len(scores))
+            for family, scores in fam_map.items()
+            if scores
+        }
+    return family_means
+
+
+def _aligned_family_count(family_scores: dict[str, float], direction: str) -> int:
+    if direction == "LONG":
+        return sum(1 for score in family_scores.values() if score >= _SA_FAMILY_MIN_SCORE)
+    if direction == "SHORT":
+        return sum(1 for score in family_scores.values() if score <= -_SA_FAMILY_MIN_SCORE)
+    long_count = sum(1 for score in family_scores.values() if score >= _SA_FAMILY_MIN_SCORE)
+    short_count = sum(1 for score in family_scores.values() if score <= -_SA_FAMILY_MIN_SCORE)
+    return max(long_count, short_count)
 
 
 def _get_forecast_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
@@ -464,7 +597,24 @@ def _get_reference_prices(snaps: list[dict[str, Any]]) -> dict[str, float]:
       2) any signal raw current_price/price/close/last/last_price
     """
     prices: dict[str, float] = {}
-    fallback: dict[str, float] = {}
+    candidates: dict[str, tuple[int, int, float]] = {}
+    type_priority = {
+        "price_forecast": 0,
+        "technical_trend": 1,
+        "volume_spike": 2,
+        "options_flow": 3,
+        "insider_activity": 4,
+        "catalyst_event": 5,
+        "short_interest": 6,
+    }
+    key_priority = {
+        "current_price": 0,
+        "last": 1,
+        "last_price": 2,
+        "price": 3,
+        "close": 4,
+    }
+
     for s in snaps:
         sym = s.get("symbol", "")
         if not sym:
@@ -474,26 +624,23 @@ def _get_reference_prices(snaps: list[dict[str, Any]]) -> dict[str, float]:
             if not isinstance(raw, dict):
                 continue
 
-            if sig.get("type") == "price_forecast":
-                try:
-                    cp = float(raw.get("current_price", 0.0))
-                    if cp > 0:
-                        prices[sym] = cp
-                        continue
-                except (TypeError, ValueError):
-                    pass
-
-            for k in ("current_price", "price", "close", "last", "last_price"):
+            sig_type = str(sig.get("type", ""))
+            sig_rank = type_priority.get(sig_type, 99)
+            for k in ("current_price", "last", "last_price", "price", "close"):
                 try:
                     v = float(raw.get(k, 0.0))
                     if v > 0:
-                        fallback[sym] = v
+                        key_rank = key_priority.get(k, 99)
+                        existing = candidates.get(sym)
+                        proposal = (sig_rank, key_rank, v)
+                        if existing is None or proposal < existing:
+                            candidates[sym] = proposal
                         break
                 except (TypeError, ValueError):
                     continue
 
-    for sym, px in fallback.items():
-        prices.setdefault(sym, px)
+    for sym, (_, _, px) in candidates.items():
+        prices[sym] = px
     return prices
 
 
@@ -510,10 +657,11 @@ def validate_and_filter(
     """Validate LLM output and apply server-side gate filters.
 
     Parses the LLM JSON response, validates each item as a
-    PlaybookAlert, and applies a cascade of server-side gates:
+    PlaybookAlert, and applies server-side gates while collecting
+    all failed reasons per candidate:
 
     1. **VIX hard gate** (universal): VIX > 30 rejects LONG/SHORT
-    2. **Source-hallucination check**: delta ≥ 2 → hard reject
+    2. **Symbol-hallucination check**: symbol must exist in snapshots
     3. **EP ceiling**: caps edge_probability by actual source count
     4. **Gate thresholds**: EP, sources_agree, confidence minimums
     5. **R:R gate**: reward ≥ 2× risk for LONG/SHORT
@@ -614,6 +762,7 @@ def validate_and_filter(
 
     # ── Build snapshot signal-type index ─────────────────────────
     snap_types = _build_snap_type_index(parsed_snaps)
+    family_scores_index = _build_symbol_family_scores(parsed_snaps)
 
     # ── Build per-symbol forecast score index ────────────────────
     forecast_scores = _get_forecast_scores(parsed_snaps)
@@ -621,14 +770,10 @@ def validate_and_filter(
     volume_scores = _get_volume_spike_scores(parsed_snaps)
     # ── Build per-symbol reference price index ────────────────
     ref_prices = _get_reference_prices(parsed_snaps)
-    # 1h-specific: pre-compute macro_risk_off score for macro veto
-    macro_risk_off_score = _get_macro_risk_off_score(parsed_snaps) if timeframe == "1h" else 0.0
-
-    # Macro staleness guard: discard macro signals if data is too old
-    macro_stale = _is_macro_stale(parsed_snaps)
-    if macro_stale:
-        macro_risk_off_score = 0.0
-
+    # Macro regime is sourced from the macro:regime Redis key (set by collector-macro),
+    # NOT from per-symbol snapshot signals.  The __GLOBAL_MACRO__ snapshots are stripped
+    # by merger.py before reaching here, so _get_macro_risk_off_score always returns 0.0.
+    # Use the reliable macro dict + vix param for the 1h veto gate instead.
     risk_off = not macro.get("risk_on", True)
     base_ep_gate = _GATE_EP.get(timeframe, 0.70)
     base_sa_gate = _GATE_SA
@@ -648,10 +793,18 @@ def validate_and_filter(
         timeframe,
         regime,
     )
+    ep_gate, sa_gate, conf_gate, market_session = _apply_market_session_gate_overlays(
+        ep_gate,
+        sa_gate,
+        conf_gate,
+        timeframe,
+    )
 
     alerts: list[PlaybookAlert] = []
     candidates: list[PlaybookAlert] = []
     rejections: list[tuple[str, GateRejection]] = []
+    directional_rejections: list[tuple[str, GateRejection]] = []
+    watch_rejections: list[tuple[str, GateRejection]] = []
 
     for item in raw:
         try:
@@ -674,12 +827,64 @@ def validate_and_filter(
 
         candidates.append(alert)
 
+        reason_list: list[GateRejection] = []
+        reason_set: set[GateRejection] = set()
+
+        def _add_reason(reason: GateRejection) -> None:
+            if reason not in reason_set:
+                reason_set.add(reason)
+                reason_list.append(reason)
+
+        directional = alert.direction in ("LONG", "SHORT")
+
+        # Deterministic server-side sources_agree from aligned independent families.
+        actual_sources = len(snap_types.get(alert.symbol, set()))
+        if actual_sources == 0:
+            logger.warning("SYMBOL_HALLUCINATION: %s not present in merged snapshots", alert.symbol)
+            if add_score_fn and trace_id:
+                add_score_fn(
+                    trace_id,
+                    "symbol_hallucination",
+                    1.0,
+                    comment=f"{alert.symbol}: not in snapshot data",
+                )
+            _add_reason(GateRejection.SOURCE_HALLUCINATION)
+
+        family_scores = family_scores_index.get(alert.symbol, {})
+        llm_sources_agree = alert.sources_agree
+        deterministic_sources_agree = _aligned_family_count(family_scores, alert.direction)
+        if llm_sources_agree != deterministic_sources_agree:
+            logger.info(
+                "sources_agree server override: %s llm=%d server=%d",
+                alert.symbol,
+                llm_sources_agree,
+                deterministic_sources_agree,
+            )
+            if add_score_fn and trace_id:
+                add_score_fn(
+                    trace_id,
+                    "sources_agree_override",
+                    float(abs(llm_sources_agree - deterministic_sources_agree)),
+                    comment=f"{alert.symbol}: llm {llm_sources_agree}, server {deterministic_sources_agree}",
+                )
+        alert.sources_agree = deterministic_sources_agree
+
+        # Cap edge_probability by evidence depth (actual distinct types in snapshot).
+        ceiling = 0.50 if actual_sources == 0 else EP_CEILING.get(min(actual_sources, 11), 0.99)
+        if alert.edge_probability > ceiling:
+            original_ep = alert.edge_probability
+            alert.edge_probability = ceiling
+            logger.warning(
+                "EP_CAPPED_%d_SOURCES: %s EP=%.2f capped to %.2f (sources=%d)",
+                actual_sources,
+                alert.symbol,
+                original_ep,
+                ceiling,
+                actual_sources,
+            )
+
         # ── Entry-order validation (Gate 0) ──────────────────────
-        # LONG must have stop < level < target.
-        # SHORT must have target < level < stop.
-        # WATCH alerts are exempt.
-        # All prices must be strictly positive for equities.
-        if alert.direction in ("LONG", "SHORT"):
+        if directional:
             _price_invalid = False
             for _pk in ("stop", "level", "target"):
                 if alert.entry[_pk] <= 0:
@@ -693,8 +898,7 @@ def validate_and_filter(
                     _price_invalid = True
                     break
             if _price_invalid:
-                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
-                continue
+                _add_reason(GateRejection.ENTRY_ORDER_INVALID)
 
         if alert.direction == "LONG":
             if not (alert.entry["stop"] < alert.entry["level"] < alert.entry["target"]):
@@ -705,8 +909,7 @@ def validate_and_filter(
                     alert.entry["level"],
                     alert.entry["target"],
                 )
-                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
-                continue
+                _add_reason(GateRejection.ENTRY_ORDER_INVALID)
         elif alert.direction == "SHORT":
             if not (alert.entry["target"] < alert.entry["level"] < alert.entry["stop"]):
                 logger.warning(
@@ -716,13 +919,12 @@ def validate_and_filter(
                     alert.entry["level"],
                     alert.entry["stop"],
                 )
-                rejections.append((alert.symbol, GateRejection.ENTRY_ORDER_INVALID))
-                continue
+                _add_reason(GateRejection.ENTRY_ORDER_INVALID)
 
         # ── Entry-vs-market drift gate ─────────────────────────
         # Reject LONG/SHORT alerts whose proposed entry is too far
         # from latest reference price from snapshots.
-        if alert.direction in ("LONG", "SHORT"):
+        if directional and GateRejection.ENTRY_ORDER_INVALID not in reason_set:
             ref_price = ref_prices.get(alert.symbol)
             if ref_price and ref_price > 0:
                 drift_pct = abs(alert.entry["level"] - ref_price) / ref_price
@@ -736,101 +938,30 @@ def validate_and_filter(
                         drift_pct * 100.0,
                         _ENTRY_MARKET_DRIFT_MAX_PCT * 100.0,
                     )
-                    rejections.append((alert.symbol, GateRejection.ENTRY_MARKET_DRIFT))
-                    continue
+                    _add_reason(GateRejection.ENTRY_MARKET_DRIFT)
+
+        # ── Market-session server-side gate ─────────────────────
+        if directional and market_session == "closed":
+            logger.info(
+                "Market-session gate: %s %s rejected (session=%s)",
+                alert.symbol,
+                alert.direction,
+                market_session,
+            )
+            _add_reason(GateRejection.MARKET_SESSION_CLOSED)
 
         # ── VIX universal hard gate ──────────────────────────────
         # When VIX > 30 the market is in extreme stress.  Reject ALL
         # directional signals (LONG/SHORT) regardless of risk_on flag
         # or timeframe.  WATCH alerts are allowed through.
-        if vix > 30.0 and alert.direction in ("LONG", "SHORT"):
+        if vix > 30.0 and directional:
             logger.warning(
                 "VIX hard gate: %s %s rejected (VIX=%.1f > 30.0)",
                 alert.symbol,
                 alert.direction,
                 vix,
             )
-            rejections.append((alert.symbol, GateRejection.VIX_HARD))
-            continue
-
-        # ── Source-hallucination check (SSOT §10.2) ──────────────
-        # delta = LLM claimed sources - actual distinct source types
-        #   delta ≥ 2  → hard reject (SOURCE_HALLUCINATION)
-        #   delta == 1 → downgrade to actual count (existing behaviour)
-        #   delta ≤ 0  → no change
-        actual_sources = len(snap_types.get(alert.symbol, set()))
-        if actual_sources == 0:
-            # Symbol not in any snapshot — LLM hallucinated the ticker
-            logger.warning(
-                "SYMBOL_HALLUCINATION: %s not present in merged snapshots",
-                alert.symbol,
-            )
-            if add_score_fn and trace_id:
-                add_score_fn(
-                    trace_id,
-                    "symbol_hallucination",
-                    1.0,
-                    comment=f"{alert.symbol}: not in snapshot data",
-                )
-            rejections.append((alert.symbol, GateRejection.SOURCE_HALLUCINATION))
-            continue
-        # actual_sources > 0 guaranteed past this point
-        sa_delta = alert.sources_agree - actual_sources
-        if sa_delta >= 2:
-            logger.warning(
-                "SOURCE_HALLUCINATION: %s LLM=%d actual=%d (delta=%d)",
-                alert.symbol,
-                alert.sources_agree,
-                actual_sources,
-                sa_delta,
-            )
-            if add_score_fn and trace_id:
-                add_score_fn(
-                    trace_id,
-                    "sources_agree_hallucination",
-                    float(sa_delta),
-                    comment=f"{alert.symbol}: claimed {alert.sources_agree}, actual {actual_sources}",
-                )
-            rejections.append((alert.symbol, GateRejection.SOURCE_HALLUCINATION))
-            continue
-        elif sa_delta > 0:
-            logger.warning(
-                "sources_agree override: %s LLM=%d actual=%d",
-                alert.symbol,
-                alert.sources_agree,
-                actual_sources,
-            )
-            if add_score_fn and trace_id:
-                add_score_fn(
-                    trace_id,
-                    "sources_agree_override",
-                    float(sa_delta),
-                    comment=f"{alert.symbol}: claimed {alert.sources_agree}, actual {actual_sources}",
-                )
-            alert.sources_agree = actual_sources
-
-        # ── EP ceiling by actual source count ────────────────────
-        # Caps edge_probability to a ceiling determined by how many
-        # distinct signal types actually appear in the snapshot.
-        # Prevents the LLM from assigning inflated confidence with
-        # thin supporting evidence.
-        # When actual_sources == 0, cap aggressively at 0.50 — no
-        # evidence should not yield a high-confidence alert.
-        if actual_sources == 0:
-            ceiling = 0.50
-        else:
-            ceiling = EP_CEILING.get(min(actual_sources, 11), 0.99)
-        if alert.edge_probability > ceiling:
-            original_ep = alert.edge_probability
-            alert.edge_probability = ceiling
-            logger.warning(
-                "EP_CAPPED_%d_SOURCES: %s EP=%.2f capped to %.2f (sources=%d)",
-                actual_sources,
-                alert.symbol,
-                original_ep,
-                ceiling,
-                actual_sources,
-            )
+            _add_reason(GateRejection.VIX_HARD)
 
         # ── Gate thresholds (per-timeframe) ──────────────────────
         if alert.direction == "WATCH":
@@ -842,26 +973,28 @@ def validate_and_filter(
                     alert.edge_probability,
                     watch_ep_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.WATCH_EP_THRESHOLD))
-                continue
-            if alert.sources_agree < _WATCH_SA_MIN:
+                _add_reason(GateRejection.WATCH_EP_THRESHOLD)
+            # WATCH SA and CONF scale with regime-adjusted directional gates,
+            # staying 1 SA family and 0.10 conf below the directional bar to
+            # preserve a consistent gap across sessions and regime overlays.
+            watch_sa_gate = max(_WATCH_SA_MIN, sa_gate - 1)
+            watch_conf_gate = max(_WATCH_CONF_MIN, conf_gate - 0.10)
+            if alert.sources_agree < watch_sa_gate:
                 logger.info(
                     "WATCH filtered (SA): %s sa=%d < watch_gate=%d",
                     alert.symbol,
                     alert.sources_agree,
-                    _WATCH_SA_MIN,
+                    watch_sa_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.WATCH_SA_THRESHOLD))
-                continue
-            if alert.confidence < _WATCH_CONF_MIN:
+                _add_reason(GateRejection.WATCH_SA_THRESHOLD)
+            if alert.confidence < watch_conf_gate:
                 logger.info(
                     "WATCH filtered (CONF): %s conf=%.2f < watch_gate=%.2f",
                     alert.symbol,
                     alert.confidence,
-                    _WATCH_CONF_MIN,
+                    watch_conf_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.WATCH_CONF_THRESHOLD))
-                continue
+                _add_reason(GateRejection.WATCH_CONF_THRESHOLD)
         else:
             if alert.edge_probability < ep_gate:
                 logger.info(
@@ -870,8 +1003,7 @@ def validate_and_filter(
                     alert.edge_probability,
                     ep_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.EP_THRESHOLD))
-                continue
+                _add_reason(GateRejection.EP_THRESHOLD)
             if alert.sources_agree < sa_gate:
                 logger.info(
                     "Alert filtered (SA): %s sa=%d < gate=%d",
@@ -879,8 +1011,7 @@ def validate_and_filter(
                     alert.sources_agree,
                     sa_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.SA_THRESHOLD))
-                continue
+                _add_reason(GateRejection.SA_THRESHOLD)
             if alert.confidence < conf_gate:
                 logger.info(
                     "Alert filtered (CONF): %s conf=%.2f < gate=%.2f",
@@ -888,21 +1019,19 @@ def validate_and_filter(
                     alert.confidence,
                     conf_gate,
                 )
-                rejections.append((alert.symbol, GateRejection.CONF_THRESHOLD))
-                continue
+                _add_reason(GateRejection.CONF_THRESHOLD)
 
         # ── R:R gate: reward must be ≥ 2× risk ──────────────────
         risk = abs(alert.entry["level"] - alert.entry["stop"])
         reward = abs(alert.entry["target"] - alert.entry["level"])
-        if alert.direction != "WATCH":
+        if directional and GateRejection.ENTRY_ORDER_INVALID not in reason_set:
             if risk == 0:
                 logger.warning(
                     "R:R zero-risk rejected: %s stop==level (%.2f)",
                     alert.symbol,
                     alert.entry["level"],
                 )
-                rejections.append((alert.symbol, GateRejection.RR_ZERO_RISK))
-                continue
+                _add_reason(GateRejection.RR_ZERO_RISK)
             # Reject unrealistic risk: stop so close to entry that R:R
             # is meaningless.  Use price-normalized floor to handle
             # penny stocks ($0.05 min) and higher-priced equities.
@@ -915,23 +1044,21 @@ def validate_and_filter(
                     micro_risk_floor,
                     alert.entry["level"],
                 )
-                rejections.append((alert.symbol, GateRejection.RR_ZERO_RISK))
-                continue
-            if reward / risk < 2.0:
+                _add_reason(GateRejection.RR_ZERO_RISK)
+            if risk > 0 and reward / risk < 2.0:
                 logger.info(
                     "Alert filtered: %s R:R %.1f:1 below 2:1 minimum",
                     alert.symbol,
                     reward / risk,
                 )
-                rejections.append((alert.symbol, GateRejection.RR_MINIMUM))
-                continue
+                _add_reason(GateRejection.RR_MINIMUM)
 
         # ── Forecast contradiction gate ──────────────────────────
         # If a price_forecast signal exists for this symbol and
         # contradicts the alert direction, reject.
         # Non-blocking: if no forecast signal → pass through.
         # High-conviction bypass: SA >= 5 AND EP >= 0.85.
-        if alert.direction in ("LONG", "SHORT"):
+        if directional:
             _fc_score = forecast_scores.get(alert.symbol)
             if _fc_score is not None:
                 _fc_contradicts = False
@@ -954,12 +1081,12 @@ def validate_and_filter(
                         alert.sources_agree,
                         alert.edge_probability,
                     )
-                    rejections.append((alert.symbol, GateRejection.FORECAST_CONTRADICTS))
-                    continue
+                    _add_reason(GateRejection.FORECAST_CONTRADICTS)
 
-        # ── 1h macro veto: strong macro_risk_off discounts longs ─
-        # After score harmonization, macro_risk_off scores are in [-1, +1].
-        # 0.30 corresponds to the old 2.0 on [0, 3] scale.
+        # ── 1h macro veto: risk-off regime blocks longs ─────────
+        # Uses macro regime dict (risk_on = False) + VIX ≥ 25 as the trigger.
+        # This is reliable because macro:regime is always populated from
+        # collector-macro via the Redis key, independent of per-symbol snapshots.
         # High-conviction bypass: SA >= 6 AND EP >= 0.90 overrides macro veto.
         _macro_high_conviction = (
             alert.sources_agree >= _MACRO_VETO_SA and alert.edge_probability >= _MACRO_VETO_EP
@@ -967,16 +1094,16 @@ def validate_and_filter(
         if (
             timeframe == "1h"
             and alert.direction == "LONG"
-            and macro_risk_off_score >= 0.30
+            and risk_off
+            and vix >= 25.0
             and not _macro_high_conviction
         ):
             logger.info(
-                "Macro veto: %s LONG rejected (macro_risk_off score=%.2f)",
+                "Macro veto: %s LONG rejected (risk_off=True, VIX=%.1f)",
                 alert.symbol,
-                macro_risk_off_score,
+                vix,
             )
-            rejections.append((alert.symbol, GateRejection.MACRO_VETO))
-            continue
+            _add_reason(GateRejection.MACRO_VETO)
 
         # ── VIX + risk-off soft gate (both timeframes) ───────────
         # Suppress weak LONGs when VIX elevated + risk-off.
@@ -1003,13 +1130,12 @@ def validate_and_filter(
                 alert.sources_agree,
                 alert.edge_probability,
             )
-            rejections.append((alert.symbol, GateRejection.VIX_SOFT))
-            continue
+            _add_reason(GateRejection.VIX_SOFT)
 
         # ── Volume confirmation gate ───────────────────────────────
         # Directional alerts without volume confirmation get a confidence
         # downgrade — thin-volume breakouts are unreliable.
-        if alert.direction in ("LONG", "SHORT"):
+        if directional:
             _vol_score = volume_scores.get(alert.symbol, 0.0)
             if _vol_score < _VOLUME_CONFIRM_SCORE:
                 alert.confidence = max(alert.confidence - _VOLUME_CONFIRM_PENALTY, 0.0)
@@ -1025,10 +1151,17 @@ def validate_and_filter(
                         alert.confidence,
                         conf_gate,
                     )
-                    rejections.append((alert.symbol, GateRejection.VOLUME_UNCONFIRMED))
-                    continue
+                    _add_reason(GateRejection.VOLUME_UNCONFIRMED)
 
-        alerts.append(alert)
+        if reason_list:
+            rejected_rows = [(alert.symbol, reason) for reason in reason_list]
+            rejections.extend(rejected_rows)
+            if directional:
+                directional_rejections.extend(rejected_rows)
+            else:
+                watch_rejections.extend(rejected_rows)
+        else:
+            alerts.append(alert)
 
     # Keep WATCH output intentionally limited:
     # - If directional alerts exist, drop all WATCH alerts for this run.
@@ -1038,7 +1171,9 @@ def validate_and_filter(
     watch_alerts = [a for a in alerts if a.direction == "WATCH"]
     if directional_alerts and watch_alerts:
         for w in watch_alerts:
-            rejections.append((w.symbol, GateRejection.WATCH_DROPPED_DIRECTIONAL_PRESENT))
+            row = (w.symbol, GateRejection.WATCH_DROPPED_DIRECTIONAL_PRESENT)
+            rejections.append(row)
+            watch_rejections.append(row)
         watch_alerts = []
         alerts = directional_alerts
     else:
@@ -1074,7 +1209,9 @@ def validate_and_filter(
                     w.edge_probability,
                     w.confidence,
                 )
-                rejections.append((w.symbol, GateRejection.WATCH_DECAY))
+                row = (w.symbol, GateRejection.WATCH_DECAY)
+                rejections.append(row)
+                watch_rejections.append(row)
             else:
                 decay_kept.append(w)
         watch_alerts = decay_kept
@@ -1082,7 +1219,9 @@ def validate_and_filter(
         # ── Cap to _WATCH_MAX_PER_RUN ──────────────────────────────
         if len(watch_alerts) > _WATCH_MAX_PER_RUN:
             for w in watch_alerts[_WATCH_MAX_PER_RUN:]:
-                rejections.append((w.symbol, GateRejection.WATCH_CAP))
+                row = (w.symbol, GateRejection.WATCH_CAP)
+                rejections.append(row)
+                watch_rejections.append(row)
             watch_alerts = watch_alerts[:_WATCH_MAX_PER_RUN]
 
         alerts = directional_alerts + watch_alerts
@@ -1102,15 +1241,21 @@ def validate_and_filter(
     post_dist = _candidate_distribution(alerts)
 
     logger.info(
-        "Decision-%s gate summary: llm_candidates=%d parsed_candidates=%d passed=%d rejected=%d "
-        "regime=%s trend_strength=%.2f breadth=%d/%d "
+        "Decision-%s gate summary: llm_candidates=%d parsed_candidates=%d passed_total=%d "
+        "passed_directional=%d passed_watch=%d rejected_total=%d rejected_directional=%d rejected_watch=%d "
+        "regime=%s market_session=%s trend_strength=%.2f breadth=%d/%d "
         "ep_gate=%.2f(base=%.2f) sa_gate=%d(base=%d) conf_gate=%.2f(base=%.2f)",
         timeframe,
         len(raw),
         len(candidates),
         len(alerts),
+        len(directional_alerts),
+        len(watch_alerts),
         len(rejections),
+        len(directional_rejections),
+        len(watch_rejections),
         regime,
+        market_session,
         trend_strength,
         bulls,
         bears,
@@ -1179,7 +1324,14 @@ def validate_and_filter(
         )
 
     watch_kept = sum(1 for a in alerts if a.direction == "WATCH")
-    _record_session_gate_metrics(timeframe, len(raw), len(alerts), watch_kept, rejections)
+    _record_session_gate_metrics(
+        timeframe,
+        len(raw),
+        len(directional_alerts),
+        watch_kept,
+        directional_rejections,
+        watch_rejections,
+    )
 
     # ── Structured gate telemetry ─────────────────────────────────
     if add_score_fn and trace_id:

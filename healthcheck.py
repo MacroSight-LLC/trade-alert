@@ -27,7 +27,30 @@ from redis_client import get_redis as _get_redis
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL: str | None = os.getenv("DATABASE_URL")
+
+def _resolve_database_url() -> str | None:
+    """Return the effective Postgres DSN for the current runtime."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        return url
+
+    if not os.path.exists("/.dockerenv"):
+        return url
+
+    if "localhost:5432" not in url and "127.0.0.1:5432" not in url:
+        return url
+
+    password = os.getenv("POSTGRES_PASSWORD")
+    if not password:
+        return url
+
+    user = os.getenv("POSTGRES_USER", "trade_alert")
+    host = os.getenv("POSTGRES_HOST", "postgres")
+    db_name = os.getenv("POSTGRES_DB", "trade_alert")
+    return f"postgresql://{user}:{password}@{host}:5432/{db_name}"
+
+
+DATABASE_URL: str | None = _resolve_database_url()
 
 # SSOT §3: all 12 MCP services with /health endpoints
 # Uses env-var overrides matching pipeline_runner.py pattern

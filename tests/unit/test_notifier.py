@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -190,6 +191,21 @@ class TestFormatEmbed:
         mock_alert.edge_probability = 0.50
         result = format_embed(mock_alert)
         assert "MODERATE" in result["embeds"][0]["title"]
+
+    def test_current_price_marked_unavailable_when_stale(self, mock_alert: PlaybookAlert) -> None:
+        stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=80)).isoformat()
+        result = format_embed(mock_alert, current_price=874.0, current_price_ts=stale_ts)
+        fields = result["embeds"][0]["fields"]
+        cp_field = next(f for f in fields if f["name"] == "📍 Current Price")
+        assert "stale market data" in cp_field["value"]
+
+    def test_current_price_shown_when_fresh(self, mock_alert: PlaybookAlert) -> None:
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        result = format_embed(mock_alert, current_price=878.5, current_price_ts=fresh_ts)
+        fields = result["embeds"][0]["fields"]
+        cp_field = next(f for f in fields if f["name"] == "📍 Current Price")
+        assert "$878.50" in cp_field["value"]
+        assert "As of:" in cp_field["value"]
 
 
 # ── send_discord_embed ──────────────────────────────────────────

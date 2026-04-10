@@ -307,13 +307,13 @@ def _session_window(now: datetime | None = None) -> tuple[str, datetime, datetim
     return label, start_et.astimezone(timezone.utc), end_et.astimezone(timezone.utc), session_date
 
 
-def _format_gate_counts(stats: dict[str, str]) -> str:
+def _format_gate_counts(stats: dict[str, str], prefix: str = "gate_") -> str:
     gate_counts: list[tuple[str, int]] = []
     for key, value in stats.items():
-        if not key.startswith("gate_"):
+        if not key.startswith(prefix):
             continue
         try:
-            gate_counts.append((key.removeprefix("gate_"), int(value)))
+            gate_counts.append((key.removeprefix(prefix), int(value)))
         except ValueError:
             continue
     if not gate_counts:
@@ -394,22 +394,26 @@ def _build_session_report() -> str:
             total_runs += runs
             llm_candidates = int(stats.get("llm_candidates", "0") or 0)
             alerts_passed = int(stats.get("alerts_passed", "0") or 0)
+            alerts_passed_total = int(stats.get("alerts_passed_total", str(alerts_passed)) or alerts_passed)
             alerts_rejected = int(stats.get("alerts_rejected", "0") or 0)
+            directional_rejected = int(stats.get("alerts_rejected_directional", str(alerts_rejected)) or alerts_rejected)
+            watch_rejected = int(stats.get("alerts_rejected_watch", "0") or 0)
             watch_kept = int(stats.get("watch_kept", "0") or 0)
             watch_dropped_directional_present = int(
-                stats.get("gate_watch_dropped_directional_present", "0") or 0
+                stats.get("gate_watch_watch_dropped_directional_present", stats.get("gate_watch_dropped_directional_present", "0")) or 0
             )
-            watch_cap_rejections = int(stats.get("gate_watch_cap", "0") or 0)
-            watch_decay_rejections = int(stats.get("gate_watch_decay", "0") or 0)
+            watch_cap_rejections = int(stats.get("gate_watch_watch_cap", stats.get("gate_watch_cap", "0")) or 0)
+            watch_decay_rejections = int(stats.get("gate_watch_watch_decay", stats.get("gate_watch_decay", "0")) or 0)
             alert_rate = (alerts_passed / runs) if runs else 0.0
             pass_rate = (alerts_passed / llm_candidates) if llm_candidates else 0.0
             lines.append(
-                f"{timeframe}: runs={runs} | llm_candidates={llm_candidates} | passed={alerts_passed} | rejected={alerts_rejected} | alerts/run={alert_rate:.2f} | pass_rate={pass_rate:.0%}"
+                f"{timeframe}: runs={runs} | llm_candidates={llm_candidates} | passed_dir={alerts_passed} | passed_total={alerts_passed_total} | rejected_total={alerts_rejected} | alerts/run={alert_rate:.2f} | pass_rate={pass_rate:.0%}"
             )
             lines.append(
-                f"{timeframe} watch: kept={watch_kept} | dropped_directional_present={watch_dropped_directional_present} | cap_rejections={watch_cap_rejections} | decay_dropped={watch_decay_rejections}"
+                f"{timeframe} watch: kept={watch_kept} | rejected={watch_rejected} | dropped_directional_present={watch_dropped_directional_present} | cap_rejections={watch_cap_rejections} | decay_dropped={watch_decay_rejections}"
             )
-            lines.append(f"{timeframe} top rejections: {_format_gate_counts(stats)}")
+            lines.append(f"{timeframe} top directional rejections: {_format_gate_counts(stats, 'gate_dir_')}")
+            lines.append(f"{timeframe} top watch rejections: {_format_gate_counts(stats, 'gate_watch_')}")
 
         if totals[0] and total_runs == 0:
             lines.append("Note: alerts exist for this session, but gate telemetry started after the latest deploy/restart.")

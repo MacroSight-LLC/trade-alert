@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 _raw_top_n = int(os.getenv("MERGER_TOP_N", "20"))
 MERGER_TOP_N: int = _raw_top_n if _raw_top_n > 0 else 20
-_MERGER_MIN_TYPES_15M: int = int(os.getenv("MERGER_MIN_TYPES_15M", "2"))
+_MERGER_MIN_TYPES_15M: int = int(os.getenv("MERGER_MIN_TYPES_15M", "4"))
 _MERGER_MIN_TYPES_1H: int = int(os.getenv("MERGER_MIN_TYPES_1H", "3"))
 
 # Diversity multiplier weight — controls how strongly the merger penalises
@@ -242,9 +242,6 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
                     reason=ta_sig.reason + " [volume-confirmed]",
                     raw=ta_sig.raw,
                 )
-
-        # Count distinct source families for richer SA metric
-        distinct_families = {_signal_family(s) for s in deduped}
 
         merged_snap = Snapshot(
             symbol=symbol,

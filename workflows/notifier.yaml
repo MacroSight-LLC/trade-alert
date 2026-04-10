@@ -10,9 +10,11 @@ description: >
   format and send Discord embeds, log to Postgres.
 llm_model: claude-sonnet-4-20250514
 # Required input: alerts_json (JSON string of PlaybookAlert array)
+# Optional input: raw_snapshots_json (JSON string of merged snapshots for audit logging)
 # Passed via workflow inputs: from calling decision workflow
 inputs:
   - alerts_json
+  - raw_snapshots_json
 
 steps:
   # Step 1 — Receive and validate alerts input
@@ -25,12 +27,13 @@ steps:
       logger = logging.getLogger(__name__)
 
       alerts = json.loads(alerts_json)
+      raw_snapshots = json.loads(raw_snapshots_json) if raw_snapshots_json else []
       if not alerts:
           logger.info("Notifier: no alerts to send this tick")
-          result = {"skip": True, "count": 0}
+          result = {"skip": True, "count": 0, "raw_snapshots": raw_snapshots}
       else:
           logger.info("Notifier: received %d alerts", len(alerts))
-          result = {"skip": False, "count": len(alerts)}
+          result = {"skip": False, "count": len(alerts), "raw_snapshots": raw_snapshots}
 
   # Step 2 — Send to Discord and log to Postgres
   - name: send-and-log
@@ -46,7 +49,7 @@ steps:
 
         n_sent = notify(
             alerts_json=alerts_json,
-            raw_snapshots=[],
+            raw_snapshots=steps["receive-alerts"].get("raw_snapshots") or [],
         )
         logger.info("Notifier complete: %d alerts sent to Discord", n_sent)
         result = {"n_sent": n_sent}

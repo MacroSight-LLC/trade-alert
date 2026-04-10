@@ -40,11 +40,16 @@ steps:
   - name: fetch-sentiment-signals
     type: parallel_tool_calls
     calls:
-      # Finnhub sentiment -- aggregate scores only, batch 20
+      # Finnhub sentiment -- aggregate scores only, batched to widen safe coverage
       - tool: finnhub-mcp
         method: sentiment
         params:
-          symbols: "{{ steps['read-universes']['all_symbols'][:20] }}"
+          symbols: "{{ steps['read-universes']['all_symbols'][:15] }}"
+          aggregate: true
+      - tool: finnhub-mcp
+        method: sentiment
+        params:
+          symbols: "{{ steps['read-universes']['all_symbols'][15:30] }}"
           aggregate: true
       # ROT trending tickers -- structured output only
       - tool: rot-mcp
@@ -65,9 +70,19 @@ steps:
     code: |
       import json
 
-      finnhub_results = steps["fetch-sentiment-signals"][0].get("results", [])
-      rot_tickers     = steps["fetch-sentiment-signals"][1].get("results", [])
-      rot_flow        = steps["fetch-sentiment-signals"][2].get("results", [])
+      fetched = steps.get("fetch-sentiment-signals") or []
+
+      finnhub_batch_1 = fetched[0] if len(fetched) > 0 and isinstance(fetched[0], dict) else {}
+      finnhub_batch_2 = fetched[1] if len(fetched) > 1 and isinstance(fetched[1], dict) else {}
+      rot_tickers_raw = fetched[2] if len(fetched) > 2 and isinstance(fetched[2], dict) else {}
+      rot_flow_raw = fetched[3] if len(fetched) > 3 and isinstance(fetched[3], dict) else {}
+
+      finnhub_results = (finnhub_batch_1.get("results", []) or []) + (finnhub_batch_2.get("results", []) or [])
+      rot_tickers = rot_tickers_raw.get("results", []) or []
+      rot_flow = rot_flow_raw.get("results", []) or []
+
+      all_symbols = (steps.get("read-universes") or {}).get("all_symbols", [])
+      requested_finnhub = all_symbols[:30]
 
       # Collect any raw text bodies for SpamShield classification
       text_items = []
@@ -81,6 +96,11 @@ steps:
           "finnhub_results": finnhub_results,
           "rot_tickers": rot_tickers,
           "rot_flow": rot_flow,
+          "universe_total": len(all_symbols),
+          "requested_finnhub": len(requested_finnhub),
+          "returned_finnhub": len(finnhub_results),
+          "returned_rot_tickers": len(rot_tickers),
+          "returned_rot_flow": len(rot_flow),
       }
 
   - name: classify-spam
@@ -152,10 +172,12 @@ steps:
               raw.setdefault(sym, {}).setdefault("rot_options_flow", []).append(item)
 
       n_pushed  = 0
+      normalized_symbols = set()
       for timeframe in ["15m", "1h"]:
           snapshots = normalize(raw, timeframe=timeframe)
           redis_key = f"snapshots:{timeframe}"
           for snap in snapshots:
+              normalized_symbols.add(snap.symbol.upper())
               r.lpush(redis_key, snap.model_dump_json())
               r.expire(redis_key, snapshot_ttl)
               n_pushed += 1
@@ -163,6 +185,12 @@ steps:
       result = {
           "n_snapshots": n_pushed,
           "n_filtered": steps["classify-spam"].get("spam_filtered_count", 0),
+          "universe_total": steps["spamshield-filter"].get("universe_total", 0),
+          "requested_finnhub": steps["spamshield-filter"].get("requested_finnhub", 0),
+          "returned_finnhub": steps["spamshield-filter"].get("returned_finnhub", 0),
+          "returned_rot_tickers": steps["spamshield-filter"].get("returned_rot_tickers", 0),
+          "returned_rot_flow": steps["spamshield-filter"].get("returned_rot_flow", 0),
+          "symbols_normalized": len(normalized_symbols),
       }
 
   # Step 5 -- Log completion
@@ -173,8 +201,21 @@ steps:
       _ns = steps.get("normalize-and-store-snapshots") or {}
       n = _ns.get("n_snapshots", 0)
       f = _ns.get("n_filtered", 0)
-      logging.getLogger(__name__).info("Sentiment collector: %d snapshots, %d spam filtered", n, f)
-      result = f"Sentiment collector: {n} snapshots, {f} spam filtered"
+      u = _ns.get("universe_total", 0)
+      req = _ns.get("requested_finnhub", 0)
+      fr = _ns.get("returned_finnhub", 0)
+      rr_t = _ns.get("returned_rot_tickers", 0)
+      rr_f = _ns.get("returned_rot_flow", 0)
+      norm = _ns.get("symbols_normalized", 0)
+      logging.getLogger(__name__).info(
+        "Sentiment collector: snapshots=%d spam_filtered=%d universe=%d requested_finnhub=%d returned_finnhub=%d returned_rot_tickers=%d returned_rot_flow=%d normalized=%d",
+        n, f, u, req, fr, rr_t, rr_f, norm
+      )
+      result = (
+        f"Sentiment collector: snapshots={n} spam_filtered={f} universe={u} "
+        f"requested_finnhub={req} returned_finnhub={fr} "
+        f"returned_rot_tickers={rr_t} returned_rot_flow={rr_f} normalized={norm}"
+      )
 
 error_handling:
   # SSOT S8: if ROT unavailable -- continue with Finnhub only, note lower confidence.

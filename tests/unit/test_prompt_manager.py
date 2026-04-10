@@ -106,6 +106,13 @@ class TestYAMLFallback:
         _, user = pm.get_decision_prompts("15m", vars_)
         assert "edge_probability >= 0.90" in user
 
+    @patch("prompt_manager.get_langfuse_client", return_value=None)
+    def test_market_reference_context_included(self, _mock: MagicMock) -> None:
+        vars_ = {**_base_variables(), "market_reference_context": "- AAPL: $185.20"}
+        _, user = pm.get_decision_prompts("15m", vars_)
+        assert "Market reference context" in user
+        assert "AAPL: $185.20" in user
+
 
 # ── Langfuse-First Tests ────────────────────────────────────────
 
@@ -157,6 +164,25 @@ class TestLangfuseFirst:
         call_kwargs = sys_prompt.compile.call_args[1]
         assert call_kwargs["timeframe"] == "15m"
         assert call_kwargs["ep_gate"] == "0.70"
+
+    @patch("prompt_manager.get_langfuse_client")
+    def test_langfuse_user_prefixed_with_market_reference_context(self, mock_client: MagicMock) -> None:
+        sys_prompt = MagicMock()
+        sys_prompt.compile.return_value = "SYS"
+        sys_prompt.version = 1
+
+        usr_prompt = MagicMock()
+        usr_prompt.compile.return_value = "USR"
+        usr_prompt.version = 1
+
+        lf = MagicMock()
+        lf.get_prompt.side_effect = lambda name, **kw: sys_prompt if name == "decision-system" else usr_prompt
+        mock_client.return_value = lf
+
+        vars_ = {**_base_variables(), "market_reference_context": "- AAPL: $185.20"}
+        _, user = pm.get_decision_prompts("15m", vars_)
+        assert user.startswith("Current market reference prices")
+        assert "AAPL: $185.20" in user
 
     @patch("prompt_manager.get_langfuse_client")
     def test_falls_back_on_langfuse_error(self, mock_client: MagicMock) -> None:

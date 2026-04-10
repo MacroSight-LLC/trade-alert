@@ -23,4 +23,13 @@ if [ -n "$VAULT_ADDR" ] && [ -n "$VAULT_TOKEN" ]; then
     fi
 fi
 
+case "${DATABASE_URL:-}" in
+    ""|*localhost:5432/*|*127.0.0.1:5432/*)
+        if [ -n "${POSTGRES_PASSWORD:-}" ]; then
+            export DATABASE_URL="postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert"
+            echo "[entrypoint] Using internal postgres service for DATABASE_URL"
+        fi
+        ;;
+esac
+
 exec "$@"

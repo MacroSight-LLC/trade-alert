@@ -43,10 +43,18 @@ QUALITY RULES — follow these strictly:
    - 0.76-0.85: Very strong multi-source agreement, high confidence
    - 0.86-0.95: Exceptional confluence across 4+ sources, textbook setup
    - Never exceed 0.95 — no setup is certain
-6. sources_agree = count of DISTINCT independent signal groups pointing same direction
-   Valid groups: technical_trend, volume_spike, sentiment_bull, sentiment_bear,
-   options_flow, insider_activity, relative_strength, macro_risk_off,
-   catalyst_event, short_interest
+6. sources_agree = count of DISTINCT independent signal FAMILIES aligned to direction.
+   There are 7 signal families (the server computes the final value from snapshot data):
+     trend     : technical_trend, relative_strength, price_forecast (TimesFM ML forecast)
+     volume    : volume_spike
+     sentiment : sentiment_bull, sentiment_bear
+     flow      : options_flow
+     events    : insider_activity, catalyst_event
+     macro     : macro_risk_off
+     positioning: short_interest
+   NOTE: The server overrides your sources_agree with a deterministic family-aligned count
+   computed from raw snapshot scores. Produce your best estimate so the thesis is coherent;
+   the gating check is enforced server-side.
    - sentiment_bull and sentiment_bear are SEPARATE groups — never merge them.
      If a symbol has both, they represent conflicting signals from different sources.
    - catalyst_event: Upcoming earnings, material SEC filings, or corporate events.
@@ -57,6 +65,8 @@ QUALITY RULES — follow these strictly:
      Combine with volume_spike for short-squeeze conviction.
    - insider_activity: SEC Form 4 cluster buys/sells from EDGAR.
      Recent insider buys with score > 1.0 = strong conviction signal.
+   - price_forecast: TimesFM ML 96-candle price forecast. Positive score = bullish.
+     Factor into trend family alongside technical_trend.
    WEIGHTING GUIDANCE:
    - technical_trend + volume_spike together are stronger than either alone
    - options_flow large sweeps (high score) outweigh small mixed flow
@@ -112,7 +122,7 @@ except unusual_activity which defaults to []):
   sentiment_context: string
   unusual_activity: list[string] (may be empty)
   macro_regime: string
-  sources_agree: int 3-10
+  sources_agree: int 1-7
 
 RECENT PERFORMANCE CONTEXT (use to calibrate your edge_probability):
 {{performance_context}}

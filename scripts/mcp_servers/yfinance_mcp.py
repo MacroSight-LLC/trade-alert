@@ -112,7 +112,7 @@ async def short_ratio(params: dict[str, Any]) -> dict:
         symbols = [s.strip() for s in symbols.split(",")]
 
     results: list[dict] = []
-    for sym in symbols[:10]:
+    for sym in symbols[:20]:
         cache_key = f"short_ratio:{sym}"
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -149,7 +149,7 @@ async def options_activity(params: dict[str, Any]) -> dict:
         symbols = [s.strip() for s in symbols.split(",")]
 
     results: list[dict] = []
-    for sym in symbols[:5]:
+    for sym in symbols[:10]:
         cache_key = f"options_activity:{sym}"
         cached = _cache_get(cache_key)
         if cached is not None:

@@ -95,7 +95,7 @@ async def intraday_bars(params: dict[str, Any]) -> dict:
     results: list[dict] = []
     start = _market_open_today()
 
-    for sym in symbols[:10]:
+    for sym in symbols[:20]:
         cache_key = f"intraday_bars:{sym}"
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -159,7 +159,7 @@ async def volume_profile(params: dict[str, Any]) -> dict:
     results: list[dict] = []
     start = _market_open_today()
 
-    for sym in symbols[:10]:
+    for sym in symbols[:20]:
         cache_key = f"volume_profile:{sym}"
         cached = _cache_get(cache_key)
         if cached is not None:

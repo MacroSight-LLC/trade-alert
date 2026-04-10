@@ -10,6 +10,14 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-runtime-envfile: &runtime-envfile
+  - path: .env
+    required: false
+  - path: .env.secrets
+    required: false
+  - path: .env.vault
+    required: false
+
 services:
   # --- Infrastructure ---
 
@@ -17,6 +25,7 @@ services:
     image: hashicorp/vault:1.15.0
     cap_add:
       - IPC_LOCK
+    env_file: *runtime-envfile
     environment:
       VAULT_ADDR: "http://0.0.0.0:8200"
       VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
@@ -63,9 +72,9 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
+    env_file: *runtime-envfile
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-trade_alert}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: trade_alert
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
@@ -113,23 +122,19 @@ services:
     depends_on:
       langfuse-db:
         condition: service_healthy
+    env_file: *runtime-envfile
     environment:
       DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       SALT: ${SALT:-defaultsalt}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       TELEMETRY_ENABLED: "false"
       HOSTNAME: "0.0.0.0"
       LANGFUSE_INIT_ORG_ID: "org-trade-alert"
       LANGFUSE_INIT_ORG_NAME: "trade-alert"
       LANGFUSE_INIT_PROJECT_ID: "proj-trade-alert"
       LANGFUSE_INIT_PROJECT_NAME: "trade-alert"
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: "admin@trade-alert.local"
       LANGFUSE_INIT_USER_NAME: "admin"
-      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
     ports:
       - "${LANGFUSE_BIND:-0.0.0.0}:3000:3000"
     healthcheck:
@@ -165,7 +170,7 @@ services:
       - "${MCP_BIND:-127.0.0.1}:8001:8001"
     environment: &mcp-env
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN}
+      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
     env_file: &mcp-envfile
       - path: .env
         required: false
@@ -505,7 +510,12 @@ services:
         condition: service_healthy
     # cron service handles scheduling via supercronic + crontab.
     # This container stays warm for: docker compose exec cuga python ...
-    command: ["sleep", "infinity"]
+    command:
+      [
+        "/bin/sh",
+        "-lc",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER:-trade_alert}:$${POSTGRES_PASSWORD}@postgres:5432/trade_alert\"; exec sleep infinity",
+      ]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
@@ -542,18 +552,15 @@ services:
       - ./tests:/app/tests
     env_file: &app-envfile
       - path: .env
+        required: false
       - path: .env.secrets
         required: false
       - path: .env.vault
         required: false
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
     logging: *default-logging
@@ -601,16 +608,17 @@ services:
       - ./crontab:/etc/crontabs/root
     # Cron scheduler — runs pipeline_runner.py on schedule via supercronic.
     # See crontab file for schedule definitions.
-    command: ["supercronic", "/etc/crontabs/root"]
+    command:
+      [
+        "/bin/sh",
+        "-lc",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER:-trade_alert}:$${POSTGRES_PASSWORD}@postgres:5432/trade_alert\"; exec supercronic /etc/crontabs/root",
+      ]
     env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
       TZ: America/New_York
@@ -635,7 +643,12 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    command: ["python", "discord_bot.py"]
+    command:
+      [
+        "/bin/sh",
+        "-lc",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER:-trade_alert}:$${POSTGRES_PASSWORD}@postgres:5432/trade_alert\"; exec python discord_bot.py",
+      ]
     volumes:
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
@@ -666,12 +679,8 @@ services:
     env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN}
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_HOST: http://langfuse:3000
       TZ: America/New_York
     logging: *default-logging
@@ -703,8 +712,6 @@ services:
         required: false
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-trade_alert}:${POSTGRES_PASSWORD}@postgres:5432/trade_alert
     ports:
       - "${DASHBOARD_BIND:-0.0.0.0}:8080:8080"
     volumes:
@@ -716,14 +723,9 @@ services:
       - ./log_config.py:/app/log_config.py
     command:
       [
-        "python",
-        "-m",
-        "uvicorn",
-        "dashboard_api:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8080",
+        "/bin/sh",
+        "-lc",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER:-trade_alert}:$${POSTGRES_PASSWORD}@postgres:5432/trade_alert\"; exec python -m uvicorn dashboard_api:app --host 0.0.0.0 --port 8080",
       ]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
@@ -747,11 +749,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file: *runtime-envfile
     environment:
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: ${POSTGRES_USER:-trade_alert}
-      PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: trade_alert
       BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-7}
     volumes:

@@ -90,6 +90,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                             "macro_risk_off",
                             "catalyst_event",
                             "short_interest",
+                            "price_forecast",
                         ],
                         rot_type,
                     ),

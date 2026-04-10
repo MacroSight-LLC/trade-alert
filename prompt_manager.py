@@ -15,6 +15,7 @@ Variables injected at runtime:
     few_shot_examples, snapshot_age_oldest, snapshot_age_newest,
     market_hours_status, recent_alerts_context,
     macro_summary, vix, yc, n, snapshots_json,
+    market_reference_context,
     ep_gate, sa_gate, conf_gate
 """
 
@@ -140,6 +141,8 @@ Market Hours: {{market_hours_status}}
 Macro Regime: {{macro_summary}}
 VIX: {{vix}} | Yield Curve: {{yc}}bps | Data: {{data_freshness}}
 Snapshot age: oldest={{snapshot_age_oldest}}s, newest={{snapshot_age_newest}}s
+Market reference context:
+{{market_reference_context}}
 
 Recent alerts (avoid duplicates): {{recent_alerts_context}}
 
@@ -564,6 +567,7 @@ def get_decision_prompts(
         "timeframe": timeframe,
         "extra_rules": _EXTRA_RULES.get(timeframe, ""),
         "data_freshness": "LIVE",
+        "market_reference_context": "",
         "performance_context": "No recent outcome data available yet.",
         "few_shot_examples": "",
         "snapshot_age_oldest": "0",
@@ -629,6 +633,12 @@ def get_decision_prompts(
                 cached_version = str(getattr(sys_obj, "version", "unknown"))
                 system = sys_obj.compile(**merged)
                 user = usr_obj.compile(**merged)
+                if str(merged.get("market_reference_context", "")).strip():
+                    user = (
+                        "Current market reference prices (use these to calibrate "
+                        "entry/stop/target near live levels):\n"
+                        f"{merged['market_reference_context']}\n\n{user}"
+                    )
                 _last_source = "langfuse"
                 _last_version = cached_version
                 if _warnings:
@@ -648,6 +658,12 @@ def get_decision_prompts(
                 _prompt_cache[cache_key] = (_time.monotonic(), sys_prompt_obj, usr_prompt_obj)
             system = sys_prompt_obj.compile(**merged)
             user = usr_prompt_obj.compile(**merged)
+            if str(merged.get("market_reference_context", "")).strip():
+                user = (
+                    "Current market reference prices (use these to calibrate "
+                    "entry/stop/target near live levels):\n"
+                    f"{merged['market_reference_context']}\n\n{user}"
+                )
             _last_source = "langfuse"
             _last_version = str(getattr(sys_prompt_obj, "version", "unknown"))
             logger.info("Prompts loaded from Langfuse (version=%s)", _last_version)

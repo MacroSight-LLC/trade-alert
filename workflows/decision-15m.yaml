@@ -112,6 +112,7 @@ steps:
           workflow: notifier.yaml
           inputs:
               alerts_json: '{{ steps["validate-and-filter"]["alerts_json"] }}'
+              raw_snapshots_json: '{{ steps["merge-snapshots"]["snapshots_json"] }}'
       if_false:
           type: code
           code: |
