@@ -539,6 +539,7 @@ def _exec_code_step(
         "alert_quality",
         "winrate_injector",
         "chart_gen",
+        "outcome_tracker",
     }
 
     def _safe_import(
