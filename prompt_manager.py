@@ -81,7 +81,7 @@ QUALITY RULES — follow these strictly:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
    - entry.target must be technically justified (next resistance/support level)
-   - Minimum reward:risk ratio of 2:1 for LONG/SHORT (target-entry > 2x entry-stop)
+   - Minimum reward:risk ratio of 3:1 for LONG/SHORT (target-entry > 3x entry-stop)
    - Stop distance must be proportional to timeframe volatility
 8. THESIS QUALITY: thesis must explain the specific causal chain — not vague buzzwords.
    Bad: "Strong signals across multiple sources suggest upside."
@@ -158,7 +158,7 @@ Gate requirements (ALL must pass — enforce strictly):
 - edge_probability >= {{ep_gate}}
 - sources_agree >= {{sa_gate}}
 - average signal confidence >= {{conf_gate}}
-- reward:risk >= 2:1
+- reward:risk >= 3:1
 - thesis must be specific and causal (not generic)
 
 Output format — a JSON array (may be empty []):
