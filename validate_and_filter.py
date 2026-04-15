@@ -455,9 +455,15 @@ def _build_snap_type_index(snaps: list[dict[str, Any]]) -> dict[str, set[str]]:
 
 def _signal_directional_score(sig_type: str, score: float) -> float:
     if sig_type == "sentiment_bear":
+        # sentiment_bear scores are always positive; negate so they count for SHORT.
         return -abs(score)
     if sig_type == "macro_risk_off":
-        return -abs(score)
+        # macro_risk_off uses SIGNED scores: positive = risk-off (bearish),
+        # negative = risk-on (bullish).  Negate score (not abs) to preserve
+        # this convention: risk-on (-1.0) → +1.0 (counts for LONG);
+        # risk-off (+2.5) → -2.5 (counts for SHORT).  Using -abs() was a bug
+        # that treated all macro signals as bearish regardless of regime.
+        return -score
     return score
 
 

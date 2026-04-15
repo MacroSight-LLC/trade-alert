@@ -89,6 +89,37 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     raw=raw_results,
                 )
             )
+        elif vix <= 20.0:
+            # VIX 15-20: mildly elevated but still risk-on; score negative
+            # so _signal_directional_score(-score) returns +0.65 for LONG.
+            t = (vix - 15.0) / 5.0  # 0.0 at VIX=15 → 1.0 at VIX=20
+            score = -1.0 + t * 0.35  # -1.0 → -0.65
+            signals.append(
+                Signal(
+                    source="fred",
+                    type="macro_risk_off",
+                    score=round(score, 2),
+                    confidence=0.60,
+                    reason=f"VIX moderate at {vix:.1f} (mild risk-on)",
+                    raw=raw_results,
+                )
+            )
+        elif vix <= 25.0:
+            # VIX 20-25: transitional zone — market not clearly risk-on or
+            # risk-off.  Emit a small negative score so the family registers
+            # as present with low conviction; won't dominate directional count.
+            t = (vix - 20.0) / 5.0  # 0.0 at VIX=20 → 1.0 at VIX=25
+            score = -0.65 + t * 0.65  # -0.65 → 0.0 (approaches threshold)
+            signals.append(
+                Signal(
+                    source="fred",
+                    type="macro_risk_off",
+                    score=round(score, 2),
+                    confidence=0.50,
+                    reason=f"VIX transitional at {vix:.1f} (near-neutral)",
+                    raw=raw_results,
+                )
+            )
 
     # Yield curve inversion (SSOT §7)
     if curve_slope is not None and curve_slope < CURVE_INVERSION_THRESHOLD:

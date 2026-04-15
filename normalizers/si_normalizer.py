@@ -11,12 +11,16 @@ from typing import Any, Literal, cast
 from models import Signal, Snapshot
 from normalizers import clamp, interpolate, safe_float
 
-# Continuous SI% scoring breakpoints (fraction of float)
+# Continuous SI% scoring breakpoints (fraction of float).
+# Large-cap tech typically has 0.5-6% SI; lowered floor to 3% so those
+# stocks (e.g. AMD at ~5-6%) can still contribute a positioning signal.
 _SI_BREAKPOINTS: list[tuple[float, float, float]] = [
-    (0.10, 1.0, 0.60),
-    (0.15, 1.8, 0.72),
-    (0.25, 2.5, 0.85),
-    (0.40, 3.0, 0.95),
+    (0.03, 0.50, 0.35),   # 3%: marginal — just notable
+    (0.05, 0.80, 0.50),   # 5%: moderate — AMD/similar range
+    (0.10, 1.00, 0.60),   # 10%: elevated (prior floor)
+    (0.15, 1.80, 0.72),
+    (0.25, 2.50, 0.85),
+    (0.40, 3.00, 0.95),
 ]
 
 
