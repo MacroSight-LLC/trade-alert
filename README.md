@@ -29,7 +29,7 @@
 |-------|-------|
 | **Hardening** | Pydantic validators, 7-gate validation, NaN/Inf guards, AST-based exec sandbox, Redis connection pooling, persist-first ordering, atomic SET NX dedup, non-root Docker, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton |
 | **Signal Quality** | Continuous interpolation scoring, graceful degradation, merger time-decay & diversity tuning, composite signal detection (VOLATILITY_CATALYST, VOLUME_CONFIRMED_BREAKOUT), EP calibration |
-| **Validation Gates** | VIX hard/soft gates, forecast contradiction gate, volume confirmation, macro staleness guard, symbol hallucination detection, price-normalized micro-risk floor |
+| **Validation Gates** | VIX hard/soft gates, forecast contradiction gate, volume confirmation, macro staleness guard, symbol hallucination detection, price-normalized micro-risk floor, high-confidence alignment guard (conf >= 0.85 requires SA >= 5/7) |
 | **Alert Output** | Historical win-rate embeds, confidence color-coding, EMA/ATR overlays, truncate-safe fields, tiered channel routing |
 | **Infrastructure** | Structured logging (JSON/text toggle), Prometheus counters/histograms/gauges, Grafana dashboards, Redis retry+backoff, HTTP connection pooling, Discord circuit breaker, market hours automation via exchange_calendars |
 | **Feedback Loop** | Calibration accuracy tracking, Langfuse trace→outcome linkage, expiry rate monitoring, auto-promote golden datasets |
@@ -80,7 +80,7 @@ pytest tests/unit/ -q   # 620+ tests
 | `models.py`              | Pydantic schemas: Signal, Snapshot, PlaybookAlert              |
 | `pipeline_runner.py`     | Generic YAML workflow engine (collectors → decision)           |
 | `merger.py`              | Deduplicates & ranks snapshots from Redis                      |
-| `validate_and_filter.py` | 7-gate server-side filter (VIX, R:R, EP ceiling, etc.)         |
+| `validate_and_filter.py` | 7-gate server-side filter + confidence/alignment consistency guardrails |
 | `notifier_and_logger.py` | Discord embeds + candlestick charts + Postgres logging         |
 | `chart_gen.py`           | mplfinance candlestick PNG generation from Polygon data        |
 | `db.py`                  | Postgres connection pool, insert/update/query for alerts       |

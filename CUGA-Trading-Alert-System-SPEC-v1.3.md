@@ -478,11 +478,13 @@ The v1.1 decision prompt remains, but in v1.3:
 
 Key logic to preserve:
 
-- **Alignment**: count of independent signal groups (trend, volume, sentiment, flow, macro) whose weighted mean score points in the same direction.
+- **Alignment**: count of independent signal families whose weighted mean score points in the same direction.
+    Families are: `trend`, `volume`, `sentiment`, `flow`, `events`, `macro`, `positioning` (7 total).
 - **Gate**:
     - `edge_probability ≥ 0.70`
-    - `sources_agree ≥ 3` (requires at least 3 independent signal sources
-      producing data for the symbol — e.g., ta + sentiment + flow)
+        - `sources_agree ≥ 4` (requires at least 4/7 independent families aligned)
+        - If confidence is very high (`confidence ≥ 0.85`), require stronger alignment:
+            `sources_agree ≥ 5`
     - `average confidence ≥ 0.75`
 
 ### 10.3 decision‑1h.yaml
@@ -520,7 +522,7 @@ Same as 15m, but:
 - Sentiment: {sentiment_context}
 - Unusual: {joined unusual_activity}
 - Macro: {macro_regime}
-- Sources: {sources_agree}/10 aligned
+- Sources: {sources_agree}/7 aligned
 ```
 
 Guardrail: Only one embed per alert; no additional commentary.

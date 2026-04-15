@@ -45,6 +45,7 @@ class GateRejection(str, Enum):
     SOURCE_HALLUCINATION = "source_hallucination"
     EP_THRESHOLD = "ep_threshold"
     SA_THRESHOLD = "sa_threshold"
+    HIGH_CONFIDENCE_ALIGNMENT = "high_confidence_alignment"
     CONF_THRESHOLD = "conf_threshold"
     RR_MINIMUM = "rr_minimum"
     RR_ZERO_RISK = "rr_zero_risk"
@@ -117,6 +118,8 @@ _GATE_EP: dict[str, float] = {
 # requiring 4 ensures meaningful multi-family conviction.
 _GATE_SA: int = int(os.environ.get("GATE_SA", "4"))
 _GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
+_HIGH_CONFIDENCE_MIN: float = float(os.environ.get("HIGH_CONFIDENCE_MIN", "0.85"))
+_HIGH_CONFIDENCE_MIN_SA: int = int(os.environ.get("HIGH_CONFIDENCE_MIN_SA", "5"))
 
 # Limited WATCH policy (borderline-only, conservative)
 _WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
@@ -131,6 +134,12 @@ _WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", st
 # Minimum mean family score to count a family as directionally aligned.
 # Scores range 0–3; 0.25 = ~8% of max, requiring at least weak directional commitment.
 _SA_FAMILY_MIN_SCORE: float = float(os.environ.get("SA_FAMILY_MIN_SCORE", "0.25"))
+# Include top-level macro context in deterministic sources_agree when
+# per-symbol macro signals are unavailable (they are stripped upstream).
+_SA_INCLUDE_MACRO_CONTEXT: bool = os.environ.get("SA_INCLUDE_MACRO_CONTEXT", "1") == "1"
+_SA_MACRO_CONTEXT_SCORE: float = float(os.environ.get("SA_MACRO_CONTEXT_SCORE", "0.50"))
+_SA_FORECAST_CONFIRM_BONUS_ENABLED: bool = os.environ.get("SA_FORECAST_CONFIRM_BONUS_ENABLED", "1") == "1"
+_SA_FORECAST_BONUS_THRESHOLD: float = float(os.environ.get("SA_FORECAST_BONUS_THRESHOLD", "0.80"))
 
 # Server-side market-session gating controls.
 _MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED", "1") == "1"
@@ -159,6 +168,9 @@ _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", 
 
 # Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
 _ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.03"))
+_ENTRY_MARKET_DRIFT_VIX_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_BUMP", "0.01"))
+_ENTRY_MARKET_DRIFT_PREPOST_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_PREPOST_BUMP", "0.01"))
+_ENTRY_MARKET_DRIFT_CAP_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_CAP_PCT", "0.06"))
 
 # Dynamic gate controls (regime + timeframe overlays)
 _DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
@@ -728,6 +740,33 @@ def validate_and_filter(
         parse_used_repair = True
         return json.loads(repaired)
 
+    # ── Detect API-level errors before attempting JSON parse ─────
+    # When the pipeline runner exhausts all retries, step_results["ensemble-decide"]
+    # is set to None. Also, litellm wraps provider errors as strings like:
+    # "litellm.InternalServerError: AnthropicError - {...overloaded_error...}"
+    # Both cases are infrastructure failures, not prompt compliance issues.
+    if llm_response is None or llm_response == "":
+        logger.error("LLM response is None/empty — all retries exhausted (API overload or timeout)")
+        if add_score_fn and trace_id:
+            add_score_fn(trace_id, "llm_api_error", 1.0, comment="LLM returned None — all retries exhausted")
+        return [], "[]"
+
+    _llm_resp_str = str(llm_response)
+    _API_ERROR_MARKERS = (
+        "InternalServerError",
+        "overloaded_error",
+        "RateLimitError",
+        "ServiceUnavailableError",
+        "APIConnectionError",
+        "APIStatusError",
+        "AnthropicError",
+    )
+    if any(m in _llm_resp_str for m in _API_ERROR_MARKERS):
+        logger.error("LLM API error detected (not a prompt compliance issue): %s", _llm_resp_str[:300])
+        if add_score_fn and trace_id:
+            add_score_fn(trace_id, "llm_api_error", 1.0, comment="LLM backend error — not a JSON compliance failure")
+        return [], "[]"
+
     try:
         llm_json_text = _extract_json_array_text(llm_response)
         raw = _json_loads_with_repairs(llm_json_text)
@@ -850,9 +889,32 @@ def validate_and_filter(
                 )
             _add_reason(GateRejection.SOURCE_HALLUCINATION)
 
-        family_scores = family_scores_index.get(alert.symbol, {})
+        family_scores = dict(family_scores_index.get(alert.symbol, {}))
+        # merger.py strips __GLOBAL_MACRO__ snapshots before this stage, so many
+        # symbols have no "macro" family despite macro context being available.
+        # Inject a deterministic macro family score from macro regime to avoid
+        # structurally capping sources_agree below full family coverage.
+        if _SA_INCLUDE_MACRO_CONTEXT and "macro" not in family_scores:
+            family_scores["macro"] = -abs(_SA_MACRO_CONTEXT_SCORE) if risk_off else abs(_SA_MACRO_CONTEXT_SCORE)
         llm_sources_agree = alert.sources_agree
         deterministic_sources_agree = _aligned_family_count(family_scores, alert.direction)
+        if _SA_FORECAST_CONFIRM_BONUS_ENABLED:
+            trend_score = float(family_scores.get("trend", 0.0))
+            fc_score = forecast_scores.get(alert.symbol)
+            if fc_score is not None:
+                if (
+                    alert.direction == "LONG"
+                    and trend_score >= _SA_FAMILY_MIN_SCORE
+                    and fc_score >= _SA_FORECAST_BONUS_THRESHOLD
+                ):
+                    deterministic_sources_agree += 1
+                elif (
+                    alert.direction == "SHORT"
+                    and trend_score <= -_SA_FAMILY_MIN_SCORE
+                    and fc_score <= -_SA_FORECAST_BONUS_THRESHOLD
+                ):
+                    deterministic_sources_agree += 1
+        deterministic_sources_agree = min(deterministic_sources_agree, 7)
         if llm_sources_agree != deterministic_sources_agree:
             logger.info(
                 "sources_agree server override: %s llm=%d server=%d",
@@ -928,7 +990,13 @@ def validate_and_filter(
             ref_price = ref_prices.get(alert.symbol)
             if ref_price and ref_price > 0:
                 drift_pct = abs(alert.entry["level"] - ref_price) / ref_price
-                if drift_pct > _ENTRY_MARKET_DRIFT_MAX_PCT:
+                drift_gate = _ENTRY_MARKET_DRIFT_MAX_PCT
+                if vix >= _VIX_SOFT_THRESHOLD:
+                    drift_gate += _ENTRY_MARKET_DRIFT_VIX_BUMP
+                if market_session in {"pre", "after"}:
+                    drift_gate += _ENTRY_MARKET_DRIFT_PREPOST_BUMP
+                drift_gate = min(drift_gate, _ENTRY_MARKET_DRIFT_CAP_PCT)
+                if drift_pct > drift_gate:
                     logger.info(
                         "Entry drift filtered: %s %s entry=%.2f ref=%.2f drift=%.1f%% > max=%.1f%%",
                         alert.symbol,
@@ -936,7 +1004,7 @@ def validate_and_filter(
                         alert.entry["level"],
                         ref_price,
                         drift_pct * 100.0,
-                        _ENTRY_MARKET_DRIFT_MAX_PCT * 100.0,
+                        drift_gate * 100.0,
                     )
                     _add_reason(GateRejection.ENTRY_MARKET_DRIFT)
 
@@ -1012,6 +1080,19 @@ def validate_and_filter(
                     sa_gate,
                 )
                 _add_reason(GateRejection.SA_THRESHOLD)
+            if (
+                alert.confidence >= _HIGH_CONFIDENCE_MIN
+                and alert.sources_agree < _HIGH_CONFIDENCE_MIN_SA
+            ):
+                logger.info(
+                    "Alert filtered (HIGH_CONFIDENCE_ALIGNMENT): %s conf=%.2f >= %.2f but sa=%d < %d",
+                    alert.symbol,
+                    alert.confidence,
+                    _HIGH_CONFIDENCE_MIN,
+                    alert.sources_agree,
+                    _HIGH_CONFIDENCE_MIN_SA,
+                )
+                _add_reason(GateRejection.HIGH_CONFIDENCE_ALIGNMENT)
             if alert.confidence < conf_gate:
                 logger.info(
                     "Alert filtered (CONF): %s conf=%.2f < gate=%.2f",
