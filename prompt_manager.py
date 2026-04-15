@@ -177,7 +177,7 @@ CRITICAL OUTPUT RULES:
     "confidence": 0.80,
     "timeframe": "{{timeframe}}",
     "thesis": "Bollinger squeeze resolving upward with 2.8x avg volume. Unusual options activity: large $185c sweep, 500+ contracts. Retail sentiment turned bullish in last 2h. Earnings in 2 days (BMO) adds catalyst urgency. SI at 8% with 4.2 DTC provides squeeze fuel. Classic breakout pattern with multi-source confirmation.",
-    "entry": {"level": 185.00, "stop": 182.00, "target": 192.00},
+    "entry": {"level": 185.00, "stop": 182.00, "target": 194.00},
     "timeframe_rationale": "15m breakout aligning with 1h uptrend — momentum expected to persist 2-4 candles.",
     "sentiment_context": "ROT: strong_bullish (0.82 conf), Finnhub aggregate +0.6. Institutional flow neutral.",
     "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential", "TimesFM forecast +2.1% (high confidence) — confirms breakout direction"],
@@ -188,7 +188,7 @@ CRITICAL OUTPUT RULES:
 
 CRITICAL CHECKS before outputting each alert:
 1. Count DISTINCT signal types — sources_agree must match your actual count
-2. Verify entry.target - entry.level > 2 * abs(entry.level - entry.stop)
+2. Verify entry.target - entry.level > 3.0 * abs(entry.level - entry.stop)
 3. Verify thesis is specific (mentions actual signal values, not just "strong signals")
 4. If any required field would be vague or uncertain, do NOT include that alert
 
@@ -208,6 +208,11 @@ _EXTRA_RULES: dict[str, str] = {
         "allow high-quality LONG setups when sources_agree >= 3 and edge_probability >= 0.72, "
         "provided the thesis explicitly explains why the setup is not a late chase. "
         "VIX 20-25 is NORMAL volatility — do not treat it as a suppression signal.\n"
+        "- In risk-off + high-VIX environments, ACTIVELY LOOK FOR SHORT setups. "
+        "Risk-off regimes often produce the best SHORT confluences (bearish technicals, "
+        "macro_risk_off signal, negative sentiment). SHORT setups are ENCOURAGED when "
+        "sources_agree >= 3 and the macro and technical signals align bearish. "
+        "Do NOT return [] just because LONGs are unattractive — evaluate SHORTs first.\n"
         "- 15m stops should be tight (0.5-2% of entry)\n"
         "- Momentum must be FRESH — if the move already happened (score relates to "
         "a completed move), do not alert on a chase entry.\n"

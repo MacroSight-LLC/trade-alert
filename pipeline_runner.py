@@ -512,6 +512,7 @@ def _exec_code_step(
         "pathlib",
         "textwrap",
         "uuid",
+        "zoneinfo",
         # third-party
         "redis",
         "httpx",
