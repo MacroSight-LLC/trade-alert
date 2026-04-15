@@ -682,7 +682,7 @@ def validate_and_filter(
     2. **Symbol-hallucination check**: symbol must exist in snapshots
     3. **EP ceiling**: caps edge_probability by actual source count
     4. **Gate thresholds**: EP, sources_agree, confidence minimums
-    5. **R:R gate**: reward ≥ 2× risk for LONG/SHORT
+    5. **R:R gate**: reward ≥ 2.5× risk for LONG/SHORT
     6. **VIX + risk-off soft gate**: VIX > 25 suppresses weak longs
     7. **Macro veto** (1h): strong macro_risk_off discounts longs
 
@@ -907,7 +907,15 @@ def validate_and_filter(
         if _SA_FORECAST_CONFIRM_BONUS_ENABLED:
             trend_score = float(family_scores.get("trend", 0.0))
             fc_score = forecast_scores.get(alert.symbol)
-            if fc_score is not None:
+            # Guard: only award the bonus when at least one non-price_forecast
+            # signal exists in the trend family.  price_forecast is already a
+            # trend family member (earns 1 SA vote); using it as both the
+            # trend evidence and the confirming forecast would double-count a
+            # single source.  technical_trend or relative_strength must also
+            # be present to earn the bonus.
+            sym_types = snap_types.get(alert.symbol, set())
+            trend_has_non_fc = bool(sym_types & {"technical_trend", "relative_strength"})
+            if fc_score is not None and trend_has_non_fc:
                 if (
                     alert.direction == "LONG"
                     and trend_score >= _SA_FAMILY_MIN_SCORE
@@ -1132,9 +1140,9 @@ def validate_and_filter(
                     alert.entry["level"],
                 )
                 _add_reason(GateRejection.RR_ZERO_RISK)
-            if risk > 0 and reward / risk < 2.0:
+            if risk > 0 and reward / risk < 2.5:
                 logger.info(
-                    "Alert filtered: %s R:R %.1f:1 below 2:1 minimum",
+                    "Alert filtered: %s R:R %.2f:1 below 2.5:1 minimum",
                     alert.symbol,
                     reward / risk,
                 )

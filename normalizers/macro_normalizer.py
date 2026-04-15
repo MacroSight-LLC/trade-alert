@@ -106,10 +106,11 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
             )
         elif vix <= 25.0:
             # VIX 20-25: transitional zone — market not clearly risk-on or
-            # risk-off.  Emit a small negative score so the family registers
-            # as present with low conviction; won't dominate directional count.
+            # risk-off.  Score interpolates -0.65 → -0.30 (stays negative so
+            # _signal_directional_score returns +0.30–+0.65, safely above the
+            # 0.25 alignment threshold at every point in this band).
             t = (vix - 20.0) / 5.0  # 0.0 at VIX=20 → 1.0 at VIX=25
-            score = -0.65 + t * 0.65  # -0.65 → 0.0 (approaches threshold)
+            score = -0.65 + t * 0.35  # -0.65 → -0.30 (directional +0.65 → +0.30)
             signals.append(
                 Signal(
                     source="fred",
