@@ -30,25 +30,29 @@ T10Y2Y = "T10Y2Y"  # Pre-computed 10Y-2Y spread
 
 async def _latest_value(series_id: str) -> float | None:
     """Fetch the most recent observation for a FRED series."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(
-            f"{BASE_URL}/series/observations",
-            params={
-                "series_id": series_id,
-                "api_key": API_KEY,
-                "file_type": "json",
-                "sort_order": "desc",
-                "limit": 10,
-            },
-        )
-        resp.raise_for_status()
-        observations = resp.json().get("observations", [])
-        for obs in observations:
-            val = obs.get("value", ".")
-            if val != ".":
-                return float(val)
-    logger.warning("FRED %s: all %d observations are '.'", series_id, len(observations))
-    return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                f"{BASE_URL}/series/observations",
+                params={
+                    "series_id": series_id,
+                    "api_key": API_KEY,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": 10,
+                },
+            )
+            resp.raise_for_status()
+            observations = resp.json().get("observations", [])
+            for obs in observations:
+                val = obs.get("value", ".")
+                if val != ".":
+                    return float(val)
+        logger.warning("FRED %s: all %d observations are '.'", series_id, len(observations))
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("FRED %s fetch failed: %s", series_id, exc)
+        return None
 
 
 async def vix_level(params: dict[str, Any]) -> dict:

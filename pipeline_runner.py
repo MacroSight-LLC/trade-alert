@@ -520,6 +520,7 @@ def _exec_code_step(
         "normalizers",
         "normalizers.events_normalizer",
         "normalizers.flow_normalizer",
+        "normalizers.forecast_normalizer",
         "normalizers.macro_normalizer",
         "normalizers.market_normalizer",
         "normalizers.sentiment_normalizer",
