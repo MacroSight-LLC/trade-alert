@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
 DISCORD_SEND_MAX_RETRIES: int = int(os.getenv("DISCORD_SEND_MAX_RETRIES", "3"))
 DISCORD_SEND_BACKOFF_BASE: float = float(os.getenv("DISCORD_SEND_BACKOFF_BASE", "1.0"))
-from constants import DEDUP_WINDOW_SECONDS  # centralized
+from constants import DEDUP_WINDOW_SECONDS, TRADE_EXECUTE_ENABLED  # centralized
+from execution_mapper import map_to_execution_trigger
+from execution_webhook import deliver_execution_trigger
 
 MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
 
@@ -1047,6 +1049,18 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                     exc,
                 )
                 continue
+
+            # Outbound execution webhook (config-gated; non-fatal to Discord delivery)
+            if TRADE_EXECUTE_ENABLED:
+                try:
+                    _trigger = map_to_execution_trigger(alert)
+                    deliver_execution_trigger(_trigger)
+                except Exception as _exc:  # noqa: BLE001
+                    logger.error(
+                        "Execution webhook failed for %s — continuing to Discord: %s",
+                        alert.symbol,
+                        _exc,
+                    )
 
             # Tiered channel routing: select channel based on quality (thread-safe)
             routed_channel = _route_channel_for_alert(alert)

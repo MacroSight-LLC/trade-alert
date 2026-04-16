@@ -445,6 +445,69 @@ def get_symbol_performance(limit: int = 20) -> list[dict]:
         _put_conn(conn)
 
 
+def insert_execution_delivery(
+    *,
+    event_id: str,
+    symbol: str,
+    direction: str,
+    alert_class: str,
+    status: str,
+    http_status: int | None,
+    attempt_count: int,
+    error_detail: str | None,
+    payload_hash: str | None,
+) -> None:
+    """Upsert an execution delivery audit record into execution_deliveries.
+
+    Uses ON CONFLICT (event_id) to update the outcome when a retry
+    succeeds after an earlier attempt was already recorded as failed.
+
+    Args:
+        event_id: UUID4 from the ExecutionTriggerV1 (unique per trigger).
+        symbol: Ticker symbol.
+        direction: LONG / SHORT / WATCH.
+        alert_class: execute / watch / info.
+        status: "success", "failed", or "dry_run".
+        http_status: HTTP response status code, or None for dry_run / network error.
+        attempt_count: Number of delivery attempts made.
+        error_detail: Human-readable error message, or None on success.
+        payload_hash: SHA-256 hex digest of the request body for idempotency.
+    """
+    sql = """
+        INSERT INTO execution_deliveries (
+            event_id, symbol, direction, alert_class,
+            status, http_status, attempt_count, error_detail, payload_hash
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT ON CONSTRAINT uq_execution_deliveries_event_id
+        DO UPDATE SET
+            status        = EXCLUDED.status,
+            http_status   = EXCLUDED.http_status,
+            attempt_count = EXCLUDED.attempt_count,
+            error_detail  = EXCLUDED.error_detail,
+            sent_at       = NOW()
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    event_id,
+                    symbol,
+                    direction,
+                    alert_class,
+                    status,
+                    http_status,
+                    attempt_count,
+                    error_detail,
+                    payload_hash,
+                ),
+            )
+            conn.commit()
+    finally:
+        _put_conn(conn)
+
+
 def get_summary_stats() -> dict:
     """Return aggregate dashboard summary statistics.
 

@@ -204,3 +204,42 @@ BEGIN
     ALTER TABLE alerts ALTER COLUMN forecast_contradicted SET NOT NULL;
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
+
+-- ── Execution delivery audit table ────────────────────────────────────────
+-- Records every outbound delivery attempt to trade-execute.
+-- event_id is UNIQUE so ON CONFLICT can upsert the final outcome.
+-- Safe to re-run: all DDL uses IF NOT EXISTS / DO $$ exception guards.
+
+CREATE TABLE IF NOT EXISTS execution_deliveries (
+    id              SERIAL PRIMARY KEY,
+    event_id        VARCHAR(36)  NOT NULL,
+    symbol          VARCHAR(20)  NOT NULL,
+    direction       VARCHAR(10)  NOT NULL,
+    alert_class     VARCHAR(10)  NOT NULL,
+    status          VARCHAR(20)  NOT NULL
+                    CHECK (status IN ('success', 'failed', 'dry_run')),
+    http_status     INTEGER,
+    attempt_count   INTEGER      NOT NULL DEFAULT 1,
+    error_detail    TEXT,
+    payload_hash    CHAR(64),
+    sent_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+DO $$
+BEGIN
+    ALTER TABLE execution_deliveries
+        ADD CONSTRAINT uq_execution_deliveries_event_id UNIQUE (event_id);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_exec_deliveries_symbol
+    ON execution_deliveries(symbol);
+
+CREATE INDEX IF NOT EXISTS idx_exec_deliveries_status
+    ON execution_deliveries(status);
+
+CREATE INDEX IF NOT EXISTS idx_exec_deliveries_sent_at
+    ON execution_deliveries(sent_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_exec_deliveries_symbol_sent
+    ON execution_deliveries(symbol, sent_at DESC);

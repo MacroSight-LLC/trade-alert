@@ -178,6 +178,47 @@ def is_market_open(now: datetime | None = None) -> bool:
     return 4 <= now_et.hour < 20
 
 
+# ── Downstream Execution Webhook ─────────────────────────────────────────
+
+TRADE_EXECUTE_ENABLED: bool = os.environ.get("TRADE_EXECUTE_ENABLED", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+"""Enable outbound webhook delivery to trade-execute. Default: disabled."""
+
+TRADE_EXECUTE_WEBHOOK_URL: str = os.environ.get("TRADE_EXECUTE_WEBHOOK_URL", "")
+"""Target URL for trade-execute inbound webhook endpoint."""
+
+TRADE_EXECUTE_TIMEOUT_SECONDS: float = float(
+    os.environ.get("TRADE_EXECUTE_TIMEOUT_SECONDS", "10.0")
+)
+"""HTTP timeout (read) for outbound delivery requests. Default 10s."""
+
+TRADE_EXECUTE_MAX_RETRIES: int = int(os.environ.get("TRADE_EXECUTE_MAX_RETRIES", "3"))
+"""Maximum delivery attempts (including first try). Default 3."""
+
+TRADE_EXECUTE_RETRY_BACKOFF_SECONDS: float = float(
+    os.environ.get("TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", "1.0")
+)
+"""Base backoff in seconds for exponential retry (1s, 2s, 4s, …). Default 1.0."""
+
+TRADE_EXECUTE_DRY_RUN: bool = os.environ.get("TRADE_EXECUTE_DRY_RUN", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+"""Log the exact payload that would be sent without making HTTP requests. Default: false."""
+
+TRADE_EXECUTE_EXPIRY_SECONDS: int = int(
+    os.environ.get("TRADE_EXECUTE_EXPIRY_SECONDS", "900")
+)
+"""Seconds until an ExecutionTriggerV1 expires. Default 900s (matches dedup window)."""
+# TRADE_EXECUTE_WEBHOOK_SECRET is a secret — stored in Vault (secret/trade-alert)
+# and loaded into os.environ by vault_env_loader.py at runtime.
+# Read directly via os.environ.get("TRADE_EXECUTE_WEBHOOK_SECRET", "") in execution_webhook.py.
+
+
 def get_market_hours_status(now: datetime | None = None) -> str:
     """Return a human-readable US equity market hours status string.
 
