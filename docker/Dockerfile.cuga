@@ -58,6 +58,7 @@ COPY decision_helpers.py /app/decision_helpers.py
 COPY winrate_injector.py /app/winrate_injector.py
 COPY execution_mapper.py /app/execution_mapper.py
 COPY execution_trigger.py /app/execution_trigger.py
+COPY execution_webhook.py /app/execution_webhook.py
 COPY vault_env_loader.py /app/vault_env_loader.py
 COPY discord_bot.py /app/discord_bot.py
 COPY scripts/entrypoint.sh /app/entrypoint.sh
