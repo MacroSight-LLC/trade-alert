@@ -121,6 +121,13 @@ _GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
 _HIGH_CONFIDENCE_MIN: float = float(os.environ.get("HIGH_CONFIDENCE_MIN", "0.85"))
 _HIGH_CONFIDENCE_MIN_SA: int = int(os.environ.get("HIGH_CONFIDENCE_MIN_SA", "5"))
 
+# Per-timeframe R:R minimums (reward must be >= N × risk to be actionable).
+# 15m setups are shorter-lived so 2:1 is sufficient; 1h setups warrant 2.5:1.
+_GATE_RR: dict[str, float] = {
+    "15m": float(os.environ.get("GATE_RR_15M", "2.0")),
+    "1h": float(os.environ.get("GATE_RR_1H", "2.5")),
+}
+
 # Limited WATCH policy (borderline-only, conservative)
 _WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
 _WATCH_SA_MIN: int = int(os.environ.get("WATCH_SA_MIN", "2"))
@@ -129,6 +136,14 @@ _WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
 # WATCH decay: drop WATCH alerts that persist unresolved across N pipeline cycles
 _WATCH_DECAY_CYCLES: int = int(os.environ.get("WATCH_DECAY_CYCLES", "4"))
 _WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", str(60 * 60 * 24)))
+# WATCH cap by market regime — stressed regimes get fewer WATCHes.
+# _WATCH_MAX_PER_RUN is kept as the backward-compatible default for stressed regimes.
+_WATCH_MAX_STRESSED: int = int(os.environ.get("WATCH_MAX_STRESSED", str(_WATCH_MAX_PER_RUN)))
+_WATCH_MAX_NEUTRAL: int = int(os.environ.get("WATCH_MAX_NEUTRAL", "2"))
+_WATCH_MAX_TRENDING: int = int(os.environ.get("WATCH_MAX_TRENDING", "3"))
+# WATCH promotion: sort bonus multiplier for setups with improving EP across cycles.
+_WATCH_PROMOTION_BONUS_MULT: float = float(os.environ.get("WATCH_PROMOTION_BONUS_MULT", "1.15"))
+_WATCH_PROMOTION_MIN_CYCLES: int = int(os.environ.get("WATCH_PROMOTION_MIN_CYCLES", "2"))
 
 # Deterministic sources_agree from server-side family alignment.
 # Minimum mean family score to count a family as directionally aligned.
@@ -163,8 +178,11 @@ _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 
 # Volume confirmation: minimum volume_spike score required for LONG/SHORT.
 # Alerts without volume confirmation get confidence downgraded by this amount.
+# In choppy / risk_off_high_vix regimes the penalty is larger — thin-volume
+# breakouts are significantly more unreliable in indecisive or stressed markets.
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.05"))
+_VOLUME_CONFIRM_PENALTY_CHOPPY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY_CHOPPY", "0.10"))
 
 # Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
 _ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.03"))
@@ -179,6 +197,11 @@ _REGIME_CHOPPY_CONF_BUMP: float = float(os.environ.get("REGIME_CHOPPY_CONF_BUMP"
 _REGIME_CHOPPY_SA_BUMP: int = int(os.environ.get("REGIME_CHOPPY_SA_BUMP", "1"))
 _REGIME_TRENDING_EP_REDUCE: float = float(os.environ.get("REGIME_TRENDING_EP_REDUCE", "0.01"))
 _REGIME_TRENDING_CONF_REDUCE: float = float(os.environ.get("REGIME_TRENDING_CONF_REDUCE", "0.01"))
+# risk_off_high_vix regime (VIX 25–30 + risk_off=True): tighter gates, same magnitude as choppy.
+# Previously this regime was classified but completely unhandled — gates fell through unchanged.
+_REGIME_RISK_OFF_HIGH_VIX_EP_BUMP: float = float(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_EP_BUMP", "0.03"))
+_REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP: float = float(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP", "0.03"))
+_REGIME_RISK_OFF_HIGH_VIX_SA_BUMP: int = int(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_SA_BUMP", "1"))
 _TF_EP_OFFSET_15M: float = float(os.environ.get("TF_EP_OFFSET_15M", "0.00"))
 _TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
 _TF_CONF_OFFSET_15M: float = float(os.environ.get("TF_CONF_OFFSET_15M", "0.00"))
@@ -288,6 +311,13 @@ def _dynamic_gates(base_ep: float, base_sa: int, base_conf: float, timeframe: st
         ep += _REGIME_CHOPPY_EP_BUMP
         sa += _REGIME_CHOPPY_SA_BUMP
         conf += _REGIME_CHOPPY_CONF_BUMP
+    elif regime == "risk_off_high_vix":
+        # Previously unhandled — gates fell through unchanged.
+        # Now applies a matching tightening: elevated conviction required
+        # when VIX is 25–30 and macro is risk-off.
+        ep += _REGIME_RISK_OFF_HIGH_VIX_EP_BUMP
+        sa += _REGIME_RISK_OFF_HIGH_VIX_SA_BUMP
+        conf += _REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP
     elif regime in ("trending_up", "trending_down"):
         ep -= _REGIME_TRENDING_EP_REDUCE
         conf -= _REGIME_TRENDING_CONF_REDUCE
@@ -303,6 +333,21 @@ def _dynamic_gates(base_ep: float, base_sa: int, base_conf: float, timeframe: st
     sa = max(sa, 1)
     conf = min(max(conf, 0.50), 0.99)
     return ep, sa, conf
+
+
+def _watch_max_for_regime(regime: str) -> int:
+    """Return the maximum number of WATCH alerts to emit for a given regime.
+
+    Stressed regimes (extreme, risk_off_high_vix) are capped tight.
+    Neutral/choppy regimes allow 2.  Clear trending regimes allow 3.
+    All values are env-var overridable via WATCH_MAX_STRESSED /
+    WATCH_MAX_NEUTRAL / WATCH_MAX_TRENDING.
+    """
+    if regime in ("extreme", "risk_off_high_vix"):
+        return _WATCH_MAX_STRESSED
+    if regime in ("choppy", "neutral"):
+        return _WATCH_MAX_NEUTRAL
+    return _WATCH_MAX_TRENDING  # trending_up, trending_down
 
 
 # ── WATCH cycle-decay helpers ────────────────────────────────────
@@ -343,6 +388,38 @@ def _reset_watch_cycles(symbols: list[str], timeframe: str) -> None:
             r.delete(_watch_decay_key(sym, timeframe))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _get_watch_prev_state(symbol: str, timeframe: str) -> dict[str, str] | None:
+    """Return the Redis watch-cycle state dict for symbol, or None if absent."""
+    try:
+        r = get_redis()
+        state = r.hgetall(_watch_decay_key(symbol, timeframe))
+        if state:
+            return {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in state.items()}
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _watch_is_improving(
+    symbol: str,
+    current_ep: float,
+    prev_states: dict[str, dict[str, str] | None],
+) -> bool:
+    """Return True if the symbol's current EP exceeds its recorded prev EP.
+
+    Used to boost improving WATCH setups in the sort ranking and to
+    add a [\u2191 STRENGTHENING] prefix to the thesis after min cycles.
+    Returns False if no prior state exists (new WATCH, never seen before).
+    """
+    state = prev_states.get(symbol)
+    if not state:
+        return False
+    try:
+        return current_ep > float(state.get("last_ep", 0.0))
+    except (TypeError, ValueError):
+        return False
 
 
 def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
@@ -1116,7 +1193,9 @@ def validate_and_filter(
                 )
                 _add_reason(GateRejection.CONF_THRESHOLD)
 
-        # ── R:R gate: reward must be ≥ 2× risk ──────────────────
+        # ── R:R gate: reward must be ≥ N× risk (timeframe-tiered) ─
+        # 15m: 2.0:1 minimum (break-even at 33% win-rate)
+        # 1h:  2.5:1 minimum (break-even at 29% win-rate, longer holds need better payoff)
         risk = abs(alert.entry["level"] - alert.entry["stop"])
         reward = abs(alert.entry["target"] - alert.entry["level"])
         if directional and GateRejection.ENTRY_ORDER_INVALID not in reason_set:
@@ -1140,11 +1219,14 @@ def validate_and_filter(
                     alert.entry["level"],
                 )
                 _add_reason(GateRejection.RR_ZERO_RISK)
-            if risk > 0 and reward / risk < 2.5:
+            _rr_min = _GATE_RR.get(timeframe, 2.0)
+            if risk > 0 and reward / risk < _rr_min:
                 logger.info(
-                    "Alert filtered: %s R:R %.2f:1 below 2.5:1 minimum",
+                    "Alert filtered: %s R:R %.2f:1 below %.1f:1 minimum (%s)",
                     alert.symbol,
                     reward / risk,
+                    _rr_min,
+                    timeframe,
                 )
                 _add_reason(GateRejection.RR_MINIMUM)
 
@@ -1206,10 +1288,14 @@ def validate_and_filter(
         # squeezes are common in volatile risk-on rebounds).
         # High-conviction setups (SA >= 4 AND EP >= 0.80) pass even
         # in elevated-VIX environments.
+        # Exception: when regime == "risk_off_high_vix", the dynamic
+        # gate overlay (Step 1) already raised EP/SA/conf thresholds.
+        # An alert that survived those elevated gates must not be
+        # binary-rejected here too — that would be double-penalising.
         _high_conviction = alert.sources_agree >= _VIX_SOFT_SA and alert.edge_probability >= _VIX_SOFT_EP
         _vix_soft_triggered = False
         if vix > _VIX_SOFT_THRESHOLD and not _high_conviction:
-            if risk_off and alert.direction == "LONG":
+            if risk_off and alert.direction == "LONG" and regime != "risk_off_high_vix":
                 _vix_soft_triggered = True
             elif not risk_off and alert.direction == "SHORT":
                 _vix_soft_triggered = True
@@ -1230,21 +1316,30 @@ def validate_and_filter(
         # ── Volume confirmation gate ───────────────────────────────
         # Directional alerts without volume confirmation get a confidence
         # downgrade — thin-volume breakouts are unreliable.
+        # In choppy / risk_off_high_vix regimes the penalty is doubled:
+        # false breakouts are significantly more common in those conditions.
         if directional:
             _vol_score = volume_scores.get(alert.symbol, 0.0)
             if _vol_score < _VOLUME_CONFIRM_SCORE:
-                alert.confidence = max(alert.confidence - _VOLUME_CONFIRM_PENALTY, 0.0)
+                _vol_penalty = (
+                    _VOLUME_CONFIRM_PENALTY_CHOPPY
+                    if regime in ("choppy", "risk_off_high_vix")
+                    else _VOLUME_CONFIRM_PENALTY
+                )
+                alert.confidence = max(alert.confidence - _vol_penalty, 0.0)
                 # Re-check confidence gate after downgrade
                 if alert.confidence < conf_gate:
                     logger.info(
                         "Volume unconfirmed: %s %s (vol_score=%.2f < %.2f) "
-                        "conf downgraded to %.2f < gate %.2f",
+                        "conf downgraded by %.2f to %.2f < gate %.2f (regime=%s)",
                         alert.symbol,
                         alert.direction,
                         _vol_score,
                         _VOLUME_CONFIRM_SCORE,
+                        _vol_penalty,
                         alert.confidence,
                         conf_gate,
+                        regime,
                     )
                     _add_reason(GateRejection.VOLUME_UNCONFIRMED)
 
@@ -1261,9 +1356,17 @@ def validate_and_filter(
     # Keep WATCH output intentionally limited:
     # - If directional alerts exist, drop all WATCH alerts for this run.
     # - Otherwise rank WATCH candidates by composite score (ep × conf),
-    #   apply stale-cycle decay filter, then cap to _WATCH_MAX_PER_RUN.
+    #   boosted for setups with improving EP across cycles, then apply
+    #   stale-cycle decay filter and cap by regime via _watch_max_for_regime.
     directional_alerts = [a for a in alerts if a.direction in ("LONG", "SHORT")]
     watch_alerts = [a for a in alerts if a.direction == "WATCH"]
+
+    # Pre-fetch previous Redis state for all WATCH candidates before any
+    # filtering so prev_states is available for sort, decay, and promotion.
+    prev_states: dict[str, dict[str, str] | None] = {
+        w.symbol: _get_watch_prev_state(w.symbol, timeframe) for w in watch_alerts
+    }
+
     if directional_alerts and watch_alerts:
         for w in watch_alerts:
             row = (w.symbol, GateRejection.WATCH_DROPPED_DIRECTIONAL_PRESENT)
@@ -1272,14 +1375,24 @@ def validate_and_filter(
         watch_alerts = []
         alerts = directional_alerts
     else:
-        # Sort by composite quality score so the best candidate stays
-        watch_alerts.sort(key=lambda a: a.edge_probability * a.confidence, reverse=True)
+        # Sort by composite quality score (ep × conf), with a bonus multiplier
+        # applied to setups whose EP has improved since the previous cycle.
+        # This promotes strengthening setups to the top of the ranked queue.
+        watch_alerts.sort(
+            key=lambda a: a.edge_probability * a.confidence * (
+                _WATCH_PROMOTION_BONUS_MULT
+                if _watch_is_improving(a.symbol, a.edge_probability, prev_states)
+                else 1.0
+            ),
+            reverse=True,
+        )
 
         # ── Log full ranked WATCH queue for observability ──────────
         if watch_alerts:
             ranked_lines = " | ".join(
                 f"#{i + 1} {a.symbol} ep={a.edge_probability:.2f} "
                 f"conf={a.confidence:.2f} score={a.edge_probability * a.confidence:.3f}"
+                f"{'↑' if _watch_is_improving(a.symbol, a.edge_probability, prev_states) else ''}"
                 for i, a in enumerate(watch_alerts)
             )
             logger.info(
@@ -1311,21 +1424,38 @@ def validate_and_filter(
                 decay_kept.append(w)
         watch_alerts = decay_kept
 
-        # ── Cap to _WATCH_MAX_PER_RUN ──────────────────────────────
-        if len(watch_alerts) > _WATCH_MAX_PER_RUN:
-            for w in watch_alerts[_WATCH_MAX_PER_RUN:]:
+        # ── Cap by regime via _watch_max_for_regime ────────────────
+        # Stressed regimes (extreme, risk_off_high_vix) → 1 WATCH max.
+        # Neutral/choppy regimes → 2.  Clear trending regimes → 3.
+        # All limits are env-var overridable.
+        _effective_watch_max = _watch_max_for_regime(regime)
+        if len(watch_alerts) > _effective_watch_max:
+            for w in watch_alerts[_effective_watch_max:]:
                 row = (w.symbol, GateRejection.WATCH_CAP)
                 rejections.append(row)
                 watch_rejections.append(row)
-            watch_alerts = watch_alerts[:_WATCH_MAX_PER_RUN]
+            watch_alerts = watch_alerts[:_effective_watch_max]
 
         alerts = directional_alerts + watch_alerts
 
     # ── Update Redis WATCH-cycle state ────────────────────────────
-    # Increment cycle count for each kept WATCH alert.
+    # Increment cycle count for each kept WATCH alert, then check for
+    # strengthening setups to prefix the thesis with [↑ STRENGTHENING ×N].
     for w in [a for a in alerts if a.direction == "WATCH"]:
         new_cycles = _incr_watch_cycles(w.symbol, timeframe, w.edge_probability, w.confidence)
         logger.debug("WATCH_CYCLE_INCR: %s cycles=%d", w.symbol, new_cycles)
+        if (
+            new_cycles >= _WATCH_PROMOTION_MIN_CYCLES
+            and _watch_is_improving(w.symbol, w.edge_probability, prev_states)
+        ):
+            w.thesis = f"[\u2191 STRENGTHENING \u00d7{new_cycles}] {w.thesis}"
+            logger.info(
+                "WATCH_PROMOTION: %s strengthening across %d cycles (ep=%.2f prev_ep=%s)",
+                w.symbol,
+                new_cycles,
+                w.edge_probability,
+                (prev_states.get(w.symbol) or {}).get("last_ep", "n/a"),
+            )
     # Reset cycle state for symbols that graduated to a directional alert.
     directional_symbols = [a.symbol for a in alerts if a.direction in ("LONG", "SHORT")]
     if directional_symbols:
