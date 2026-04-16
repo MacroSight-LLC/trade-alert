@@ -76,8 +76,14 @@ QUALITY RULES — follow these strictly:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
    - entry.target must be technically justified (next resistance/support level)
-   - Minimum reward:risk ratio of 2:1 for LONG/SHORT (target-entry > 2x entry-stop)
+   - Minimum reward:risk ratio of 2:1 for LONG/SHORT
+     FORMULA: entry.target - entry.level MUST be >= 2.0 * (entry.level - entry.stop)
+     Example: level=10.00, stop=9.50  → min target = 10.00 + 2.0*(10.00-9.50) = 11.00
+     Example: level=2.65, stop=2.45   → min target = 2.65 + 2.0*(2.65-2.45) = 3.05
+     If your nearest technical target is below this minimum, do NOT alert — lower stop
+     instead to widen the setup, or skip the alert entirely.
    - Stop distance must be proportional to timeframe volatility
+     (15m: 0.5–2% of entry price; 1h: 1–4% of entry price)
 8. THESIS QUALITY: thesis must explain the specific causal chain — not vague buzzwords.
    Bad: "Strong signals across multiple sources suggest upside."
    Good: "Bollinger squeeze resolving upward with 2.8x avg volume, unusual options activity (large $185c sweeps), and positive retail sentiment shift — classic breakout pattern."
@@ -174,7 +180,8 @@ Output format — a JSON array (may be empty []):
 
 CRITICAL CHECKS before outputting each alert:
 1. Count DISTINCT signal types — sources_agree must match your actual count
-2. Verify entry.target - entry.level > 2 * abs(entry.level - entry.stop)
+2. R/R CHECK (mandatory): compute min_target = entry.level + 2.0 * (entry.level - entry.stop)
+   If entry.target < min_target → ADJUST entry.target UP to the next valid resistance, or SKIP the alert
 3. Verify thesis is specific (mentions actual signal values, not just "strong signals")
 4. If any required field would be vague or uncertain, do NOT include that alert
 
