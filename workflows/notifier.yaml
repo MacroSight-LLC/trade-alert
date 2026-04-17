@@ -15,6 +15,7 @@ llm_model: claude-sonnet-4-20250514
 inputs:
   - alerts_json
   - raw_snapshots_json
+  - trace_id
 
 steps:
   # Step 1 — Receive and validate alerts input
@@ -50,6 +51,7 @@ steps:
         n_sent = notify(
             alerts_json=alerts_json,
             raw_snapshots=steps["receive-alerts"].get("raw_snapshots") or [],
+            trace_id=trace_id if isinstance(trace_id, str) else None,
         )
         logger.info("Notifier complete: %d alerts sent to Discord", n_sent)
         result = {"n_sent": n_sent}

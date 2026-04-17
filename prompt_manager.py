@@ -640,8 +640,8 @@ def get_decision_prompts(
                 user = usr_obj.compile(**merged)
                 if str(merged.get("market_reference_context", "")).strip():
                     user = (
-                        "Current market reference prices (use these to calibrate "
-                        "entry/stop/target near live levels):\n"
+                        "LIVE MARKET PRICES — use ONLY these for entry/stop/target."
+                        " Do NOT use your training-data prices. Entry must be within 3% of the live price shown here:\n"
                         f"{merged['market_reference_context']}\n\n{user}"
                     )
                 _last_source = "langfuse"
@@ -665,8 +665,8 @@ def get_decision_prompts(
             user = usr_prompt_obj.compile(**merged)
             if str(merged.get("market_reference_context", "")).strip():
                 user = (
-                    "Current market reference prices (use these to calibrate "
-                    "entry/stop/target near live levels):\n"
+                    "LIVE MARKET PRICES — use ONLY these for entry/stop/target."
+                    " Do NOT use your training-data prices. Entry must be within 3% of the live price shown here:\n"
                     f"{merged['market_reference_context']}\n\n{user}"
                 )
             _last_source = "langfuse"

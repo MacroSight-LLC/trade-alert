@@ -159,8 +159,8 @@ _SA_FORECAST_BONUS_THRESHOLD: float = float(os.environ.get("SA_FORECAST_BONUS_TH
 # Server-side market-session gating controls.
 _MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED", "1") == "1"
 _SESSION_PREPOST_EP_BUMP: float = float(os.environ.get("SESSION_PREPOST_EP_BUMP", "0.03"))
-_SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.03"))
-_SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "1"))
+_SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.05"))
+_SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "2"))
 
 # Macro veto bypass thresholds (configurable)
 _MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))

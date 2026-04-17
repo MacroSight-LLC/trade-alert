@@ -310,7 +310,25 @@ def build_prompt(
     vix = _fred_vix.get("vix_level") or _fred_vix.get("value", "N/A")
     yc = _fred_yc.get("spread_bps") or _fred_yc.get("value", "N/A")
 
-    _fred_live = vix != "N/A" and yc != "N/A"
+    # Guard against zero/falsy FRED values that pass the "N/A" check but
+    # are clearly stale — e.g. VIX=0.0 or curve=0.0 are physically impossible
+    # in live markets.  Mark them stale so the LLM gets an honest signal.
+    import logging as _logging
+    _dh_log = _logging.getLogger(__name__)
+    try:
+        if vix != "N/A" and float(vix) == 0.0:
+            _dh_log.warning("FRED staleness: VIX returned 0.0 — marking as STALE")
+            vix = "STALE"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if yc != "N/A" and float(yc) == 0.0:
+            _dh_log.warning("FRED staleness: yield-curve spread returned 0.0 — marking as STALE")
+            yc = "STALE"
+    except (TypeError, ValueError):
+        pass
+
+    _fred_live = vix not in ("N/A", "STALE") and yc not in ("N/A", "STALE")
     data_freshness = "LIVE" if _fred_live else "CACHED (stale — FRED unavailable)"
 
     risk_on = macro.get("risk_on", True)

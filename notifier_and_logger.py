@@ -888,12 +888,17 @@ def _is_duplicate_alert(
         return False
 
 
-def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
+def notify(
+    alerts_json: str,
+    raw_snapshots: list[dict] | None = None,
+    trace_id: str | None = None,
+) -> int:
     """Main entry point called by decision workflows.
 
     Args:
         alerts_json: JSON string of PlaybookAlert dicts from the decision engine.
         raw_snapshots: Optional raw snapshot dicts for audit logging.
+        trace_id: Langfuse trace ID for this pipeline run (for DB linkage).
 
     Returns:
         Count of alerts successfully sent to Discord.
@@ -1041,6 +1046,7 @@ def notify(alerts_json: str, raw_snapshots: list[dict] | None = None) -> int:
                     snapshots,
                     forecast_score=_fc,
                     forecast_contradicted=False,
+                    trace_id=trace_id or None,
                 )
             except Exception as exc:
                 logger.error(

@@ -183,7 +183,10 @@ CRITICAL CHECKS before outputting each alert:
 2. R/R CHECK (mandatory): compute min_target = entry.level + 2.0 * (entry.level - entry.stop)
    If entry.target < min_target → ADJUST entry.target UP to the next valid resistance, or SKIP the alert
 3. Verify thesis is specific (mentions actual signal values, not just "strong signals")
-4. If any required field would be vague or uncertain, do NOT include that alert
+4. PRICE ANCHOR CHECK: entry.level must be within 3% of the live market price provided.
+   If entry.level deviates more than 3% from the live price → REJECT the alert entirely.
+   Example: live price $10.00 → valid entry range $9.70–$10.30. Do NOT use your training-data prices.
+5. If any required field would be vague or uncertain, do NOT include that alert
 
 {{extra_rules}}
 
