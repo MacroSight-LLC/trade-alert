@@ -2,10 +2,23 @@
     // ============================================================
     // PYTHON INTERPRETER & ENVIRONMENT
     // ============================================================
-    "python.defaultInterpreterPath": "/Users/taylordean/trade-alert/.venv/bin/python",
+    "python.defaultInterpreterPath": "/home/taylor/trade-alert/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
     "python.terminal.activateEnvInCurrentTerminal": true,
     "python.envFile": "${workspaceFolder}/.env",
+    // ============================================================
+    // RUFF FORMATTER
+    // ============================================================
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+    "ruff.configurationPreference": "filesystemFirst",
+    "ruff.lint.enable": true,
     // ============================================================
     // PYLANCE / ANALYSIS
     // ============================================================
@@ -48,11 +61,7 @@
     // ============================================================
     // EDITOR (project-specific overrides)
     // ============================================================
-    "[python]": {
-        "editor.rulers": [
-            110
-        ]
-    },
+    "editor.rulers": [110],
     // ============================================================
     // YAML SCHEMAS
     // ============================================================
