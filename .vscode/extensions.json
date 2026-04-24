@@ -1,35 +1,43 @@
 {
   "recommendations": [
+    // Python
     "ms-python.python",
     "ms-python.vscode-pylance",
     "ms-python.debugpy",
     "ms-python.vscode-python-envs",
     "charliermarsh.ruff",
+    // AI / Git
     "github.copilot-chat",
     "eamodio.gitlens",
     "github.vscode-github-actions",
+    // Infrastructure
     "ms-azuretools.vscode-docker",
     "ms-vscode-remote.remote-containers",
-    "ms-vscode-remote.remote-ssh",
-    "ms-vscode-remote.remote-ssh-edit",
-    "ms-vscode.remote-explorer",
+    "ms-kubernetes-tools.vscode-kubernetes-tools",
+    // Data / Config
     "redhat.vscode-yaml",
     "tamasfe.even-better-toml",
     "mikestead.dotenv",
-    "mechatroner.rainbow-csv",
-    "aaron-bond.better-comments",
-    "gruntfuggly.todo-tree",
-    "usernamehw.errorlens",
-    "yzhang.markdown-all-in-one",
-    "streetsidesoftware.code-spell-checker",
+    "ckolkman.vscode-postgres",
+    // DX
     "humao.rest-client",
-    "ckolkman.vscode-postgres"
+    "usernamehw.errorlens",
+    "gruntfuggly.todo-tree",
+    "yzhang.markdown-all-in-one"
   ],
   "unwantedRecommendations": [
+    // No JS in this project
     "dbaeumer.vscode-eslint",
     "esbenp.prettier-vscode",
+    // Wrong Docker extension — use ms-azuretools.vscode-docker
     "ms-azuretools.vscode-containers",
-    "ms-kubernetes-tools.vscode-kubernetes-tools",
-    "ms-vsliveshare.vsliveshare"
+    // No CSV files in project
+    "mechatroner.rainbow-csv",
+    // No collaborative editing
+    "ms-vsliveshare.vsliveshare",
+    // No SSH remote workflow
+    "ms-vscode-remote.remote-ssh",
+    "ms-vscode-remote.remote-ssh-edit",
+    "ms-vscode.remote-explorer"
   ]
 }

@@ -1,0 +1,48 @@
+# Trade Alert API — REST Client requests
+# Requires: humao.rest-client
+# Set active environment: Ctrl+Shift+P → "Rest Client: Switch Environment" → local
+
+@baseUrl = {{$dotenv DASHBOARD_BASE_URL}}
+@apiKey  = {{$dotenv DASHBOARD_API_KEY}}
+
+### Health check (unauthenticated)
+GET {{baseUrl}}/health
+
+### Auth probe (validates API key)
+GET {{baseUrl}}/api/auth/test
+X-API-Key: {{apiKey}}
+
+### Prometheus metrics (unauthenticated)
+GET {{baseUrl}}/metrics
+
+### Dashboard summary KPIs
+GET {{baseUrl}}/api/summary
+X-API-Key: {{apiKey}}
+
+### Winrate by edge-probability bucket
+GET {{baseUrl}}/api/winrate
+X-API-Key: {{apiKey}}
+
+### Alert frequency — last 30 days (default)
+GET {{baseUrl}}/api/frequency?days=30
+X-API-Key: {{apiKey}}
+
+### Alert frequency — last 7 days
+GET {{baseUrl}}/api/frequency?days=7
+X-API-Key: {{apiKey}}
+
+### Symbol performance — top 20 (default)
+GET {{baseUrl}}/api/symbols?limit=20
+X-API-Key: {{apiKey}}
+
+### Symbol performance — top 50
+GET {{baseUrl}}/api/symbols?limit=50
+X-API-Key: {{apiKey}}
+
+### Recent alerts — last 50 (default)
+GET {{baseUrl}}/api/alerts?limit=50
+X-API-Key: {{apiKey}}
+
+### Recent alerts — last 200
+GET {{baseUrl}}/api/alerts?limit=200
+X-API-Key: {{apiKey}}

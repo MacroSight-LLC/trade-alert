@@ -119,10 +119,12 @@
     // ============================================================
     // REST CLIENT
     // ============================================================
+    "rest-client.dotenv.enabled": true,
     "rest-client.environmentVariables": {
         "$shared": {},
         "local": {
-            "baseUrl": "http://localhost:8000"
+            "DASHBOARD_BASE_URL": "http://localhost:8080",
+            "DASHBOARD_API_KEY": ""
         }
     },
     // ============================================================
