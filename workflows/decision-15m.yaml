@@ -113,7 +113,6 @@ steps:
           inputs:
               alerts_json: '{{ steps["validate-and-filter"]["alerts_json"] }}'
               raw_snapshots_json: '{{ steps["merge-snapshots"]["snapshots_json"] }}'
-              trace_id: '{{ steps.get("__trace_id__") or "" }}'
       if_false:
           type: code
           code: |

@@ -15,7 +15,7 @@ llm_model: claude-sonnet-4-20250514
 inputs:
   - alerts_json
   - raw_snapshots_json
-  - trace_id
+  # trace_id is optional — passed by decision-15m; omitted by decision-1h
 
 steps:
   # Step 1 — Receive and validate alerts input
@@ -48,10 +48,11 @@ steps:
 
         logger = logging.getLogger(__name__)
 
+        _trace_id = None  # trace_id not available in sandbox \u2014 omit for now
         n_sent = notify(
             alerts_json=alerts_json,
             raw_snapshots=steps["receive-alerts"].get("raw_snapshots") or [],
-            trace_id=trace_id if isinstance(trace_id, str) else None,
+            trace_id=_trace_id,
         )
         logger.info("Notifier complete: %d alerts sent to Discord", n_sent)
         result = {"n_sent": n_sent}
