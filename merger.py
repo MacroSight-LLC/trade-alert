@@ -221,6 +221,48 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         catalyst_sig = sig_by_type.get("catalyst_event")
         vol_sig = sig_by_type.get("volume_spike")
         ta_sig = sig_by_type.get("technical_trend")
+        forecast_sig = sig_by_type.get("price_forecast")
+
+        # TimesFM staleness guard: if TimesFM current_price deviates >15% from
+        # the live TradingView price, its forecast anchor is stale (model input
+        # feature, not a live quote). Rewrite the reason to flag it so the LLM
+        # does not cite the wrong price in its thesis.
+        _TIMESFM_STALE_THRESHOLD = 0.15
+        if forecast_sig and ta_sig:
+            ta_live_price: float | None = None
+            ta_raw = ta_sig.raw or {}
+            for _k in ("current_price", "last", "last_price", "price", "close"):
+                try:
+                    _v = float(ta_raw.get(_k, 0.0))
+                    if _v > 0:
+                        ta_live_price = _v
+                        break
+                except (TypeError, ValueError):
+                    pass
+            if ta_live_price:
+                fc_raw = forecast_sig.raw or {}
+                fc_price: float = float(fc_raw.get("current_price", 0.0))
+                if fc_price > 0:
+                    drift = abs(fc_price - ta_live_price) / ta_live_price
+                    if drift > _TIMESFM_STALE_THRESHOLD:
+                        stale_reason = (
+                            f"TimesFM model input price ${fc_price:.2f} is {drift:.0%} "
+                            f"from live ${ta_live_price:.2f} — forecast anchor stale, signal suppressed"
+                        )
+                        logger.info(
+                            "Merger: TimesFM stale price guard triggered for %s "
+                            "(model=$%.2f, live=$%.2f, drift=%.0f%%) — suppressing forecast signal",
+                            symbol, fc_price, ta_live_price, drift * 100,
+                        )
+                        idx = deduped.index(forecast_sig)
+                        deduped[idx] = Signal(
+                            source=forecast_sig.source,
+                            type=forecast_sig.type,
+                            score=0.0,
+                            confidence=0.10,
+                            reason=stale_reason,
+                            raw=forecast_sig.raw,
+                        )
 
         # Insider + catalyst = volatility catalyst
         if insider_sig and catalyst_sig and abs(insider_sig.score) >= 2.0 and abs(catalyst_sig.score) >= 1.5:
