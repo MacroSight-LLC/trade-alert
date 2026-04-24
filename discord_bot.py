@@ -195,6 +195,48 @@ def _get_status() -> str:
     except Exception as exc:
         lines.append(f"  Redis: error — {exc}")
 
+    # Pipeline health from today's Redis session stats
+    try:
+        today = datetime.now(tz=ZoneInfo("America/New_York")).date().isoformat()
+        lines.append("\n**📡 Pipeline Today:**")
+        for tf in ["15m", "1h"]:
+            session_key = f"session:stats:{today}:{tf}"
+            session = r.hgetall(session_key) if r else {}
+            if session:
+                runs = session.get(b"decision_runs", b"0").decode()
+                fired = session.get(b"alerts_passed_total", b"0").decode()
+                rejected = session.get(b"alerts_rejected", b"0").decode()
+                gate_parts = [
+                    f"{k.decode().replace('gate_dir_', '')}: {v.decode()}"
+                    for k, v in session.items()
+                    if k.decode().startswith("gate_dir_")
+                ]
+                gate_parts.sort(key=lambda x: int(x.split(": ")[1]), reverse=True)
+                top_gates = " | ".join(gate_parts[:3]) if gate_parts else "none"
+                lines.append(f"  `{tf}`: {runs} runs | {fired} fired | {rejected} rejected | top gates: {top_gates}")
+            else:
+                lines.append(f"  `{tf}`: no session data yet today")
+        # Last fired alert
+        try:
+            from db import get_recent_alerts as _get_last_alert
+            last = _get_last_alert(limit=1)
+            if last:
+                a = last[0]
+                last_at = str(a.get("created_at", "?"))[:16]
+                lines.append(f"  Last alert: **{a.get('symbol')} {a.get('direction')}** at {last_at} UTC")
+            else:
+                lines.append("  Last alert: none on record")
+        except Exception:
+            lines.append("  Last alert: db unavailable")
+        # Zero-alert watchdog streak
+        if r:
+            for tf in ["15m", "1h"]:
+                streak = r.get(f"watchdog:zero_alerts:{tf}")
+                if streak and int(streak) > 0:
+                    lines.append(f"  ⚠️ Zero-alert streak [{tf}]: {streak.decode()} consecutive runs")
+    except Exception as exc:
+        lines.append(f"  Pipeline stats: error — {exc}")
+
     # MCP health
     lines.append("\n**MCP Servers:**")
     mcp_ports = {

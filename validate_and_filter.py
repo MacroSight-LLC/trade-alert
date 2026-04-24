@@ -188,7 +188,10 @@ _VOLUME_CONFIRM_PENALTY_CHOPPY: float = float(os.environ.get("VOLUME_CONFIRM_PEN
 _ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.03"))
 _ENTRY_MARKET_DRIFT_VIX_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_BUMP", "0.01"))
 _ENTRY_MARKET_DRIFT_PREPOST_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_PREPOST_BUMP", "0.01"))
-_ENTRY_MARKET_DRIFT_CAP_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_CAP_PCT", "0.06"))
+_ENTRY_MARKET_DRIFT_CAP_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_CAP_PCT", "0.08"))
+# Second VIX tier: extreme-volatility regimes (VIX >= 30) add extra tolerance on top of soft-threshold bump
+_ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD", "30.0"))
+_ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP", "0.02"))
 
 # Dynamic gate controls (regime + timeframe overlays)
 _DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
@@ -687,20 +690,25 @@ def _get_volume_spike_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
 def _get_reference_prices(snaps: list[dict[str, Any]]) -> dict[str, float]:
     """Extract per-symbol latest reference prices from snapshot signal raw payloads.
 
-    Preference order:
-      1) timesfm price_forecast raw.current_price
-      2) any signal raw current_price/price/close/last/last_price
+    Priority order (0 = highest):
+      0) technical_trend  — live TradingView quote (most reliable real-time price)
+      1) volume_spike     — live Polygon trade print
+      2) options_flow     — Polygon/Alpaca options last price
+      3) insider_activity — EDGAR trade execution price
+      4) catalyst_event   — ROT/SpamShield reference price
+      5) short_interest   — short interest data price
+      6) price_forecast   — TimesFM model input feature (stale training price, lowest priority)
     """
     prices: dict[str, float] = {}
     candidates: dict[str, tuple[int, int, float]] = {}
     type_priority = {
-        "price_forecast": 0,
-        "technical_trend": 1,
-        "volume_spike": 2,
-        "options_flow": 3,
-        "insider_activity": 4,
-        "catalyst_event": 5,
-        "short_interest": 6,
+        "technical_trend": 0,
+        "volume_spike": 1,
+        "options_flow": 2,
+        "insider_activity": 3,
+        "catalyst_event": 4,
+        "short_interest": 5,
+        "price_forecast": 6,
     }
     key_priority = {
         "current_price": 0,
@@ -1084,6 +1092,8 @@ def validate_and_filter(
                 drift_gate = _ENTRY_MARKET_DRIFT_MAX_PCT
                 if vix >= _VIX_SOFT_THRESHOLD:
                     drift_gate += _ENTRY_MARKET_DRIFT_VIX_BUMP
+                if vix >= _ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD:
+                    drift_gate += _ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP
                 if market_session in {"pre", "after"}:
                     drift_gate += _ENTRY_MARKET_DRIFT_PREPOST_BUMP
                 drift_gate = min(drift_gate, _ENTRY_MARKET_DRIFT_CAP_PCT)

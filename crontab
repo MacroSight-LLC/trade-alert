@@ -21,6 +21,9 @@ TZ=America/New_York
 15 9 * * 1-5 cd /app && python pipeline_runner.py workflows/state-summary.yaml >> /app/logs/cron.log 2>&1
 15 16 * * 1-5 cd /app && python pipeline_runner.py workflows/state-summary.yaml >> /app/logs/cron.log 2>&1
 
+# ── EOD summary — 4:15 PM ET (20:15 UTC) Mon-Fri ─────────────────────────────
+15 20 * * 1-5 cd /app && python eod_summary.py >> /app/logs/cron.log 2>&1
+
 # ── Healthcheck — every 15 min, 24/7 ────────────────────────────────────────────
 */15 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1
 

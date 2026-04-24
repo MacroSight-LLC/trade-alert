@@ -211,11 +211,21 @@ def check_postgres() -> bool:
         return False
 
 
+_WATCHDOG_ZERO_ALERT_THRESHOLD: int = int(os.getenv("WATCHDOG_ZERO_ALERT_THRESHOLD", "4"))
+_WATCHDOG_KEY_PREFIX = "watchdog:zero_alerts:"
+_WATCHDOG_TTL_SECONDS = 7200  # 2h auto-expiry so stale streaks don't persist overnight
+
+
 def check_recent_alerts(timeframe: str) -> bool:
-    """Query Postgres for recent alert activity.
+    """Query Postgres for recent alert activity and run zero-alert watchdog.
+
+    Maintains a per-timeframe consecutive-zero-alert counter in Redis.
+    Fires a single ops Discord message when the counter first hits the
+    threshold (default 4 cycles = 1 hour for 15m) and resets on any alert.
 
     This is a soft check — returns True even when no alerts exist
-    (silence is valid). Returns False only on database errors.
+    (silence is valid outside market hours). Returns False only on
+    database errors.
 
     Args:
         timeframe: Pipeline timeframe label for logging context.
@@ -228,7 +238,50 @@ def check_recent_alerts(timeframe: str) -> bool:
         from db import get_recent_alerts
 
         alerts = get_recent_alerts(limit=1)
-        logger.info("Healthcheck: %d recent alerts found", len(alerts))
+        recent_count = len(alerts)
+        logger.info("Healthcheck: %d recent alerts found", recent_count)
+
+        # Zero-alert watchdog — only fires during active market hours
+        if _snapshot_healthcheck_active():
+            try:
+                r = _get_redis()
+                watchdog_key = f"{_WATCHDOG_KEY_PREFIX}{timeframe}"
+                if recent_count == 0:
+                    consecutive = r.incr(watchdog_key)
+                    r.expire(watchdog_key, _WATCHDOG_TTL_SECONDS)
+                    logger.info("Watchdog: %s zero-alert streak=%d", timeframe, consecutive)
+                    # Fire exactly once when threshold is first crossed
+                    if consecutive == _WATCHDOG_ZERO_ALERT_THRESHOLD:
+                        today = datetime.now(tz=_ET).date().isoformat()
+                        session_key = f"session:stats:{today}:{timeframe}"
+                        session = r.hgetall(session_key) or {}
+                        gate_parts = [
+                            f"{k.decode().replace('gate_dir_', '')}: {v.decode()}"
+                            for k, v in session.items()
+                            if k.decode().startswith("gate_dir_")
+                        ]
+                        gate_parts.sort(key=lambda x: int(x.split(": ")[1]), reverse=True)
+                        top_gates = ", ".join(gate_parts[:3]) if gate_parts else "no data"
+                        candidates = session.get(b"llm_candidates", b"0").decode()
+                        last_alert_str = (
+                            str(alerts[0].get("created_at", "unknown"))[:16]
+                            if alerts
+                            else "no alerts on record"
+                        )
+                        msg = (
+                            f"\u26a0\ufe0f **Zero-alert drought [{timeframe}]** \u2014 "
+                            f"{consecutive} consecutive runs ({consecutive * 15}m) with no alerts fired.\n"
+                            f"Candidates seen this run: {candidates}\n"
+                            f"Top gate rejections today: {top_gates}\n"
+                            f"Last alert: {last_alert_str}"
+                        )
+                        send_ops_message(msg)
+                else:
+                    # Reset streak counter whenever an alert exists
+                    r.delete(watchdog_key)
+            except Exception as exc:  # noqa: BLE001 — watchdog must never break the healthcheck
+                logger.warning("Watchdog check failed (non-critical): %s", exc)
+
         return True
     except Exception as exc:  # noqa: BLE001 — health probe must never raise; report degraded state instead
         logger.error("Healthcheck: recent alerts query failed — %s", exc)
