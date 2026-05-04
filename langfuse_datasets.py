@@ -204,10 +204,6 @@ def get_golden_examples(n: int = 3) -> list[dict[str, Any]]:
     if lf is None:
         return []
 
-    dataset_names = _list_dataset_names(lf)
-    if dataset_names is None or GOLDEN_DATASET_NAME not in dataset_names:
-        return []
-
     try:
         dataset = lf.get_dataset(GOLDEN_DATASET_NAME)
         items = dataset.items or []

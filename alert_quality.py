@@ -251,21 +251,23 @@ def score_rr_ratio(entry: dict[str, float], direction: str) -> float:
 def score_signal_coverage(sources_agree: int) -> float:
     """Score based on number of independent signal families aligned.
 
-    Calibrated for family-level counting (max 7: trend, volume, sentiment,
-    flow, events, macro, positioning) after server-side SA override.
+    Calibrated against the 11 recognised signal types (and up to 10
+    discrete family-aligned sources after server-side SA override).
 
     Args:
-        sources_agree: Count of aligned signal families (server-computed, max 7).
+        sources_agree: Count of aligned signal families (server-computed).
 
     Returns:
         Score from 0.0 to 1.0.
     """
-    if sources_agree >= 4:
+    if sources_agree >= 5:
         return 1.0
+    if sources_agree >= 4:
+        return 0.85
     if sources_agree >= 3:
-        return 0.80
+        return 0.6
     if sources_agree >= 2:
-        return 0.5
+        return 0.4
     return max(0.0, sources_agree * 0.2)
 
 
@@ -286,11 +288,11 @@ def score_confidence_calibration(
     Returns:
         Score from 0.0 (miscalibrated) to 1.0 (well-calibrated).
     """
-    # EP > 0.90 with < 3 families aligned is suspicious (family-scale max 7)
-    if edge_probability > 0.90 and sources_agree < 3:
+    # EP > 0.90 with < 4 families aligned is suspicious
+    if edge_probability > 0.90 and sources_agree < 4:
         return 0.3
-    # EP > 0.85 with < 3 families is slightly suspicious
-    if edge_probability > 0.85 and sources_agree < 3:
+    # EP > 0.85 with < 4 families is slightly suspicious
+    if edge_probability > 0.85 and sources_agree < 4:
         return 0.5
     # Low confidence but high EP
     if confidence < 0.75 and edge_probability > 0.80:

@@ -544,7 +544,7 @@ class TestNotify:
         assert count == 2
         assert _send.call_count == 2
 
-    @patch("notifier_and_logger.generate_chart", return_value=(b"\x89PNG chart", 2.35))
+    @patch("notifier_and_logger.generate_chart", return_value=(b"\x89PNG chart", 2.35, None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
     @patch("notifier_and_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)

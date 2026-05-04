@@ -61,7 +61,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                         raw_score = 1.5 - t_past * 1.0  # 1.5 → 0.5
                         conf = 0.60 - t_past * 0.20  # 0.60 → 0.40
                     else:
-                        t = hours_until / 168.0  # 0.0 = imminent, 1.0 = 7d out
+                        t = (earnings_dt - now_dt).days / 7.0  # 0.0 = imminent, 1.0 = 7d out
                         raw_score = 2.5 - t * 2.0  # 2.5 → 0.5
                         conf = 0.90 - t * 0.40  # 0.90 → 0.50
 

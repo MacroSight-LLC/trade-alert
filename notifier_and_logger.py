@@ -359,7 +359,7 @@ def _format_watch_embed(alert: PlaybookAlert) -> dict:
                             f"TF: **{alert.timeframe}**\n"
                             f"EP: **{alert.edge_probability:.2f}** | "
                             f"CONF: **{alert.confidence:.2f}** | "
-                            f"SA: **{alert.sources_agree}/7**"
+                            f"SA: **{alert.sources_agree}/10**"
                         ),
                         "inline": False,
                     },
@@ -588,8 +588,8 @@ def format_embed(
         },
         {
             "name": "\U0001f4ca Source Alignment",
-            "value": f"```{_score_bar(alert.sources_agree / 7, segments=7)}```"
-            f"**{alert.sources_agree}/7** independent signal families aligned",
+            "value": f"```{_score_bar(alert.sources_agree / 10, segments=10)}```"
+            f"**{alert.sources_agree}/10** independent signal families aligned",
             "inline": False,
         },
     ]
