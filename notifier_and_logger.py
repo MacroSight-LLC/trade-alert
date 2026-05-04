@@ -25,6 +25,7 @@ import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from chart_gen import generate_chart
 from db import insert_alert
 from log_config import configure_logging
+from metrics import DB_INSERTS, DISCORD_SENDS
 from models import PlaybookAlert
 from redis_client import get_redis
 
@@ -660,6 +661,7 @@ def send_discord_embed(
                 _discord_consecutive_failures,
                 _DISCORD_CB_RESET_SECS - elapsed,
             )
+            DISCORD_SENDS.labels(status="circuit_open").inc()
             return False
         # Reset after cooldown period
         logger.info("Discord circuit breaker RESET after %.0fs cooldown", elapsed)
@@ -679,6 +681,7 @@ def send_discord_embed(
                     resp = _get_discord_client().post(webhook, json=embed_payload)
                 resp.raise_for_status()
                 _discord_consecutive_failures = 0
+                DISCORD_SENDS.labels(status="success").inc()
                 return True
 
             bot_token = _discord_bot_token()
@@ -701,9 +704,11 @@ def send_discord_embed(
                     )
                 resp.raise_for_status()
                 _discord_consecutive_failures = 0
+                DISCORD_SENDS.labels(status="success").inc()
                 return True
 
             logger.warning("No Discord credentials configured — skipping send")
+            DISCORD_SENDS.labels(status="unconfigured").inc()
             return False
 
         except httpx.HTTPStatusError as exc:
@@ -723,6 +728,7 @@ def send_discord_embed(
             if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
                 _discord_cb_open_since = time.monotonic()
             logger.error("Discord API error %s: %s", exc.response.status_code, exc)
+            DISCORD_SENDS.labels(status="failure").inc()
             return False
 
         except httpx.RequestError as exc:
@@ -742,12 +748,14 @@ def send_discord_embed(
             if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
                 _discord_cb_open_since = time.monotonic()
             logger.error("Discord request failed after %d attempts: %s", attempt, exc)
+            DISCORD_SENDS.labels(status="failure").inc()
             return False
 
     _discord_consecutive_failures += 1
     if _discord_consecutive_failures >= _DISCORD_CB_THRESHOLD:
         _discord_cb_open_since = time.monotonic()
     logger.error("Discord send exhausted %d retries, last error: %s", DISCORD_SEND_MAX_RETRIES, last_exc)
+    DISCORD_SENDS.labels(status="failure").inc()
     return False
 
 
@@ -1048,12 +1056,14 @@ def notify(
                     forecast_contradicted=False,
                     trace_id=trace_id or None,
                 )
+                DB_INSERTS.labels(status="success").inc()
             except Exception as exc:
                 logger.error(
                     "Postgres insert failed for %s — skipping Discord send: %s",
                     alert.symbol,
                     exc,
                 )
+                DB_INSERTS.labels(status="failure").inc()
                 continue
 
             # Outbound execution webhook (config-gated; non-fatal to Discord delivery)

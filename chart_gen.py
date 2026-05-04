@@ -23,6 +23,8 @@ matplotlib.use("Agg")  # headless — must precede mplfinance import
 import httpx
 import pandas as pd
 
+from metrics import CHART_GEN_DURATION
+
 logger = logging.getLogger(__name__)
 
 POLYGON_BASE_URL = "https://api.polygon.io"
@@ -296,6 +298,16 @@ def generate_chart(
                     - Most recent market price (live trade preferred, candle close fallback) or None
                     - ISO timestamp for the selected market price or None
     """
+    with CHART_GEN_DURATION.time():
+        return _generate_chart_impl(symbol, timeframe, entry)
+
+
+def _generate_chart_impl(
+    symbol: str,
+    timeframe: str,
+    entry: dict[str, float],
+) -> tuple[bytes | None, float | None, float | None, str | None]:
+    """Implementation of generate_chart wrapped by Prometheus timing."""
     df = _fetch_candles(symbol, timeframe)
     live_price, live_ts = _fetch_last_trade(symbol)
     alpaca_price, alpaca_ts = _fetch_alpaca_last_close(symbol, timeframe)

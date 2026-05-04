@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
 from constants import get_market_hours_status
+from metrics import ALERTS_PER_CYCLE, GATE_REJECTIONS
 from models import PlaybookAlert
 from redis_client import get_redis
 
@@ -1647,5 +1648,13 @@ def validate_and_filter(
                 comment=f"{count} alerts rejected by {gate_name}",
             )
 
+    # Prometheus gate counters (always emitted, independent of Langfuse).
+    _gate_counts: dict[str, int] = {}
+    for _sym, _gate in rejections:
+        _gate_counts[_gate.value] = _gate_counts.get(_gate.value, 0) + 1
+    for _gate_name, _count in _gate_counts.items():
+        GATE_REJECTIONS.labels(gate=_gate_name).inc(_count)
+
+    ALERTS_PER_CYCLE.labels(timeframe=timeframe).observe(len(alerts))
     alerts_json = json.dumps([a.model_dump() for a in alerts])
     return alerts, alerts_json
