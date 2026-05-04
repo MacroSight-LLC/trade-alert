@@ -144,7 +144,8 @@ def merge_snapshots(
         try:
             n = int(_inp_n)
         except (ValueError, TypeError):
-            n = 0
+            logger.warning("Decision-%s: invalid merged_n value (%r) — skipping pre-merged path", timeframe, _inp_n)
+            return {"skip": True, "snapshots_json": "[]", "macro": macro, "n": 0, "prune_stats": prune_stats}
 
         # Deterministic pre-LLM pruning even for orchestrator-provided merges.
         try:

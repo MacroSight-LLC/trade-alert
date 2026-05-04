@@ -1110,7 +1110,7 @@ def validate_and_filter(
                     _add_reason(GateRejection.ENTRY_MARKET_DRIFT)
 
         # ── Market-session server-side gate ─────────────────────
-        if directional and market_session == "closed":
+        if directional and market_session == "closed" and _MARKET_HOURS_GATES_ENABLED:
             logger.info(
                 "Market-session gate: %s %s rejected (session=%s)",
                 alert.symbol,
