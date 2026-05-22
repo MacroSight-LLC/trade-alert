@@ -17,12 +17,12 @@ Implements SSOT §4 (PlaybookAlert validation) and §10.2/10.3 gates:
 
 from __future__ import annotations
 
-import re
 import json
 import logging
 import math
 import os
-from datetime import datetime, timezone
+import re
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -191,7 +191,9 @@ _ENTRY_MARKET_DRIFT_VIX_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_V
 _ENTRY_MARKET_DRIFT_PREPOST_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_PREPOST_BUMP", "0.01"))
 _ENTRY_MARKET_DRIFT_CAP_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_CAP_PCT", "0.08"))
 # Second VIX tier: extreme-volatility regimes (VIX >= 30) add extra tolerance on top of soft-threshold bump
-_ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD", "30.0"))
+_ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD: float = float(
+    os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD", "30.0")
+)
 _ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP", "0.02"))
 
 # Dynamic gate controls (regime + timeframe overlays)
@@ -204,7 +206,9 @@ _REGIME_TRENDING_CONF_REDUCE: float = float(os.environ.get("REGIME_TRENDING_CONF
 # risk_off_high_vix regime (VIX 25–30 + risk_off=True): tighter gates, same magnitude as choppy.
 # Previously this regime was classified but completely unhandled — gates fell through unchanged.
 _REGIME_RISK_OFF_HIGH_VIX_EP_BUMP: float = float(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_EP_BUMP", "0.03"))
-_REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP: float = float(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP", "0.03"))
+_REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP: float = float(
+    os.environ.get("REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP", "0.03")
+)
 _REGIME_RISK_OFF_HIGH_VIX_SA_BUMP: int = int(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_SA_BUMP", "1"))
 _TF_EP_OFFSET_15M: float = float(os.environ.get("TF_EP_OFFSET_15M", "0.00"))
 _TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
@@ -267,14 +271,23 @@ def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
             except (TypeError, ValueError):
                 continue
             if sc > 0 and st in (
-                "technical_trend", "sentiment_bull", "options_flow", "relative_strength",
-                "price_forecast", "insider_activity", "catalyst_event",
+                "technical_trend",
+                "sentiment_bull",
+                "options_flow",
+                "relative_strength",
+                "price_forecast",
+                "insider_activity",
+                "catalyst_event",
             ):
                 bulls += 1
                 strengths.append(min(abs(sc) / 3.0, 1.0))
             elif sc < 0 and st in (
-                "technical_trend", "options_flow", "relative_strength",
-                "price_forecast", "insider_activity", "catalyst_event",
+                "technical_trend",
+                "options_flow",
+                "relative_strength",
+                "price_forecast",
+                "insider_activity",
+                "catalyst_event",
             ):
                 bears += 1
                 strengths.append(min(abs(sc) / 3.0, 1.0))
@@ -305,7 +318,9 @@ def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_s
     return "neutral"
 
 
-def _dynamic_gates(base_ep: float, base_sa: int, base_conf: float, timeframe: str, regime: str) -> tuple[float, int, float]:
+def _dynamic_gates(
+    base_ep: float, base_sa: int, base_conf: float, timeframe: str, regime: str
+) -> tuple[float, int, float]:
     ep = base_ep
     sa = base_sa
     conf = base_conf
@@ -356,6 +371,7 @@ def _watch_max_for_regime(regime: str) -> int:
 
 # ── WATCH cycle-decay helpers ────────────────────────────────────
 
+
 def _watch_decay_key(symbol: str, timeframe: str) -> str:
     return f"watch:decay:{timeframe}:{symbol}"
 
@@ -400,7 +416,10 @@ def _get_watch_prev_state(symbol: str, timeframe: str) -> dict[str, str] | None:
         r = get_redis()
         state = r.hgetall(_watch_decay_key(symbol, timeframe))
         if state:
-            return {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in state.items()}
+            return {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in state.items()
+            }
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -427,7 +446,7 @@ def _watch_is_improving(
 
 
 def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
-    now_utc = now or datetime.now(timezone.utc)
+    now_utc = now or datetime.now(UTC)
     session_date = now_utc.astimezone(_ET).date().isoformat()
     return f"session:stats:{session_date}:{timeframe}"
 
@@ -571,9 +590,7 @@ def _build_symbol_family_scores(snaps: list[dict[str, Any]]) -> dict[str, dict[s
     family_means: dict[str, dict[str, float]] = {}
     for symbol, fam_map in family_accum.items():
         family_means[symbol] = {
-            family: (sum(scores) / len(scores))
-            for family, scores in fam_map.items()
-            if scores
+            family: (sum(scores) / len(scores)) for family, scores in fam_map.items() if scores
         }
     return family_means
 
@@ -642,7 +659,7 @@ def _is_macro_stale(snaps: list[dict[str, Any]]) -> bool:
     Returns:
         True if macro data is stale or absent.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     newest_macro_ts: datetime | None = None
     for s in snaps:
         for sig in s.get("signals", []):
@@ -784,6 +801,7 @@ def validate_and_filter(
     Returns:
         Tuple of (list of passing PlaybookAlerts, JSON string of alerts).
     """
+
     # ── Parse LLM JSON ───────────────────────────────────────────
     # Some providers return fenced markdown (```json ... ```) or wrap
     # JSON in explanatory text. Extract the array payload defensively.
@@ -856,7 +874,9 @@ def validate_and_filter(
     if any(m in _llm_resp_str for m in _API_ERROR_MARKERS):
         logger.error("LLM API error detected (not a prompt compliance issue): %s", _llm_resp_str[:300])
         if add_score_fn and trace_id:
-            add_score_fn(trace_id, "llm_api_error", 1.0, comment="LLM backend error — not a JSON compliance failure")
+            add_score_fn(
+                trace_id, "llm_api_error", 1.0, comment="LLM backend error — not a JSON compliance failure"
+            )
         return [], "[]"
 
     try:
@@ -987,7 +1007,9 @@ def validate_and_filter(
         # Inject a deterministic macro family score from macro regime to avoid
         # structurally capping sources_agree below full family coverage.
         if _SA_INCLUDE_MACRO_CONTEXT and "macro" not in family_scores:
-            family_scores["macro"] = -abs(_SA_MACRO_CONTEXT_SCORE) if risk_off else abs(_SA_MACRO_CONTEXT_SCORE)
+            family_scores["macro"] = (
+                -abs(_SA_MACRO_CONTEXT_SCORE) if risk_off else abs(_SA_MACRO_CONTEXT_SCORE)
+            )
         llm_sources_agree = alert.sources_agree
         deterministic_sources_agree = _aligned_family_count(family_scores, alert.direction)
         if _SA_FORECAST_CONFIRM_BONUS_ENABLED:
@@ -1182,10 +1204,7 @@ def validate_and_filter(
                     sa_gate,
                 )
                 _add_reason(GateRejection.SA_THRESHOLD)
-            if (
-                alert.confidence >= _HIGH_CONFIDENCE_MIN
-                and alert.sources_agree < _HIGH_CONFIDENCE_MIN_SA
-            ):
+            if alert.confidence >= _HIGH_CONFIDENCE_MIN and alert.sources_agree < _HIGH_CONFIDENCE_MIN_SA:
                 logger.info(
                     "Alert filtered (HIGH_CONFIDENCE_ALIGNMENT): %s conf=%.2f >= %.2f but sa=%d < %d",
                     alert.symbol,
@@ -1390,7 +1409,9 @@ def validate_and_filter(
         # applied to setups whose EP has improved since the previous cycle.
         # This promotes strengthening setups to the top of the ranked queue.
         watch_alerts.sort(
-            key=lambda a: a.edge_probability * a.confidence * (
+            key=lambda a: a.edge_probability
+            * a.confidence
+            * (
                 _WATCH_PROMOTION_BONUS_MULT
                 if _watch_is_improving(a.symbol, a.edge_probability, prev_states)
                 else 1.0
@@ -1421,8 +1442,7 @@ def validate_and_filter(
             cycles = _get_watch_cycles(w.symbol, timeframe)
             if cycles >= _WATCH_DECAY_CYCLES:
                 logger.info(
-                    "WATCH_DECAY: %s stale across %d cycles "
-                    "(ep=%.2f conf=%.2f) – dropping",
+                    "WATCH_DECAY: %s stale across %d cycles (ep=%.2f conf=%.2f) – dropping",
                     w.symbol,
                     cycles,
                     w.edge_probability,
@@ -1455,9 +1475,8 @@ def validate_and_filter(
     for w in [a for a in alerts if a.direction == "WATCH"]:
         new_cycles = _incr_watch_cycles(w.symbol, timeframe, w.edge_probability, w.confidence)
         logger.debug("WATCH_CYCLE_INCR: %s cycles=%d", w.symbol, new_cycles)
-        if (
-            new_cycles >= _WATCH_PROMOTION_MIN_CYCLES
-            and _watch_is_improving(w.symbol, w.edge_probability, prev_states)
+        if new_cycles >= _WATCH_PROMOTION_MIN_CYCLES and _watch_is_improving(
+            w.symbol, w.edge_probability, prev_states
         ):
             w.thesis = f"[\u2191 STRENGTHENING \u00d7{new_cycles}] {w.thesis}"
             logger.info(
@@ -1536,9 +1555,7 @@ def validate_and_filter(
         logger.info(
             "Decision-%s rejection counts: %s",
             timeframe,
-            ", ".join(
-                f"{gate_name}={len(symbols)}" for gate_name, symbols in sorted(gate_samples.items())
-            ),
+            ", ".join(f"{gate_name}={len(symbols)}" for gate_name, symbols in sorted(gate_samples.items())),
         )
 
     if len(alerts) == 0:

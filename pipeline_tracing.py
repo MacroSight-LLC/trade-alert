@@ -16,9 +16,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Generator
+from datetime import UTC, datetime
+from typing import Any
 
 from langfuse_client import get_langfuse_client, register_langfuse_failure
 
@@ -102,7 +103,7 @@ def span_step(
         return
 
     start = time.monotonic()
-    start_ts = datetime.now(tz=timezone.utc)
+    start_ts = datetime.now(tz=UTC)
     span = None
     try:
         span = lf.trace(id=trace_id).span(
@@ -122,7 +123,7 @@ def span_step(
         if span is not None:
             try:
                 span.end(
-                    end_time=datetime.now(tz=timezone.utc),
+                    end_time=datetime.now(tz=UTC),
                     output=ctx.get("output"),
                     status_message=ctx.get("status_message", "ok"),
                     level=ctx.get("level", level),

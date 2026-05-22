@@ -8,7 +8,7 @@ name: state-summary
 description: >
     Pre-open / post-close state summary: VIX, regime, dynamic gates,
     session stats, and WATCH queue.  Sent to ops channel.  No trade alerts.
-llm_model: claude-sonnet-4-20250514
+llm_model: claude-sonnet-4-5
 mcp_servers:
     - name: fred-mcp
       endpoint: http://fred-mcp:8009

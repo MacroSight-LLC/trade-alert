@@ -701,7 +701,7 @@ services:
   dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.dashboard
     depends_on:
       vault:
         condition: service_healthy

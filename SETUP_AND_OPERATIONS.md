@@ -14,9 +14,10 @@
 4. [Full Stack Startup](#full-stack-startup)
 5. [Discord Bot Commands](#discord-bot-commands)
 6. [Health Checks & Monitoring](#health-checks--monitoring)
-7. [Common Operations](#common-operations)
-8. [Remote / VPS Deployment](#remote--vps-deployment)
-9. [Troubleshooting](#troubleshooting)
+7. [Cron Schedule (live)](#cron-schedule-live)
+8. [Common Operations](#common-operations)
+9. [Remote / VPS Deployment](#remote--vps-deployment)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -496,6 +497,31 @@ docker system df
 docker network ls
 docker network inspect trade-alert_trade-net
 ```
+
+---
+
+## Cron Schedule (live)
+
+SSOT §5 describes the cron schedule generically ("every 15 min", "every
+hour"). The actual `crontab` shipped with the cron container is more
+defensive — it only runs orchestrators during US market hours so the
+pipeline never hits MCPs when the markets are closed. This section
+documents the live schedule for operations reference. **All times are
+ET (`TZ=America/New_York`, DST-aware).**
+
+| Job                       | Schedule (ET)                    | Notes                                                      |
+|---------------------------|----------------------------------|------------------------------------------------------------|
+| `orchestrator-15m.yaml`   | 9:30, 9:45, then `*/15` 10–15h, and 16:00 Mon–Fri | Open + close window guarded by `flock`                     |
+| `orchestrator-1h.yaml`    | `0 10–16 * * 1–5`                | One run at the top of each hour during the trading day      |
+| `outcome-tracker.yaml`    | `*/15 9–18 * * 1–5`              | Extended window so positions opened late still resolve     |
+| `state-summary.yaml`      | 9:15 and 16:15 Mon–Fri           | Pre-open prep + post-close digest                          |
+| `eod_summary.py`          | 16:15 Mon–Fri                    | Discord ops EOD recap                                      |
+| `healthcheck.py`          | every 15 min, 24/7               | Independent of market hours so infra rot is detected fast  |
+| Log rotation              | midnight daily                   | Tail-truncates `health.jsonl` and `cron.log` to last 50k   |
+
+The SSOT remains intentionally generic; this table is the single place
+that catalogs the live schedule.  When updating `crontab`, update this
+table in the same commit.
 
 ---
 

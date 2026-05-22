@@ -51,6 +51,49 @@ phase ordering in the SSOT phase table.
   `README.md` documentation section now self-identifies; `CONTRIBUTING.md`
   "Adding new source files" + "Secrets baseline" sections;
   `SETUP_AND_OPERATIONS.md` "Last verified against" header.
+- May 22 audit fixes (PR 1 — security + correctness):
+  - `vault_env_loader.py` now honours `VAULT_REQUIRED=true` and raises
+    `RuntimeError` on missing creds, auth failure, empty path, or read
+    failure after 3 retries (was silently returning `0`).
+  - `dashboard_api.py` rejects `*` in `DASHBOARD_CORS_ORIGINS` at startup.
+  - `models.py` `Signal.raw` typed as `dict[str, Any]`; `TraceAnalysis`
+    fields `cost_usd`/`latency_s`/`llm_calls`/`total_tokens` now declared
+    with `ge=0`; `validate_entry` skips directional ordering for
+    `direction == "WATCH"`; new proportional rule in
+    `validate_edge_vs_confidence` rejects `ep >= 0.70` with
+    `confidence < (1 - ep) * 0.5` (uses `math.isclose` to allow exact-floor
+    values despite float drift). All `List`/`Dict` annotations standardised
+    to lowercase.
+  - SSOT §4 schema block, §10.1 model name, and the model-guardrails note
+    mirror the above changes.
+  - `models.py` smoke `__main__` block extracted to
+    [`scripts/smoke_models.py`](./scripts/smoke_models.py).
+  - SSOT §0.2 model references corrected to `Claude Opus 4.5`.
+- May 22 audit fixes (PR 2 — cleanup):
+  - Sonnet 4 model ID `claude-sonnet-4-20250514` (deprecated, retiring
+    2026-06-15) bulk-replaced with `claude-sonnet-4-5` across all
+    workflows, `pipeline_runner.py`, SSOT §10.1, and `README.md`. SSOT
+    §10.1 documents the migration date and verification.
+  - [`FOLLOW_UPS.md`](./FOLLOW_UPS.md) added to track persistent action
+    items (GitHub Issues are disabled on this repo). FU-001 tracks the
+    upstream relocation of CUGA-internal unit tests; SSOT §6 Notes now
+    references it.
+  - [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md) gains a "Cron
+    Schedule (live)" section documenting the actual market-hour-aware
+    crontab (SSOT stays generic).
+  - `docker-compose.yml` gains a 14-line dev-mode banner explaining the
+    Vault dev-token, no-TLS, and resource-limit differences vs production.
+  - Root `Dockerfile` renamed to
+    [`docker/Dockerfile.dashboard`](./docker/Dockerfile.dashboard); both
+    compose files and SSOT §6 updated.
+  - CI now uses `astral-sh/setup-uv@v3` + `uv sync --frozen --group dev`
+    instead of `pip install` of an explicit list, so `uv.lock` is enforced.
+  - `.python-version` repinned to `3.11` to align local dev with CI,
+    Dockerfile, mypy, and ruff (was `3.12.7`).
+  - `ruff.toml` `select` extended with `I` (isort) and `UP` (pyupgrade);
+    81 auto-fixes applied across the trade-alert file list and the three
+    remaining `E402` import-order issues in `notifier_and_logger.py`
+    fixed by hand.
 
 ## [1.0.0] - 2026-03-11
 

@@ -12,7 +12,7 @@ import logging
 import math
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis
 from pydantic import ValidationError
@@ -134,7 +134,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
         groups[(snap.symbol, snap.timeframe)].append(snap)
 
     # Reference time for freshness decay
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
 
     # Merge signals per group and compute aggregate strength
     merged: list[tuple[float, Snapshot]] = []

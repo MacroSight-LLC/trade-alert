@@ -12,7 +12,7 @@ Note:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
@@ -37,7 +37,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots for symbols with catalyst events.
     """
     snapshots: list[Snapshot] = []
-    now_dt = datetime.now(timezone.utc)
+    now_dt = datetime.now(UTC)
     now = now_dt.isoformat()
 
     for symbol, data in raw_results.items():
@@ -47,7 +47,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         earnings_date_str: str | None = data.get("earnings_date")
         if earnings_date_str:
             try:
-                earnings_dt = datetime.strptime(earnings_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                earnings_dt = datetime.strptime(earnings_date_str, "%Y-%m-%d").replace(tzinfo=UTC)
                 hours_until = (earnings_dt - now_dt).total_seconds() / 3600.0
 
                 if -24 <= hours_until <= 168:  # 168h = 7 days; include recent (last 24h)

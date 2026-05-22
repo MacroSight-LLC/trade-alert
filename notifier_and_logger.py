@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from atexit import register as _atexit_register
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import redis
@@ -23,7 +23,10 @@ from pydantic import ValidationError
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from chart_gen import generate_chart
+from constants import DEDUP_WINDOW_SECONDS, TRADE_EXECUTE_ENABLED  # centralized
 from db import insert_alert
+from execution_mapper import map_to_execution_trigger
+from execution_webhook import deliver_execution_trigger
 from log_config import configure_logging
 from metrics import DB_INSERTS, DISCORD_SENDS
 from models import PlaybookAlert
@@ -35,10 +38,6 @@ logger = logging.getLogger(__name__)
 DISCORD_HTTP_TIMEOUT: float = float(os.getenv("DISCORD_HTTP_TIMEOUT", "10.0"))
 DISCORD_SEND_MAX_RETRIES: int = int(os.getenv("DISCORD_SEND_MAX_RETRIES", "3"))
 DISCORD_SEND_BACKOFF_BASE: float = float(os.getenv("DISCORD_SEND_BACKOFF_BASE", "1.0"))
-from constants import DEDUP_WINDOW_SECONDS, TRADE_EXECUTE_ENABLED  # centralized
-from execution_mapper import map_to_execution_trigger
-from execution_webhook import deliver_execution_trigger
-
 MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
 
 _discord_client: httpx.Client | None = None
@@ -371,7 +370,7 @@ def _format_watch_embed(alert: PlaybookAlert) -> dict:
                     },
                 ],
                 "footer": {"text": "trade-alert • WATCH"},
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         ]
     }
@@ -439,9 +438,9 @@ def format_embed(
         try:
             parsed_ts = datetime.fromisoformat(current_price_ts)
             if parsed_ts.tzinfo is None:
-                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
-            ts_utc = parsed_ts.astimezone(timezone.utc)
-            age_seconds = max(0.0, (datetime.now(timezone.utc) - ts_utc).total_seconds())
+                parsed_ts = parsed_ts.replace(tzinfo=UTC)
+            ts_utc = parsed_ts.astimezone(UTC)
+            age_seconds = max(0.0, (datetime.now(UTC) - ts_utc).total_seconds())
             hard_threshold = max_price_age_seconds.get(alert.timeframe, 2 * 60 * 60)
             if age_seconds > hard_threshold:
                 hard_stale = True
@@ -450,9 +449,8 @@ def format_embed(
             pass
 
     if hard_stale:
-        current_price_field = (
-            "_Unavailable (stale market data)_"
-            + (f"\nLast quote age: {hard_age_mins}m" if hard_age_mins is not None else "")
+        current_price_field = "_Unavailable (stale market data)_" + (
+            f"\nLast quote age: {hard_age_mins}m" if hard_age_mins is not None else ""
         )
     elif current_price is None or delta_vs_entry is None or delta_vs_entry_pct is None:
         current_price_field = "_Unavailable_"
@@ -479,11 +477,11 @@ def format_embed(
             try:
                 parsed_ts = datetime.fromisoformat(current_price_ts)
                 if parsed_ts.tzinfo is None:
-                    parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
-                ts_utc = parsed_ts.astimezone(timezone.utc)
+                    parsed_ts = parsed_ts.replace(tzinfo=UTC)
+                ts_utc = parsed_ts.astimezone(UTC)
                 ts_fmt = ts_utc.strftime("%H:%M UTC")
 
-                age_seconds = max(0.0, (datetime.now(timezone.utc) - ts_utc).total_seconds())
+                age_seconds = max(0.0, (datetime.now(UTC) - ts_utc).total_seconds())
                 stale_thresholds = {
                     "5m": 15 * 60,
                     "15m": 30 * 60,
@@ -613,7 +611,7 @@ def format_embed(
                 "color": embed_color,
                 "fields": fields,
                 "footer": {"text": "trade-alert \u2022 MacroSight LLC"},
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         ]
     }

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from constants import get_market_hours_status  # noqa: F811 — re-exported
@@ -432,7 +432,7 @@ def compute_snapshot_freshness(snapshots_json: str) -> dict[str, int]:
                 timestamps.append(dt)
         if not timestamps:
             return {"oldest_seconds": 0, "newest_seconds": 0}
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         oldest = int((now - min(timestamps)).total_seconds())
         newest = int((now - max(timestamps)).total_seconds())
         return {"oldest_seconds": max(oldest, 0), "newest_seconds": max(newest, 0)}
@@ -532,10 +532,7 @@ def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
 
         parts: list[str] = []
         for r in rows:
-            age_min = int(
-                (datetime.now(timezone.utc) - r["created_at"].replace(tzinfo=timezone.utc)).total_seconds()
-                / 60
-            )
+            age_min = int((datetime.now(UTC) - r["created_at"].replace(tzinfo=UTC)).total_seconds() / 60)
             parts.append(
                 f"{r['symbol']} {r['direction']} (EP {r['edge_probability']:.2f}, "
                 f"{r['timeframe']}, {age_min}m ago)"

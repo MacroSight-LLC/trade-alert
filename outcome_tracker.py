@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -272,7 +272,7 @@ def evaluate_outcome(
 
         # Check expiry window (per-timeframe if available)
         expiry_hours = _TIMEFRAME_EXPIRY_HOURS.get(timeframe or "", OUTCOME_WINDOW_HOURS)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if isinstance(fired_at, datetime):
             deadline = fired_at + timedelta(hours=expiry_hours)
             if now >= deadline:
@@ -491,7 +491,7 @@ def _expire_stale_alerts() -> int:
     expired = 0
     try:
         rows = get_open_alerts(limit=OUTCOME_OPEN_ALERT_LIMIT)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for row in rows:
             created = row.get("created_at")
             if isinstance(created, datetime) and (now - created).days >= STALE_ALERT_DAYS:
@@ -586,7 +586,7 @@ def run_tracker_loop() -> None:
 
 
 if __name__ == "__main__":
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     sample_alert: dict = {
         "id": 1,
@@ -595,7 +595,7 @@ if __name__ == "__main__":
         "entry_level": 185.0,
         "stop_level": 182.0,
         "target_level": 192.0,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "fired_at": datetime.now(UTC) - timedelta(hours=1),
         "outcome": None,
     }
 
@@ -614,7 +614,7 @@ if __name__ == "__main__":
     # Test EXPIRED (past window)
     expired_alert: dict = {
         **sample_alert,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=5),
+        "fired_at": datetime.now(UTC) - timedelta(hours=5),
     }
     result = evaluate_outcome(expired_alert, 186.0)
     assert result == "EXPIRED", f"Expected EXPIRED, got {result}"

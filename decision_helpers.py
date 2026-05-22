@@ -144,7 +144,9 @@ def merge_snapshots(
         try:
             n = int(_inp_n)
         except (ValueError, TypeError):
-            logger.warning("Decision-%s: invalid merged_n value (%r) — skipping pre-merged path", timeframe, _inp_n)
+            logger.warning(
+                "Decision-%s: invalid merged_n value (%r) — skipping pre-merged path", timeframe, _inp_n
+            )
             return {"skip": True, "snapshots_json": "[]", "macro": macro, "n": 0, "prune_stats": prune_stats}
 
         # Deterministic pre-LLM pruning even for orchestrator-provided merges.
@@ -315,6 +317,7 @@ def build_prompt(
     # are clearly stale — e.g. VIX=0.0 or curve=0.0 are physically impossible
     # in live markets.  Mark them stale so the LLM gets an honest signal.
     import logging as _logging
+
     _dh_log = _logging.getLogger(__name__)
     try:
         if vix != "N/A" and float(vix) == 0.0:
@@ -401,9 +404,18 @@ def validate_and_filter_step(
         _rescued = float(_ps.get("rescued", 0))
         add_score(trace_id, "pre_llm_candidates_input", _in, comment=f"{timeframe} pre-LLM candidates")
         add_score(trace_id, "pre_llm_candidates_kept", _kept, comment=f"{timeframe} candidates kept")
-        add_score(trace_id, "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity")
-        add_score(trace_id, "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength")
-        add_score(trace_id, "pre_llm_prune_rescued", _rescued, comment="rescued top candidates when prune emptied set")
+        add_score(
+            trace_id, "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity"
+        )
+        add_score(
+            trace_id, "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength"
+        )
+        add_score(
+            trace_id,
+            "pre_llm_prune_rescued",
+            _rescued,
+            comment="rescued top candidates when prune emptied set",
+        )
         if _in > 0:
             add_score(trace_id, "pre_llm_keep_rate", _kept / _in, comment="pre-LLM candidate keep ratio")
 

@@ -8,7 +8,7 @@ name: notifier
 description: >
   Receive validated PlaybookAlert JSON from decision engine,
   format and send Discord embeds, log to Postgres.
-llm_model: claude-sonnet-4-20250514
+llm_model: claude-sonnet-4-5
 # Required input: alerts_json (JSON string of PlaybookAlert array)
 # Optional input: raw_snapshots_json (JSON string of merged snapshots for audit logging)
 # Passed via workflow inputs: from calling decision workflow

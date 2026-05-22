@@ -11,7 +11,8 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, time as dt_time, timezone
+from datetime import UTC, datetime
+from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -394,7 +395,7 @@ def run_healthcheck(timeframe: str) -> None:
         # SSOT §13: structured JSONL log entry
         _append_jsonl(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "timeframe": timeframe,
                 "redis_ok": redis_ok,
                 "snapshot_stale_warning": snapshot_stale_warning,

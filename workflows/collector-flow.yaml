@@ -5,7 +5,7 @@
 
 name: collector-flow
 description: Collect volume spike signals
-llm_model: claude-sonnet-4-20250514
+llm_model: claude-sonnet-4-5
 
 mcp_servers:
   - name: polygon-mcp

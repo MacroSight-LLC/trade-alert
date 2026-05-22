@@ -163,9 +163,15 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
+_cors_origins = [
+    o.strip() for o in os.getenv("DASHBOARD_CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()
+]
+if any(o == "*" for o in _cors_origins):
+    raise RuntimeError("DASHBOARD_CORS_ORIGINS=* is forbidden — set an explicit allow-list of origins.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("DASHBOARD_CORS_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=_cors_origins,
     allow_methods=["GET"],
     allow_headers=["Content-Type", "X-API-Key"],
 )

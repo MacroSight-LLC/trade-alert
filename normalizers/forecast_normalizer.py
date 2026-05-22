@@ -5,7 +5,7 @@ Transforms raw TimesFM MCP forecast results into ``price_forecast`` Signals.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
@@ -28,7 +28,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots, one per valid symbol.
     """
     snapshots: list[Snapshot] = []
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     for symbol, data in raw_results.items():
         median_forecast = data.get("median_forecast")

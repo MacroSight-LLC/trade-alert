@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from langfuse_client import get_langfuse_client, register_langfuse_failure
@@ -395,7 +395,7 @@ def format_ops_embed(
     Returns:
         Dict with ``embeds`` key matching Discord embed structure.
     """
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
 
     # Color by health tier
     if health_score >= 0.80:
@@ -515,7 +515,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
         A ``TraceAnalysis`` summarising the findings.
     """
     session_id = f"orchestrator-{timeframe}"
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
     prompt_version = get_prompt_version()
 
     trace = fetch_latest_trace(session_id)

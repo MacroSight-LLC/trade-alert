@@ -37,8 +37,11 @@ indent-width = 4
 target-version = "py311"
 
 [lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
-select = ["E4", "E7", "E9", "F"]
+# Trade-alert override: I (isort) + UP (pyupgrade) added on top of the
+# CUGA-inherited defaults (E4, E7, E9, F). Both are non-breaking and catch
+# List→list / typing-deprecation drift that AI-generated code tends to
+# reintroduce. Do not remove without spec discussion.
+select = ["E4", "E7", "E9", "F", "I", "UP"]
 ignore = []
 
 

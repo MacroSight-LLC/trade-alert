@@ -11,7 +11,7 @@ import io
 import logging
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import matplotlib
@@ -221,7 +221,7 @@ def _fetch_alpaca_last_close(symbol: str, timeframe: str) -> tuple[float | None,
         return None, None
 
     timeframe_param = _alpaca_timeframe(timeframe)
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     start = (now_utc - timedelta(days=3)).isoformat()
 
     url = f"{ALPACA_BASE_URL}/v2/stocks/{symbol}/bars"
@@ -260,7 +260,7 @@ def _fetch_alpaca_last_close(symbol: str, timeframe: str) -> tuple[float | None,
     if isinstance(ts, str):
         try:
             parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return close, parsed.astimezone(timezone.utc).isoformat()
+            return close, parsed.astimezone(UTC).isoformat()
         except ValueError:
             return close, None
     return close, None
@@ -273,8 +273,8 @@ def _parse_iso_utc(ts: str | None) -> datetime | None:
     try:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
     except ValueError:
         return None
 
@@ -510,5 +510,7 @@ def _generate_chart_impl(
             plt.close(fig)
         buf.close()
 
-    logger.info("Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0)
+    logger.info(
+        "Generated %s chart for %s (%d bytes, ATR=%.4f)", tf_label, symbol, len(chart_bytes), atr_value or 0
+    )
     return chart_bytes, atr_value, latest_price, latest_ts

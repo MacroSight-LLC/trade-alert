@@ -1,8 +1,23 @@
 # trade-alert Docker Compose — development/local topology (SSOT §3, §5)
 #
-# Development compose — NOT for production.
-# For production, use docker-compose.prod.yml.
-# For CI integration tests, use docker-compose.test.yml.
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  DEVELOPMENT COMPOSE — NOT FOR PRODUCTION                           ║
+# ║                                                                      ║
+# ║  Key differences vs docker-compose.prod.yml:                         ║
+# ║    • Vault runs in DEV mode with hard-coded token "dev-root-token"  ║
+# ║      (auto-unsealed, in-memory storage — secrets are wiped on       ║
+# ║      every restart). Production uses server mode with file backend  ║
+# ║      and an unseal key.                                             ║
+# ║    • No TLS termination (HTTP only). Production uses a reverse      ║
+# ║      proxy with Let's Encrypt; see deployment/helm/.                ║
+# ║    • No fail-fast on missing secrets — service env defaults to      ║
+# ║      empty strings instead of ${VAR:?...} so local up succeeds      ║
+# ║      with a partial .env.secrets.                                   ║
+# ║    • Resource limits not enforced; production uses deploy.limits.   ║
+# ║                                                                      ║
+# ║  For production use docker-compose.prod.yml.                         ║
+# ║  For CI integration tests use docker-compose.test.yml.               ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 #
 # Infrastructure + app. MCP services require --profile mcp.
 # Usage:
@@ -445,7 +460,7 @@ services:
   dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.dashboard
     depends_on:
       postgres:
         condition: service_healthy

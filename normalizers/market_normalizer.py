@@ -6,7 +6,7 @@ Used by collector-market to produce supplementary universe-quality signals.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
@@ -34,7 +34,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots for symbols with actionable signals.
     """
     snapshots: list[Snapshot] = []
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     for symbol, data in raw_results.items():
         signals: list[Signal] = []

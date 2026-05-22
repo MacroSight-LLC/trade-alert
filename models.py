@@ -7,8 +7,7 @@ All normalizers, workflows, and the notifier import from this module.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
-from typing import Dict, List, Literal
+from typing import Any, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -48,7 +47,7 @@ class Signal(BaseModel):
     score: float
     confidence: float
     reason: str
-    raw: Dict = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("score")
     @classmethod
@@ -82,7 +81,7 @@ class Snapshot(BaseModel):
     symbol: str
     timeframe: Literal["5m", "15m", "1h", "4h", "1D"]
     timestamp: AwareDatetime
-    signals: List[Signal]
+    signals: list[Signal]
 
     @field_validator("signals")
     @classmethod
@@ -120,10 +119,10 @@ class PlaybookAlert(BaseModel):
     confidence: float
     timeframe: str
     thesis: str
-    entry: Dict[str, float]
+    entry: dict[str, float]
     timeframe_rationale: str
     sentiment_context: str
-    unusual_activity: List[str]
+    unusual_activity: list[str]
     macro_regime: str
     sources_agree: int
 
@@ -152,7 +151,7 @@ class PlaybookAlert(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_entry(self) -> "PlaybookAlert":
+    def validate_entry(self) -> PlaybookAlert:
         """SSOT §4: entry must contain finite level/stop/target with direction-correct ordering.
 
         - LONG requires ``stop < level < target``.
@@ -182,12 +181,28 @@ class PlaybookAlert(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_edge_vs_confidence(self) -> "PlaybookAlert":
+    def validate_edge_vs_confidence(self) -> PlaybookAlert:
         # Reject the logically inconsistent combination of "very confident edge"
         # paired with "almost no overall confidence". A model that returns this
         # has typically misaligned its outputs and the alert should be discarded.
         if self.edge_probability > 0.85 and self.confidence < 0.15:
             raise ValueError("edge_probability > 0.85 with confidence < 0.15 is logically inconsistent")
+        # Proportional guard: catches mid-range edge claims with implausibly low
+        # overall confidence (e.g. ep=0.90, conf=0.04) without rejecting normal
+        # calibration uncertainty. Threshold scales with edge: at ep=0.70 the
+        # floor is conf=0.15; at ep=0.90 it's conf=0.05. Use math.isclose so
+        # values exactly at the floor are accepted despite float drift.
+        proportional_floor = (1 - self.edge_probability) * 0.5
+        if (
+            self.edge_probability >= 0.70
+            and self.confidence < proportional_floor
+            and not math.isclose(self.confidence, proportional_floor, abs_tol=1e-9)
+        ):
+            raise ValueError(
+                f"edge_probability={self.edge_probability:.2f} with "
+                f"confidence={self.confidence:.2f} fails the proportional "
+                f"consistency check (confidence must be >= {proportional_floor:.2f})"
+            )
         return self
 
 
@@ -208,55 +223,10 @@ class TraceAnalysis(BaseModel):
 
     trace_id: str
     is_healthy: bool
-    issues: List[str] = Field(default_factory=list)
-    cost_usd: float = 0.0
-    latency_s: float = 0.0
-    llm_calls: int = 0
-    total_tokens: int = 0
+    issues: list[str] = Field(default_factory=list)
+    cost_usd: float = Field(default=0.0, ge=0)
+    latency_s: float = Field(default=0.0, ge=0)
+    llm_calls: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
     prompt_version: str | None = None
     timestamp: AwareDatetime | None = None
-
-
-if __name__ == "__main__":
-    s = Signal(
-        source="test",
-        type="technical_trend",
-        score=1.5,
-        confidence=0.8,
-        reason="BB squeeze detected",
-    )
-    snap = Snapshot(
-        symbol="AAPL",
-        timeframe="15m",
-        timestamp=datetime.now(timezone.utc),
-        signals=[s],
-    )
-    alert = PlaybookAlert(
-        symbol="AAPL",
-        direction="LONG",
-        edge_probability=0.75,
-        confidence=0.80,
-        timeframe="15m",
-        thesis="Bollinger Band squeeze with volume confirmation.",
-        entry={"level": 185.0, "stop": 182.0, "target": 192.0},
-        timeframe_rationale="15m trend aligning with 1h structure.",
-        sentiment_context="Retail bullish, institutional neutral.",
-        unusual_activity=["IV spike 2x avg", "options sweep $190c"],
-        macro_regime="Risk-on, VIX 14, curve normal.",
-        sources_agree=4,
-    )
-    trace = TraceAnalysis(
-        trace_id="lf-abc-123",
-        is_healthy=True,
-        cost_usd=0.012,
-        latency_s=4.1,
-        llm_calls=2,
-        total_tokens=8421,
-        prompt_version="decision-v3",
-        timestamp=datetime.now(timezone.utc),
-    )
-    print("Signal:", s.model_dump())
-    print("Snapshot:", snap.model_dump())
-    print("Alert:", alert.model_dump())
-    print("TraceAnalysis:", trace.model_dump())
-    print("All models valid ✅")

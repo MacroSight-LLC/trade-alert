@@ -5,7 +5,7 @@ Transforms short interest data into ``short_interest`` signals.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
@@ -15,7 +15,7 @@ from normalizers import clamp, interpolate, safe_float
 # Floor set at 10% so large-cap positions with marginal short interest
 # (< 10%) do not generate spurious positioning signals.
 _SI_BREAKPOINTS: list[tuple[float, float, float]] = [
-    (0.10, 1.00, 0.60),   # 10%: elevated
+    (0.10, 1.00, 0.60),  # 10%: elevated
     (0.15, 1.80, 0.72),
     (0.25, 2.50, 0.85),
     (0.40, 3.00, 0.95),
@@ -36,7 +36,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots for symbols with notable short interest.
     """
     snapshots: list[Snapshot] = []
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     for symbol, data in raw_results.items():
         signals: list[Signal] = []

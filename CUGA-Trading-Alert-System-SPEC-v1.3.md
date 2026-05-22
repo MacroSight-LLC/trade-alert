@@ -2,7 +2,7 @@
 **Single Source of Truth | Version 1.3 | March 12, 2026**
 
 > This document is the authoritative specification for the `/trade-alert` repository.
-> All AI tools (Claude Opus 4.6 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
+> All AI tools (Claude Opus 4.5 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
 >
 > `SSOT.md` at the repo root is a symlink to this file; either path is canonical.
 
@@ -64,7 +64,7 @@ as the Python-importable boundary — not the collectors themselves.
 
 ### 0.2 AI‑Development Guardrails
 
-When using Claude Opus 4.6 or GitHub Copilot:
+When using Claude Opus 4.5 or GitHub Copilot:
 
 - Always include:
   > "Use `CUGA‑Trading‑Alert‑System‑SPEC‑v1.3.md` as the single source of truth. Do not add new concepts or deviate from its architecture, schemas, or filenames."
@@ -81,7 +81,7 @@ When using Claude Opus 4.6 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 12 MCP servers → normalized ensemble signals → Claude Sonnet 4 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 12 MCP servers → normalized ensemble signals → Claude Sonnet 4.5 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
 
 Output per alert:
 
@@ -159,7 +159,7 @@ All MCP services run in Docker, expose `/health`, and are wired into CUGA via it
 
 ```python
 import math
-from typing import Dict, List, Literal
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
@@ -182,7 +182,7 @@ class Signal(BaseModel):
     score: float           # -3.0 (strong negative) to +3.0 (strong positive)
     confidence: float      # 0.0 (low) to 1.0 (high)
     reason: str
-    raw: Dict = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("score")
     @classmethod
@@ -203,7 +203,7 @@ class Snapshot(BaseModel):
     symbol: str
     timeframe: Literal["5m", "15m", "1h", "4h", "1D"]
     timestamp: AwareDatetime  # timezone-aware datetime; serialised as ISO 8601 UTC
-    signals: List[Signal]
+    signals: list[Signal]
 
     @field_validator("signals")
     @classmethod
@@ -220,10 +220,10 @@ class PlaybookAlert(BaseModel):
     confidence: float         # 0-1 inclusive
     timeframe: str            # e.g., "15m"
     thesis: str
-    entry: Dict[str, float]   # keys: level, stop, target
+    entry: dict[str, float]   # keys: level, stop, target
     timeframe_rationale: str
     sentiment_context: str
-    unusual_activity: List[str]
+    unusual_activity: list[str]
     macro_regime: str
     sources_agree: int        # number of independent signal types aligned
 
@@ -257,6 +257,8 @@ class PlaybookAlert(BaseModel):
         for k, val in self.entry.items():
             if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
                 raise ValueError(f"entry[{k!r}] must be a finite number, got {val!r}")
+        if self.direction == "WATCH":
+            return self
         level = float(self.entry["level"])
         stop = float(self.entry["stop"])
         target = float(self.entry["target"])
@@ -279,6 +281,16 @@ class PlaybookAlert(BaseModel):
             raise ValueError(
                 "edge_probability > 0.85 with confidence < 0.15 is logically inconsistent"
             )
+        # Proportional guard: catches mid-range edge claims with implausibly low
+        # overall confidence (e.g. ep=0.90, conf=0.04) without rejecting normal
+        # calibration uncertainty.
+        if self.edge_probability >= 0.70 and self.confidence < (1 - self.edge_probability) * 0.5:
+            raise ValueError(
+                f"edge_probability={self.edge_probability:.2f} with "
+                f"confidence={self.confidence:.2f} fails the proportional "
+                f"consistency check (confidence must be >= "
+                f"{(1 - self.edge_probability) * 0.5:.2f})"
+            )
         return self
 
 
@@ -287,11 +299,11 @@ class TraceAnalysis(BaseModel):
 
     trace_id: str
     is_healthy: bool
-    issues: List[str] = Field(default_factory=list)
-    cost_usd: float = 0.0
-    latency_s: float = 0.0
-    llm_calls: int = 0
-    total_tokens: int = 0
+    issues: list[str] = Field(default_factory=list)
+    cost_usd: float = Field(default=0.0, ge=0)
+    latency_s: float = Field(default=0.0, ge=0)
+    llm_calls: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
     prompt_version: str | None = None
     timestamp: AwareDatetime | None = None
 ```
@@ -300,7 +312,7 @@ class TraceAnalysis(BaseModel):
 
 - Every `Snapshot` MUST contain at least one `Signal` (enforced by `validate_signals_non_empty`).
 - Every `PlaybookAlert.entry` MUST contain keys `level`, `stop`, `target`, all finite numbers, with `stop < level < target` for LONG and `target < level < stop` for SHORT (enforced by the `validate_entry` model validator; WATCH skips the directional check).
-- `PlaybookAlert` rejects logically inconsistent combinations where `edge_probability > 0.85` and `confidence < 0.15` (enforced by `validate_edge_vs_confidence`).
+- `PlaybookAlert` rejects logically inconsistent combinations: the hard rule `edge_probability > 0.85 and confidence < 0.15`, plus the proportional rule `edge_probability >= 0.70 and confidence < (1 - edge_probability) * 0.5` (both enforced by `validate_edge_vs_confidence`).
 - Every alert MUST be a valid `PlaybookAlert` instance before sending to Discord or writing to Postgres.
 - LLM JSON outputs MUST be validated against `PlaybookAlert` and rejected on failure (with logging).
 
@@ -396,10 +408,10 @@ trade-alert/
     Dockerfile.cuga
     Dockerfile.mcp
     Dockerfile.timesfm
+    Dockerfile.dashboard       # FastAPI dashboard image (was repo-root Dockerfile)
   docker-compose.prod.yml
   docker-compose.yml
   docker-compose.test.yml  # CI integration-test fixtures (Redis + Postgres only)
-  Dockerfile
   schema.sql
   pyproject.toml           # CUGA-inherited; do not edit version / requires-python
   ruff.toml                # CUGA-inherited; do not edit select / line-length
@@ -429,7 +441,7 @@ trade-alert/
 
 **Notes on the directory layout**
 
-- A handful of unit tests in `tests/unit/` (e.g., `test_llm_override.py`, `test_plan_controller_prompt.py`, `test_variables_manager_*`) actually exercise CUGA library internals under `src/cuga/`, not trade-alert code. They are skipped in `trade-alert-tests.yml` via `--ignore` and should be relocated to CUGA's own test tree in a follow-up; the trade-alert repo does **not** host any phantom `variables_manager.py`, `forecast_gate.py`, `llm_override.py`, or `plan_controller_prompt.py` source modules.
+- A handful of unit tests in `tests/unit/` (e.g., `test_llm_override.py`, `test_plan_controller_prompt.py`, `test_variables_manager_*`) actually exercise CUGA library internals under `src/cuga/`, not trade-alert code. They are skipped in `trade-alert-tests.yml` via `--ignore` and should be relocated to CUGA's own test tree (tracked as **FU-001** in [`FOLLOW_UPS.md`](./FOLLOW_UPS.md) since GitHub Issues are disabled on this repo). The trade-alert repo does **not** host any phantom `variables_manager.py`, `forecast_gate.py`, `llm_override.py`, or `plan_controller_prompt.py` source modules.
 
 ---
 
@@ -571,7 +583,11 @@ Candidate selection:
 
 Decision workflows are where the ensemble is evaluated. They MUST:
 
-- Use Claude Sonnet 4 (`claude-sonnet-4-20250514`) as `llm_model`.
+- Use Claude Sonnet 4.5 (`claude-sonnet-4-5`) as `llm_model`.
+  - Migrated from `claude-sonnet-4-20250514` (Sonnet 4) on 2026-05-22 ahead of
+    its 2026-06-15 retirement. The `claude-sonnet-4-5` alias resolves to
+    `claude-sonnet-4-5-20250929` and remains active.
+  - Verified active against Anthropic model docs on 2026-05-22.
 - Accept merged snapshots + macro regime context.
 - Produce an array of `PlaybookAlert` JSON objects or an empty array.
 

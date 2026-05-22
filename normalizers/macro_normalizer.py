@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from models import Signal, Snapshot
@@ -156,7 +156,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     if not signals:
         return []
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return [
         Snapshot(
             symbol="__GLOBAL_MACRO__",

@@ -253,6 +253,10 @@ class TestPlaybookAlert:
         ids=["conf_zero", "conf_mid", "conf_max"],
     )
     def test_confidence_valid_bounds(self, alert_data: dict, conf: float) -> None:
+        # Drop edge_probability below the proportional-check threshold so this
+        # test exercises only the confidence field validator and doesn't trip
+        # the cross-field validate_edge_vs_confidence rule.
+        alert_data["edge_probability"] = 0.0
         alert_data["confidence"] = conf
         alert = PlaybookAlert(**alert_data)
         assert alert.confidence == conf
@@ -280,6 +284,56 @@ class TestPlaybookAlert:
         alert_data["timeframe_rationale"] = ""
         alert = PlaybookAlert(**alert_data)
         assert alert.sentiment_context == ""
+
+    # ── validate_edge_vs_confidence (hard + proportional) ──
+
+    def test_edge_vs_confidence_hard_rule_rejects(self, alert_data: dict) -> None:
+        """ep > 0.85 with conf < 0.15 must raise."""
+        alert_data["edge_probability"] = 0.90
+        alert_data["confidence"] = 0.10
+        with pytest.raises(ValueError, match="logically inconsistent"):
+            PlaybookAlert(**alert_data)
+
+    @pytest.mark.parametrize(
+        ("ep", "conf"),
+        [
+            (0.70, 0.10),  # floor = 0.15 — hard rule does not apply (ep <= 0.85)
+            (0.80, 0.05),  # floor = 0.10 — hard rule does not apply
+            (0.85, 0.05),  # floor = 0.075 — hard rule does not apply at boundary
+        ],
+    )
+    def test_edge_vs_confidence_proportional_rule_rejects(
+        self, alert_data: dict, ep: float, conf: float
+    ) -> None:
+        """ep in [0.70, 0.85] with conf below proportional floor must raise.
+
+        Above ep=0.85 the hard rule (ep > 0.85 AND conf < 0.15) subsumes the
+        proportional rule, so this test focuses on the band where only the
+        proportional check applies.
+        """
+        alert_data["edge_probability"] = ep
+        alert_data["confidence"] = conf
+        with pytest.raises(ValueError, match="proportional consistency"):
+            PlaybookAlert(**alert_data)
+
+    @pytest.mark.parametrize(
+        ("ep", "conf"),
+        [
+            (0.69, 0.05),  # below ep threshold — proportional rule disabled
+            (0.70, 0.15),  # exactly at floor for ep=0.70
+            (0.80, 0.10),  # exactly at floor for ep=0.80
+            (0.95, 0.50),  # well above floor
+        ],
+    )
+    def test_edge_vs_confidence_accepts(
+        self, alert_data: dict, ep: float, conf: float
+    ) -> None:
+        """ep/conf combos at or above the proportional floor must pass."""
+        alert_data["edge_probability"] = ep
+        alert_data["confidence"] = conf
+        alert = PlaybookAlert(**alert_data)
+        assert alert.edge_probability == ep
+        assert alert.confidence == conf
 
 
 class TestSignalEdgeCases:

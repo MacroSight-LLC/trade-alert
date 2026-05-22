@@ -12,7 +12,11 @@ How it works
    the Vault-sourced values automatically — **zero code changes** in those
    modules beyond ``import vault_env_loader``.
 4. If Vault is unreachable, not configured, or any error occurs, the loader
-   **falls back silently** so local development without Vault still works.
+   **falls back silently** so local development without Vault still works —
+   *unless* ``VAULT_REQUIRED=true`` is set, in which case any failure
+   (missing creds, auth failure, or unreachable after 3 retries) raises
+   ``RuntimeError`` so production deployments never run blind on empty
+   credentials. Production stacks SHOULD set ``VAULT_REQUIRED=true``.
 
 Usage
 -----
@@ -49,12 +53,27 @@ VAULT_MOUNT: str = os.getenv("VAULT_MOUNT", "secret")
 _loaded: bool = False
 
 
+def _vault_required() -> bool:
+    """Return True when ``VAULT_REQUIRED`` is set to a truthy value.
+
+    Production deployments should set this so any Vault misconfiguration
+    raises rather than silently leaving credentials empty.
+    """
+    return os.getenv("VAULT_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def load_vault_secrets() -> int:
     """Pull secrets from Vault KV v2 and set them as environment variables.
 
     Returns:
         Number of secrets successfully injected into ``os.environ``.
-        Returns ``0`` when Vault is not configured or unreachable.
+        Returns ``0`` when Vault is not configured or unreachable and
+        ``VAULT_REQUIRED`` is not set.
+
+    Raises:
+        RuntimeError: When ``VAULT_REQUIRED=true`` and Vault is missing
+            credentials, fails authentication, or is unreachable after 3
+            retries.
     """
     global _loaded  # noqa: PLW0603
     if _loaded:
@@ -64,14 +83,20 @@ def load_vault_secrets() -> int:
     vault_token = os.getenv("VAULT_TOKEN")
 
     if not vault_addr or not vault_token:
-        logger.debug("VAULT_ADDR/VAULT_TOKEN not set — skipping Vault loader")
+        msg = "VAULT_ADDR/VAULT_TOKEN not set"
+        if _vault_required():
+            raise RuntimeError(f"VAULT_REQUIRED=true but {msg}. Configure Vault or unset VAULT_REQUIRED.")
+        logger.debug("%s — skipping Vault loader", msg)
         _loaded = True
         return 0
 
     try:
         import hvac  # type: ignore[import-untyped]
     except ImportError:
-        logger.warning("hvac package not installed — cannot load secrets from Vault")
+        msg = "hvac package not installed — cannot load secrets from Vault"
+        if _vault_required():
+            raise RuntimeError(f"VAULT_REQUIRED=true but {msg}. Install hvac>=2.0.0.")
+        logger.warning(msg)
         _loaded = True
         return 0
 
@@ -79,7 +104,10 @@ def load_vault_secrets() -> int:
         try:
             client = hvac.Client(url=vault_addr, token=vault_token)
             if not client.is_authenticated():
-                logger.debug("Vault authentication failed — falling back to env vars")
+                msg = "Vault authentication failed (token rejected)"
+                if _vault_required():
+                    raise RuntimeError(f"VAULT_REQUIRED=true but {msg}. Check VAULT_TOKEN.")
+                logger.debug("%s — falling back to env vars", msg)
                 _loaded = True
                 return 0
 
@@ -91,7 +119,10 @@ def load_vault_secrets() -> int:
             data: dict[str, str] = (resp or {}).get("data", {}).get("data", {})
 
             if not data:
-                logger.warning("Vault path %s/%s is empty", VAULT_MOUNT, VAULT_SECRET_PATH)
+                msg = f"Vault path {VAULT_MOUNT}/{VAULT_SECRET_PATH} is empty"
+                if _vault_required():
+                    raise RuntimeError(f"VAULT_REQUIRED=true but {msg}. Run scripts/vault-init.sh.")
+                logger.warning(msg)
                 _loaded = True
                 return 0
 
@@ -132,6 +163,11 @@ def load_vault_secrets() -> int:
                 )
                 _time.sleep(wait)
                 continue
+            if _vault_required():
+                raise RuntimeError(
+                    f"VAULT_REQUIRED=true but Vault read failed after 3 attempts: {exc}. "
+                    "Check VAULT_ADDR/VAULT_TOKEN and Vault server status."
+                ) from exc
             logger.error(
                 "Vault read failed after 3 attempts (%s) — falling back to env vars. "
                 "Secrets may be missing; check VAULT_ADDR and VAULT_TOKEN.",

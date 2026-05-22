@@ -5,7 +5,7 @@
 
 name: collector-market
 description: Build equity symbol universe for this 5-minute tick
-llm_model: claude-sonnet-4-20250514
+llm_model: claude-sonnet-4-5
 
 mcp_servers:
   - name: trading-mcp
