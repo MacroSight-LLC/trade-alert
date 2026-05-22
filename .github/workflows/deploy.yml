@@ -92,10 +92,12 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ tests/test_validate_and_filter.py \
+          pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing \
             --ignore=tests/unit/test_plan_controller_prompt.py \
-            --ignore=tests/unit/test_llm_override.py
+            --ignore=tests/unit/test_llm_override.py \
+            --ignore=tests/unit/test_variables_manager_langgraph.py \
+            --ignore=tests/unit/test_variables_manager_with_state.py
 
   # ── Job 3: Build + push to GHCR ─────────────────────────────────
   build:

@@ -173,19 +173,14 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
             )
             continue
 
-        # Signal freshness time-decay: boost recent, penalise stale
-        snap_ts = group[0].timestamp
+        # Signal freshness time-decay: boost recent, penalise stale.
+        # Snapshot.timestamp is an AwareDatetime (Pydantic coerces ISO 8601 strings).
+        snap_dt = group[0].timestamp
         try:
-            if snap_ts.endswith("Z"):
-                snap_dt = datetime.fromisoformat(snap_ts.replace("Z", "+00:00"))
-            else:
-                snap_dt = datetime.fromisoformat(snap_ts)
-            if snap_dt.tzinfo is None:
-                snap_dt = snap_dt.replace(tzinfo=timezone.utc)
             age_secs = (now_utc - snap_dt).total_seconds()
-        except (ValueError, TypeError):
-            logger.warning("Unparseable snapshot timestamp for %s: %r", symbol, snap_ts)
-            age_secs = float(_FRESHNESS_PENALTY_SECS)  # treat unparseable as stale
+        except TypeError:
+            logger.warning("Unusable snapshot timestamp for %s: %r", symbol, snap_dt)
+            age_secs = float(_FRESHNESS_PENALTY_SECS)  # treat unusable as stale
 
         if age_secs < _FRESHNESS_BOOST_SECS:
             freshness_adj = _FRESHNESS_BOOST
@@ -252,7 +247,10 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
                         logger.info(
                             "Merger: TimesFM stale price guard triggered for %s "
                             "(model=$%.2f, live=$%.2f, drift=%.0f%%) — suppressing forecast signal",
-                            symbol, fc_price, ta_live_price, drift * 100,
+                            symbol,
+                            fc_price,
+                            ta_live_price,
+                            drift * 100,
                         )
                         idx = deduped.index(forecast_sig)
                         deduped[idx] = Signal(

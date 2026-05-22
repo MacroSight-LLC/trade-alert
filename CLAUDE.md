@@ -13,6 +13,32 @@ The full architecture, schemas, and implementation rules are in:
 - No secrets in code or YAML. Secrets are stored in HashiCorp Vault (`secret/trade-alert`, server mode with file backend) and loaded at runtime by `vault_env_loader.py`. The `.env.secrets` file holds secret values for Vault seeding (git-ignored).
 - Generate one file at a time, scoped to the section referenced.
 
+## AI-Development Guardrails (SSOT §0.2)
+
+Use `CUGA-Trading-Alert-System-SPEC-v1.3.md` as the single source of truth.
+Do not add new concepts or deviate from its architecture, schemas, or filenames.
+
+When generating or editing a file:
+
+1. Name the target file explicitly.
+2. Reference the relevant section of this spec.
+3. For workflows, follow the CUGA YAML patterns from the official `cuga-agent`
+   examples but with the tools and prompts from this spec.
+
+Never let AI tools auto-refactor across the whole repo. Limit them to the file
+or function specified.
+
+## Key files
+
+| File | Purpose |
+| ---- | ------- |
+| [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md) | Authoritative spec (SSOT). `SSOT.md` is a symlink to this file. |
+| [`README.md`](./README.md) | Quick-start overview and developer entry point. |
+| [`README.cuga.md`](./README.cuga.md) | Full CUGA framework reference (upstream docs). |
+| [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md) | Deployment and operations runbook. |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Contribution rules, commit conventions, secrets baseline policy. |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Per-phase release history (Keep a Changelog format). |
+
 ## Stack Reference
 - 24 containers (docker-compose.prod.yml)
 - 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM

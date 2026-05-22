@@ -31,11 +31,24 @@ def _make_alert(
     sa: int = 5,
     thesis: str = "RSI divergence at support with volume spike driven by momentum breakout.",
     entry_level: float = 185.0,
-    stop: float = 180.0,
-    target: float = 200.0,
+    stop: float | None = None,
+    target: float | None = None,
     timeframe: str = "15m",
 ) -> PlaybookAlert:
-    """Build a PlaybookAlert with sensible defaults for testing."""
+    """Build a PlaybookAlert with sensible direction-aware defaults for testing.
+
+    LONG: stop < level < target. SHORT: target < level < stop. WATCH: ordering not
+    enforced. Callers can still override ``stop`` / ``target`` explicitly.
+    """
+    if stop is None or target is None:
+        if direction == "SHORT":
+            default_stop = entry_level + 5.0
+            default_target = entry_level - 15.0
+        else:  # LONG, WATCH
+            default_stop = entry_level - 5.0
+            default_target = entry_level + 15.0
+        stop = default_stop if stop is None else stop
+        target = default_target if target is None else target
     return PlaybookAlert(
         symbol=symbol,
         direction=direction,

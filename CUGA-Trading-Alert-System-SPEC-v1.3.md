@@ -3,6 +3,8 @@
 
 > This document is the authoritative specification for the `/trade-alert` repository.
 > All AI tools (Claude Opus 4.6 in VS Code, GitHub Copilot, Copilot Agents, etc.) MUST treat this file as the **single source of truth** for architecture, naming, schemas, and workflows.
+>
+> `SSOT.md` at the repo root is a symlink to this file; either path is canonical.
 
 ## Implementation Status
 
@@ -109,9 +111,9 @@ Output per alert:
 
 ```text
 Docker Compose
-  → MCP Stack (10)
+  → MCP Stack (12)
   → Cron Trigger (every 15 min for 15m pipeline, hourly for 1h pipeline)
-  → Parallel CUGA Collector Workflows (5)
+  → Parallel CUGA Collector Workflows (7)
   → Redis Snapshot Queues
   → CUGA Decision Workflows (15m & 1h) using Claude Sonnet
   → Discord MCP (rich embeds)
@@ -139,6 +141,7 @@ All MCP services run in Docker, expose `/health`, and are wired into CUGA via it
 | 8006 | EDGAR MCP          | `form4_filings`, `material_events`                     | SEC EDGAR: Form 4 insider filings and 8-K material events. Feeds `insider_activity` clustering and `catalyst_event` signals via events collector.             |
 | 8007 | YFinance MCP       | `short_interest`, `options_chain`, `earnings_calendar` | Yahoo Finance: short interest ratios, options chain snapshots, earnings dates. Feeds `short_interest` and `catalyst_event` signals.                           |
 | 8011 | Alpaca MCP         | `intraday_bars`, `volume_profile`                      | Alpaca Markets: real-time intraday bars and volume acceleration. Complements Polygon for `volume_spike` signals.                                              |
+| 8012 | TimesFM MCP        | `timesfm_forecast`                                     | Google TimesFM foundation model for short-horizon price forecasting. Feeds the `price_forecast` signal type via the forecast collector and normalizer.        |
 
 **Integration Best Practices (all MCPs)**
 
@@ -155,65 +158,149 @@ All MCP services run in Docker, expose `/health`, and are wired into CUGA via it
 **File:** `models.py` (import everywhere).
 
 ```python
-from pydantic import BaseModel, field_validator
-from typing import List, Literal, Dict
+import math
+from typing import Dict, List, Literal
+
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
+
 
 class Signal(BaseModel):
     source: str
     type: Literal[
-        'technical_trend',
-        'volume_spike',
-        'sentiment_bull',
-        'sentiment_bear',
-        'options_flow',
-        'insider_activity',
-        'relative_strength',
-        'macro_risk_off',
-        'catalyst_event',
-        'short_interest'
+        "technical_trend",
+        "volume_spike",
+        "sentiment_bull",
+        "sentiment_bear",
+        "options_flow",
+        "insider_activity",
+        "relative_strength",
+        "macro_risk_off",
+        "catalyst_event",
+        "short_interest",
+        "price_forecast",
     ]
-    score: float          # -3.0 (strong negative) to +3.0 (strong positive)
-    confidence: float     # 0.0 (low) to 1.0 (high)
+    score: float           # -3.0 (strong negative) to +3.0 (strong positive)
+    confidence: float      # 0.0 (low) to 1.0 (high)
     reason: str
-    raw: Dict = {}
+    raw: Dict = Field(default_factory=dict)
 
     @field_validator("score")
     @classmethod
     def validate_score(cls, v: float) -> float:
-        assert -3.0 <= v <= 3.0
+        if not -3.0 <= v <= 3.0:
+            raise ValueError(f"score must be between -3.0 and +3.0, got {v}")
         return v
 
     @field_validator("confidence")
     @classmethod
     def validate_confidence(cls, v: float) -> float:
-        assert 0.0 <= v <= 1.0
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {v}")
         return v
+
 
 class Snapshot(BaseModel):
     symbol: str
-    timeframe: Literal['5m', '15m', '1h', '4h', '1D']
-    timestamp: str         # ISO 8601 UTC
+    timeframe: Literal["5m", "15m", "1h", "4h", "1D"]
+    timestamp: AwareDatetime  # timezone-aware datetime; serialised as ISO 8601 UTC
     signals: List[Signal]
+
+    @field_validator("signals")
+    @classmethod
+    def validate_signals_non_empty(cls, v: list[Signal]) -> list[Signal]:
+        if not v:
+            raise ValueError("Snapshot must have at least one Signal")
+        return v
+
 
 class PlaybookAlert(BaseModel):
     symbol: str
-    direction: Literal['LONG', 'SHORT', 'WATCH']
-    edge_probability: float  # 0-1 inclusive
-    confidence: float        # 0-1 inclusive
-    timeframe: str           # e.g., "15m"
+    direction: Literal["LONG", "SHORT", "WATCH"]
+    edge_probability: float   # 0-1 inclusive
+    confidence: float         # 0-1 inclusive
+    timeframe: str            # e.g., "15m"
     thesis: str
-    entry: Dict[str, float]  # keys: level, stop, target
+    entry: Dict[str, float]   # keys: level, stop, target
     timeframe_rationale: str
     sentiment_context: str
     unusual_activity: List[str]
     macro_regime: str
-    sources_agree: int       # number of independent signal types aligned
+    sources_agree: int        # number of independent signal types aligned
+
+    @field_validator("edge_probability")
+    @classmethod
+    def validate_edge_probability(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"edge_probability must be between 0.0 and 1.0, got {v}")
+        return v
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {v}")
+        return v
+
+    @field_validator("sources_agree")
+    @classmethod
+    def validate_sources_agree(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"sources_agree must be >= 0, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_entry(self) -> "PlaybookAlert":
+        required = {"level", "stop", "target"}
+        missing = required - self.entry.keys()
+        if missing:
+            raise ValueError(f"entry missing required keys: {missing}")
+        for k, val in self.entry.items():
+            if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
+                raise ValueError(f"entry[{k!r}] must be a finite number, got {val!r}")
+        level = float(self.entry["level"])
+        stop = float(self.entry["stop"])
+        target = float(self.entry["target"])
+        if self.direction == "LONG" and not (stop < level < target):
+            raise ValueError(
+                f"LONG entry requires stop < level < target, got "
+                f"stop={stop}, level={level}, target={target}"
+            )
+        if self.direction == "SHORT" and not (target < level < stop):
+            raise ValueError(
+                f"SHORT entry requires target < level < stop, got "
+                f"stop={stop}, level={level}, target={target}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_edge_vs_confidence(self) -> "PlaybookAlert":
+        # Inconsistent: model is highly confident in the edge but very uncertain overall.
+        if self.edge_probability > 0.85 and self.confidence < 0.15:
+            raise ValueError(
+                "edge_probability > 0.85 with confidence < 0.15 is logically inconsistent"
+            )
+        return self
+
+
+class TraceAnalysis(BaseModel):
+    """Result of post-execution Langfuse trace analysis for self-healing."""
+
+    trace_id: str
+    is_healthy: bool
+    issues: List[str] = Field(default_factory=list)
+    cost_usd: float = 0.0
+    latency_s: float = 0.0
+    llm_calls: int = 0
+    total_tokens: int = 0
+    prompt_version: str | None = None
+    timestamp: AwareDatetime | None = None
 ```
 
 **Model Guardrails**
 
-- Every `Snapshot` MUST contain at least one `Signal` (enforced by a `@field_validator`).
-- Every `PlaybookAlert.entry` MUST contain keys `level`, `stop`, `target` (enforced by a `@field_validator`).
+- Every `Snapshot` MUST contain at least one `Signal` (enforced by `validate_signals_non_empty`).
+- Every `PlaybookAlert.entry` MUST contain keys `level`, `stop`, `target`, all finite numbers, with `stop < level < target` for LONG and `target < level < stop` for SHORT (enforced by the `validate_entry` model validator; WATCH skips the directional check).
+- `PlaybookAlert` rejects logically inconsistent combinations where `edge_probability > 0.85` and `confidence < 0.15` (enforced by `validate_edge_vs_confidence`).
 - Every alert MUST be a valid `PlaybookAlert` instance before sending to Discord or writing to Postgres.
 - LLM JSON outputs MUST be validated against `PlaybookAlert` and rejected on failure (with logging).
 
@@ -252,6 +339,9 @@ Cron schedule:
 trade-alert/
   src/cuga/                # from upstream cuga-agent (do not modify)[1]
   models.py
+  constants.py             # shared enums, thresholds, defaults
+  log_config.py            # standard logger configuration
+  metrics.py               # Prometheus counters / histograms
   db.py
   merger.py
   validate_and_filter.py
@@ -273,6 +363,10 @@ trade-alert/
   chart_gen.py
   dashboard_api.py
   dashboard.html
+  eod_summary.py           # end-of-day Discord ops summary (scheduled via crontab)
+  execution_mapper.py      # alert → broker order mapping
+  execution_trigger.py     # gated execution trigger
+  execution_webhook.py     # inbound execution webhook handler
   normalizers/
     __init__.py
     ta_normalizer.py
@@ -282,6 +376,7 @@ trade-alert/
     events_normalizer.py
     si_normalizer.py
     market_normalizer.py
+    forecast_normalizer.py # TimesFM forecast → price_forecast signal
   workflows/
     collector-market.yaml
     collector-ta.yaml
@@ -289,21 +384,25 @@ trade-alert/
     collector-sentiment.yaml
     collector-macro.yaml
     collector-events.yaml
+    collector-forecast.yaml
     decision-15m.yaml
     decision-1h.yaml
     notifier.yaml
     orchestrator-15m.yaml
     orchestrator-1h.yaml
     outcome-tracker.yaml
+    state-summary.yaml
   docker/
     Dockerfile.cuga
     Dockerfile.mcp
+    Dockerfile.timesfm
   docker-compose.prod.yml
   docker-compose.yml
+  docker-compose.test.yml  # CI integration-test fixtures (Redis + Postgres only)
   Dockerfile
   schema.sql
-  pyproject.toml
-  ruff.toml
+  pyproject.toml           # CUGA-inherited; do not edit version / requires-python
+  ruff.toml                # CUGA-inherited; do not edit select / line-length
   crontab
   logs/
   data/
@@ -318,12 +417,19 @@ trade-alert/
     mcp_servers/
     seed_langfuse_prompts.py
     vault-init.sh
+  docs/
+    design.html            # design prototype, not a runtime artifact
   tests/
-    unit/
-    integration/
-    system/
+    unit/                  # trade-alert unit tests
+    integration/           # trade-alert integration tests (need Redis/Postgres)
+    system/                # end-to-end system tests
+  CHANGELOG.md
   SSOT.md (this file, or symlink to it)
 ```
+
+**Notes on the directory layout**
+
+- A handful of unit tests in `tests/unit/` (e.g., `test_llm_override.py`, `test_plan_controller_prompt.py`, `test_variables_manager_*`) actually exercise CUGA library internals under `src/cuga/`, not trade-alert code. They are skipped in `trade-alert-tests.yml` via `--ignore` and should be relocated to CUGA's own test tree in a follow-up; the trade-alert repo does **not** host any phantom `variables_manager.py`, `forecast_gate.py`, `llm_override.py`, or `plan_controller_prompt.py` source modules.
 
 ---
 

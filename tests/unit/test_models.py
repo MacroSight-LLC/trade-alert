@@ -195,8 +195,15 @@ class TestPlaybookAlert:
         assert alert.direction == "LONG"
 
     def test_all_directions(self, alert_data: dict) -> None:
-        for d in ["LONG", "SHORT", "WATCH"]:
+        # LONG: stop < level < target; SHORT: target < level < stop; WATCH: skips ordering.
+        cases: dict[str, dict[str, float]] = {
+            "LONG": {"level": 185.0, "stop": 182.0, "target": 192.0},
+            "SHORT": {"level": 185.0, "stop": 192.0, "target": 178.0},
+            "WATCH": {"level": 185.0, "stop": 182.0, "target": 192.0},
+        }
+        for d, entry in cases.items():
             alert_data["direction"] = d
+            alert_data["entry"] = entry
             alert = PlaybookAlert(**alert_data)
             assert alert.direction == d
 

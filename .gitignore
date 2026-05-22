@@ -91,3 +91,7 @@ dist/
 build/
 *.whl
 .venv/
+
+# Extra secret-bearing patterns (in addition to .env.secrets / .secrets.*)
+*.secrets
+secrets/

@@ -1,5 +1,8 @@
 # Trade Alert: Complete Setup & Operations Guide
 
+> Last verified against: v0.10.0 (Phase 10 complete)
+> Updated: 2026-05-22
+
 **Status:** 24 containers, persistent Vault (file backend, auto-unseal), 12 MCP data sources, Langfuse observability, Prometheus + Grafana monitoring.
 
 ---

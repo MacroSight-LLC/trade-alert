@@ -1,6 +1,6 @@
 """trade-alert v0.8.0 — Integration Smoke Test.
 
-Run with: python tests/integration_smoke.py
+Run with: python tests/integration/integration_smoke.py
 
 Infrastructure-dependent tests are skipped gracefully if
 Docker/Postgres/Redis are not available.

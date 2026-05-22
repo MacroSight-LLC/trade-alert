@@ -5,10 +5,12 @@
 12 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest · forecast · time-series) → Claude Sonnet 4 probabilistic reasoning → 7-gate validation → Discord trade playbooks with candlestick charts, EMA/ATR overlays, entry, stop, target, thesis & edge probability.
 
 ## Documentation
-- **Full spec & architecture:** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md)
+- **Quick-start overview:** this file (`README.md`)
+- **Full spec & architecture (SSOT):** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md) — `SSOT.md` is a symlink to this file
 - **Setup & operations:** [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md)
 - **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 - **CUGA upstream docs:** [`README.cuga.md`](./README.cuga.md)
+- **Release history:** [`CHANGELOG.md`](./CHANGELOG.md)
 
 ## Stack Overview
 
@@ -115,7 +117,7 @@ pytest tests/unit/ -q
 pytest tests/unit/ --cov=. --cov-report=term-missing
 
 # Integration smoke test (needs Docker)
-python tests/integration_smoke.py
+python tests/integration/integration_smoke.py
 ```
 
 ## Downstream Execution Integration

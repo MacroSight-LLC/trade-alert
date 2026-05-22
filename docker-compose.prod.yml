@@ -28,7 +28,7 @@ services:
     env_file: *runtime-envfile
     environment:
       VAULT_ADDR: "http://0.0.0.0:8200"
-      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+      VAULT_TOKEN: ${VAULT_TOKEN:?VAULT_TOKEN must be set for production (use docker-compose.yml for local dev)}
     entrypoint: ["/bin/sh", "/vault/config/entrypoint.sh"]
     ports:
       - "${VAULT_BIND:-127.0.0.1}:8200:8200"
@@ -102,7 +102,7 @@ services:
     environment:
       POSTGRES_DB: ${LANGFUSE_DB_NAME:-langfuse}
       POSTGRES_USER: ${LANGFUSE_DB_USER:-langfuse}
-      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?LANGFUSE_DB_PASSWORD must be set for production}
     volumes:
       - langfuse-data:/var/lib/postgresql/data
     ports:
@@ -124,9 +124,9 @@ services:
         condition: service_healthy
     env_file: *runtime-envfile
     environment:
-      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:?LANGFUSE_DB_PASSWORD must be set for production}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
-      SALT: ${SALT:-defaultsalt}
+      SALT: ${SALT:?SALT must be set for production}
       TELEMETRY_ENABLED: "false"
       HOSTNAME: "0.0.0.0"
       LANGFUSE_INIT_ORG_ID: "org-trade-alert"
@@ -810,7 +810,7 @@ services:
     container_name: trade-grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set for production}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana-data:/var/lib/grafana

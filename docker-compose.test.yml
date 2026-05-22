@@ -1,0 +1,47 @@
+# CI integration-test compose.
+#
+# Brings up only the stateful backing services that integration tests need:
+# Redis (snapshot queues) and Postgres (alerts log + winrate history). MCP
+# services are mocked in pytest fixtures, so they are intentionally absent.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   uv run pytest tests/integration/ -v --tb=short
+#   docker compose -f docker-compose.test.yml down -v
+#
+# For dev see docker-compose.yml. For production see docker-compose.prod.yml.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - trade-test-net
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: trade_alert_test
+      POSTGRES_USER: trade_alert
+      POSTGRES_PASSWORD: trade_alert_test
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trade_alert -d trade_alert_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - trade-test-net
+
+networks:
+  trade-test-net:
+    driver: bridge

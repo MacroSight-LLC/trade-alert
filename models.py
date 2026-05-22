@@ -1,14 +1,22 @@
 """Core Pydantic v2 data models for the trade-alert system.
 
-Defines Signal, Snapshot, and PlaybookAlert per SSOT §4.
+Defines Signal, Snapshot, PlaybookAlert, and TraceAnalysis per SSOT §4.
 All normalizers, workflows, and the notifier import from this module.
 """
 
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
 from typing import Dict, List, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class Signal(BaseModel):
@@ -65,13 +73,15 @@ class Snapshot(BaseModel):
     Attributes:
         symbol: Ticker or asset identifier (e.g. "AAPL", "BTC-USD").
         timeframe: Candle / analysis timeframe.
-        timestamp: ISO 8601 UTC timestamp of when the snapshot was created.
+        timestamp: Timezone-aware datetime; serialised as ISO 8601 UTC. ISO 8601
+            strings produced by ``datetime.now(timezone.utc).isoformat()`` are
+            coerced by Pydantic into ``datetime`` objects automatically.
         signals: One or more Signal objects aggregated for this symbol/timeframe.
     """
 
     symbol: str
     timeframe: Literal["5m", "15m", "1h", "4h", "1D"]
-    timestamp: str
+    timestamp: AwareDatetime
     signals: List[Signal]
 
     @field_validator("signals")
@@ -96,7 +106,7 @@ class PlaybookAlert(BaseModel):
         confidence: Overall confidence in the alert (0-1).
         timeframe: Analysis timeframe (e.g. "15m").
         thesis: Plain-English trade thesis.
-        entry: Dict with keys ``level``, ``stop``, ``target`` (all floats).
+        entry: Dict with keys ``level``, ``stop``, ``target`` (all finite floats).
         timeframe_rationale: Why this timeframe was chosen.
         sentiment_context: Summary of sentiment landscape.
         unusual_activity: Notable flow or activity observations.
@@ -141,15 +151,44 @@ class PlaybookAlert(BaseModel):
             raise ValueError(f"sources_agree must be >= 0, got {v}")
         return v
 
-    @field_validator("entry")
-    @classmethod
-    def validate_entry_keys(cls, v: dict[str, float]) -> dict[str, float]:
-        """SSOT §4: entry must contain level, stop, target."""
+    @model_validator(mode="after")
+    def validate_entry(self) -> "PlaybookAlert":
+        """SSOT §4: entry must contain finite level/stop/target with direction-correct ordering.
+
+        - LONG requires ``stop < level < target``.
+        - SHORT requires ``target < level < stop``.
+        - WATCH skips the directional ordering check.
+        """
         required = {"level", "stop", "target"}
-        missing = required - v.keys()
+        missing = required - self.entry.keys()
         if missing:
             raise ValueError(f"entry missing required keys: {missing}")
-        return v
+        for key, val in self.entry.items():
+            if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
+                raise ValueError(f"entry[{key!r}] must be a finite number, got {val!r}")
+        if self.direction == "WATCH":
+            return self
+        level = float(self.entry["level"])
+        stop = float(self.entry["stop"])
+        target = float(self.entry["target"])
+        if self.direction == "LONG" and not (stop < level < target):
+            raise ValueError(
+                f"LONG entry requires stop < level < target, got stop={stop}, level={level}, target={target}"
+            )
+        if self.direction == "SHORT" and not (target < level < stop):
+            raise ValueError(
+                f"SHORT entry requires target < level < stop, got stop={stop}, level={level}, target={target}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_edge_vs_confidence(self) -> "PlaybookAlert":
+        # Reject the logically inconsistent combination of "very confident edge"
+        # paired with "almost no overall confidence". A model that returns this
+        # has typically misaligned its outputs and the alert should be discarded.
+        if self.edge_probability > 0.85 and self.confidence < 0.15:
+            raise ValueError("edge_probability > 0.85 with confidence < 0.15 is logically inconsistent")
+        return self
 
 
 class TraceAnalysis(BaseModel):
@@ -163,8 +202,8 @@ class TraceAnalysis(BaseModel):
         latency_s: Total pipeline duration in seconds.
         llm_calls: Number of LLM invocations in the trace.
         total_tokens: Total tokens consumed across all LLM calls.
-        prompt_version: Version tag of the prompts used.
-        timestamp: ISO 8601 UTC timestamp of the analysis.
+        prompt_version: Version tag of the prompts used (None when unknown).
+        timestamp: Timezone-aware datetime of the analysis (None when not set).
     """
 
     trace_id: str
@@ -174,12 +213,11 @@ class TraceAnalysis(BaseModel):
     latency_s: float = 0.0
     llm_calls: int = 0
     total_tokens: int = 0
-    prompt_version: str = "v1.0"
-    timestamp: str = ""
+    prompt_version: str | None = None
+    timestamp: AwareDatetime | None = None
 
 
 if __name__ == "__main__":
-    # Smoke test — create one of each model with valid data and print
     s = Signal(
         source="test",
         type="technical_trend",
@@ -190,7 +228,7 @@ if __name__ == "__main__":
     snap = Snapshot(
         symbol="AAPL",
         timeframe="15m",
-        timestamp="2026-03-06T00:00:00Z",
+        timestamp=datetime.now(timezone.utc),
         signals=[s],
     )
     alert = PlaybookAlert(
@@ -207,7 +245,18 @@ if __name__ == "__main__":
         macro_regime="Risk-on, VIX 14, curve normal.",
         sources_agree=4,
     )
+    trace = TraceAnalysis(
+        trace_id="lf-abc-123",
+        is_healthy=True,
+        cost_usd=0.012,
+        latency_s=4.1,
+        llm_calls=2,
+        total_tokens=8421,
+        prompt_version="decision-v3",
+        timestamp=datetime.now(timezone.utc),
+    )
     print("Signal:", s.model_dump())
     print("Snapshot:", snap.model_dump())
     print("Alert:", alert.model_dump())
+    print("TraceAnalysis:", trace.model_dump())
     print("All models valid ✅")

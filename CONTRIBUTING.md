@@ -190,7 +190,7 @@ pytest tests/unit/test_validate_and_filter.py -v
 pytest tests/unit/ --cov=. --cov-report=term-missing
 
 # Integration smoke test (needs Docker running)
-python tests/integration_smoke.py
+python tests/integration/integration_smoke.py
 ```
 
 ### CUGA Framework Tests (upstream)
@@ -200,6 +200,38 @@ chmod +x ./src/scripts/run_tests.sh
 ./src/scripts/run_tests.sh
 ```
 
+
+## Adding new source files
+
+Any new `.py` file added to the repo root or a tracked subdirectory MUST be added
+to the directory layout in `CUGA-Trading-Alert-System-SPEC-v1.3.md` §6 in the
+same PR. The SSOT is the single source of truth for what lives in the repo, so a
+new module that is missing from §6 will fail review.
+
+Design prototypes (mockups, HTML/CSS sketches, visual references) belong in
+`docs/`, not at the repo root. The original `design.html` was moved to
+[`docs/design.html`](./docs/design.html) for this reason.
+
+## Secrets baseline
+
+This repo uses IBM `detect-secrets` (configured in
+[`.pre-commit-config.yaml`](./.pre-commit-config.yaml)) with the baseline file
+[`.secrets.baseline`](./.secrets.baseline). When a hook flags a potential secret
+that turns out to be a false positive, audit the new finding and regenerate the
+baseline:
+
+```bash
+uv run detect-secrets scan --baseline .secrets.baseline
+# review the diff, then commit
+```
+
+| Baseline audit | Date       | Commit SHA |
+| -------------- | ---------- | ---------- |
+| Last update    | 2026-05-22 | (this PR)  |
+
+Do not commit any of `.env`, `.env.secrets`, `.env.local`, `secrets/`, or any
+other file whose name suggests credentials. The relevant `.gitignore` patterns
+are intentional; only `.secrets.baseline` is exempt.
 
 ## IDE Setup Quick Links
 

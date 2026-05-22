@@ -1,4 +1,9 @@
 # trade-alert Docker Compose — development/local topology (SSOT §3, §5)
+#
+# Development compose — NOT for production.
+# For production, use docker-compose.prod.yml.
+# For CI integration tests, use docker-compose.test.yml.
+#
 # Infrastructure + app. MCP services require --profile mcp.
 # Usage:
 #   docker compose up -d                    # infra + app only
