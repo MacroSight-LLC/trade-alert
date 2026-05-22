@@ -93,10 +93,7 @@ jobs:
         run: |
           uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing \
-            --ignore=tests/unit/test_plan_controller_prompt.py \
-            --ignore=tests/unit/test_llm_override.py \
-            --ignore=tests/unit/test_variables_manager_langgraph.py \
-            --ignore=tests/unit/test_variables_manager_with_state.py \
+            --ignore=tests/cuga_upstream/ \
             --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,normalizers/*"
 
   docker-build:
@@ -107,5 +104,7 @@ jobs:
         run: docker build -f docker/Dockerfile.cuga -t trade-alert:ci .
       - name: Build MCP image
         run: docker build -f docker/Dockerfile.mcp -t trade-alert-mcp:ci .
+      - name: Build Dashboard image
+        run: docker build -f docker/Dockerfile.dashboard -t trade-alert-dashboard:ci .
       - name: Validate compose config
         run: docker compose config --quiet

@@ -3,19 +3,21 @@
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  DEVELOPMENT COMPOSE — NOT FOR PRODUCTION                           ║
 # ║                                                                      ║
+# ║  WARNING: do NOT use this compose with a production .env file.      ║
+# ║  VAULT_DEV_ROOT_TOKEN_ID is set to a known insecure value           ║
+# ║  ("dev-root-token"). For production use docker-compose.prod.yml     ║
+# ║  with VAULT_REQUIRED=true.                                          ║
+# ║                                                                      ║
 # ║  Key differences vs docker-compose.prod.yml:                         ║
-# ║    • Vault runs in DEV mode with hard-coded token "dev-root-token"  ║
-# ║      (auto-unsealed, in-memory storage — secrets are wiped on       ║
-# ║      every restart). Production uses server mode with file backend  ║
-# ║      and an unseal key.                                             ║
+# ║    • Vault runs in DEV mode (auto-unsealed, in-memory storage —     ║
+# ║      secrets are wiped on every restart). Production uses server    ║
+# ║      mode with file backend and an unseal key.                      ║
 # ║    • No TLS termination (HTTP only). Production uses a reverse      ║
 # ║      proxy with Let's Encrypt; see deployment/helm/.                ║
 # ║    • No fail-fast on missing secrets — service env defaults to      ║
-# ║      empty strings instead of ${VAR:?...} so local up succeeds      ║
-# ║      with a partial .env.secrets.                                   ║
+# ║      empty strings instead of ${VAR:?...} so local up succeeds.     ║
 # ║    • Resource limits not enforced; production uses deploy.limits.   ║
 # ║                                                                      ║
-# ║  For production use docker-compose.prod.yml.                         ║
 # ║  For CI integration tests use docker-compose.test.yml.               ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 #
@@ -84,7 +86,7 @@ services:
     environment:
       POSTGRES_DB: langfuse
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
+      POSTGRES_PASSWORD: langfuse  # pragma: allowlist secret  # dev-only langfuse default
     volumes:
       - langfuse_data:/var/lib/postgresql/data
     ports:
@@ -104,7 +106,7 @@ services:
       langfuse-db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse  # pragma: allowlist secret  # dev-only langfuse default
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       NEXTAUTH_URL: http://localhost:3000
       SALT: ${SALT:-defaultsalt}

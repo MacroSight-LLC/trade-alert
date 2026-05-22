@@ -11,7 +11,47 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+### Fixed
+- Relocate CUGA-internal unit tests to `tests/cuga_upstream/`
+  (FU-001 resolved); CI now uses a single `--ignore=tests/cuga_upstream/`
+  flag in [`trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml).
+- Add an autouse `unittest.mock.MagicMock` Redis fixture and align
+  fixture data with the current server-side gates
+  (`HIGH_CONFIDENCE_ALIGNMENT`, deterministic source reconciliation,
+  bear-aligned snapshots for SHORT cases) in
+  [`tests/unit/test_validate_and_filter.py`](tests/unit/test_validate_and_filter.py)
+  to clear 11 pre-existing unit-test failures; no production logic in
+  [`validate_and_filter.py`](validate_and_filter.py) was touched.
+- Sync `TestGateRejectionEnum::test_expected_members_exist` assertion
+  with the current 22-member `GateRejection` enum.
+- Silence a pre-existing F841 (`a = _alert(...)` in
+  `TestRiskOffHighVixRegime::test_vix_soft_bypassed_for_risk_off_high_vix`)
+  by renaming to `_a` per ruff's `dummy-variable-rgx`.
+- Add `docker/Dockerfile.dashboard` build step to the `docker-build` job
+  in [`trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml);
+  verified the image builds cleanly.
+- `uv.lock` Python alignment verified: `.python-version` (3.11),
+  `uv.lock` `requires-python = ">=3.10, <3.14"`, and the CI workflow's
+  `uv python install` all agree — no lockfile regeneration needed.
+- `.secrets.baseline`: re-pointed the relocated
+  `tests/cuga_upstream/test_llm_override.py` entry and refreshed the
+  `generated_at` timestamp via the IBM detect-secrets hook.
+- Mark the two well-known langfuse Docker dev defaults
+  ([`docker-compose.yml`](docker-compose.yml) `POSTGRES_PASSWORD` and
+  `DATABASE_URL`) with inline `# pragma: allowlist secret` comments —
+  pre-existing dev fixtures that were never in the baseline (tracked
+  for an authoritative rescan in FU-004).
+
+### Tracked
+- FU-002: Sonnet 4.5 end-to-end output validation (needs live env).
+- FU-003: `VAULT_REQUIRED=true` production enablement (ops-team action).
+- FU-004: Authoritative `detect-secrets` rescan with IBM 1.5.0 fork in a
+  network-enabled CI environment.
+
 ### Changed
+- [`docker-compose.yml`](docker-compose.yml): strengthened the existing
+  dev-compose banner with an explicit warning against using a production
+  `.env` file (`VAULT_DEV_ROOT_TOKEN_ID` is a known insecure value).
 - SSOT §0 marks `SSOT.md` as a canonical symlink to
   `CUGA-Trading-Alert-System-SPEC-v1.3.md`.
 - SSOT §3 MCP table now lists port 8012 (TimesFM MCP). §2 caption updated to

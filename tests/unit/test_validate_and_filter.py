@@ -9,7 +9,8 @@ structured gate telemetry) plus existing gate behaviour.  Uses
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,6 +27,27 @@ from validate_and_filter import (
     _watch_max_for_regime,
     validate_and_filter,
 )
+
+# ── Redis mock fixture ────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _mock_redis(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Patch ``validate_and_filter.get_redis`` so unit tests don't need a
+    live Redis. Per-test ``with patch("validate_and_filter.get_redis", ...)``
+    blocks (e.g. in ``TestWatchPromotion``) still take precedence locally.
+    """
+    mock = MagicMock()
+    mock.hgetall.return_value = {}
+    mock.hget.return_value = None
+    mock.get.return_value = None
+    mock.exists.return_value = 0
+    pipe = MagicMock()
+    pipe.execute.return_value = [0, 0, 0, 0]
+    mock.pipeline.return_value = pipe
+    monkeypatch.setattr("validate_and_filter.get_redis", lambda *a, **kw: mock)
+    return mock
+
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -52,7 +74,7 @@ def _alert(**overrides: object) -> dict:
 
 def _recent_ts() -> str:
     """Return an ISO timestamp within the macro staleness window."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _snap(symbol: str, types: list[str]) -> dict:
@@ -63,6 +85,60 @@ def _snap(symbol: str, types: list[str]) -> dict:
         "signals": [
             {"source": "test", "type": t, "score": 1.5, "confidence": 0.8, "reason": f"test {t}"}
             for t in types
+        ],
+    }
+
+
+def _bear_snap(symbol: str = "AAPL", timeframe: str = "15m") -> dict:
+    """Snapshot with bear-aligned signals (for SHORT direction tests).
+
+    Provides 4 distinct family-aligned bearish signals (trend, sentiment,
+    flow, events) so server-side source-reconciliation
+    (``_aligned_family_count``) registers a non-zero ``sources_agree``
+    for SHORT alerts, plus a ``volume_spike`` (direction-agnostic by
+    design — a volume surge confirms either direction) so the volume
+    confirmation gate is satisfied.
+    """
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "timestamp": _recent_ts(),
+        "signals": [
+            {
+                "source": "test",
+                "type": "technical_trend",
+                "score": -1.5,
+                "confidence": 0.8,
+                "reason": "downtrend",
+            },
+            {
+                "source": "test",
+                "type": "sentiment_bear",
+                "score": 1.5,
+                "confidence": 0.8,
+                "reason": "bearish",
+            },
+            {
+                "source": "test",
+                "type": "options_flow",
+                "score": -1.5,
+                "confidence": 0.8,
+                "reason": "put flow",
+            },
+            {
+                "source": "test",
+                "type": "catalyst_event",
+                "score": -1.5,
+                "confidence": 0.8,
+                "reason": "bad catalyst",
+            },
+            {
+                "source": "test",
+                "type": "volume_spike",
+                "score": 1.5,
+                "confidence": 0.8,
+                "reason": "vol surge",
+            },
         ],
     }
 
@@ -101,7 +177,9 @@ class TestEpCeiling:
     def test_ep_capped_when_above_ceiling(self) -> None:
         """EP=0.90 with 3 sources → capped to 0.75."""
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
-        a = _alert(sources_agree=3, edge_probability=0.90)
+        # confidence=0.80 to stay under HIGH_CONFIDENCE_MIN (0.85); reconciled
+        # sources_agree is below HIGH_CONFIDENCE_MIN_SA in this scenario.
+        a = _alert(sources_agree=3, edge_probability=0.90, confidence=0.80)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
         assert results[0].edge_probability == 0.75
@@ -127,7 +205,9 @@ class TestEpCeiling:
     def test_ep_at_exact_ceiling_passes(self) -> None:
         """EP exactly at ceiling → not capped."""
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
-        a = _alert(sources_agree=3, edge_probability=0.75)
+        # confidence=0.80 avoids HIGH_CONFIDENCE_ALIGNMENT (needs sa>=5 when
+        # conf>=HIGH_CONFIDENCE_MIN); here reconciled sa is below that floor.
+        a = _alert(sources_agree=3, edge_probability=0.75, confidence=0.80)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
         assert results[0].edge_probability == 0.75
@@ -193,15 +273,21 @@ class TestSourceHallucination:
         assert len(results) == 0
 
     def test_delta_1_downgrade(self) -> None:
-        """LLM claims 4, actual 3 → delta=1 → downgraded, not rejected."""
+        """LLM claims 4, actual 3 distinct families → reconciled to 4
+        (3 snapshot families + 1 macro-context bonus).
+        """
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
-        a = _alert(sources_agree=4, edge_probability=0.75)
+        a = _alert(sources_agree=4, edge_probability=0.75, confidence=0.80)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
-        assert results[0].sources_agree == 3
+        # Server-side reconciliation: 3 LONG-aligned families + 1 macro
+        # context bonus (default macro risk_on=True) = 4.
+        assert results[0].sources_agree == 4
 
     def test_delta_0_no_change(self) -> None:
-        """LLM claims 4, actual 4 → no change."""
+        """LLM claims 4, actual 4 families → reconciled to 5 (with macro
+        context bonus).
+        """
         snaps = [
             _snap(
                 "AAPL",
@@ -216,10 +302,14 @@ class TestSourceHallucination:
         a = _alert(sources_agree=4, edge_probability=0.80)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
-        assert results[0].sources_agree == 4
+        # 4 LONG-aligned families + 1 macro context bonus = 5.
+        assert results[0].sources_agree == 5
 
     def test_negative_delta_no_change(self) -> None:
-        """LLM claims 3, actual 4 → delta=-1 → no change."""
+        """LLM claims 3 but actual 4 families → reconciled UP to 5
+        (4 snapshot families + 1 macro context bonus). Server count wins
+        regardless of whether LLM under- or over-claimed.
+        """
         snaps = [
             _snap(
                 "AAPL",
@@ -234,7 +324,7 @@ class TestSourceHallucination:
         a = _alert(sources_agree=3, edge_probability=0.75)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
-        assert results[0].sources_agree == 3
+        assert results[0].sources_agree == 5
 
 
 # ── Helper Function Tests ────────────────────────────────────────
@@ -383,7 +473,11 @@ class TestEntryMarketDrift:
                 ],
             }
         ]
-        a = _alert(entry={"level": 102.9, "stop": 100.0, "target": 108.7})
+        # confidence=0.80 avoids HIGH_CONFIDENCE_ALIGNMENT given the 3-family
+        # snapshot (reconciled sa is below HIGH_CONFIDENCE_MIN_SA).
+        # target=108.8 keeps R:R strictly above the 2.0:1 15m minimum
+        # (risk=2.9, reward=5.9 → 2.03:1).
+        a = _alert(entry={"level": 102.9, "stop": 100.0, "target": 108.8}, confidence=0.80)
         results, _ = _run([a], snaps=snaps)
         assert len(results) == 1
 
@@ -490,9 +584,14 @@ class TestVixSoftShort:
             direction="SHORT",
             sources_agree=4,
             edge_probability=0.85,
+            # confidence=0.80 stays under HIGH_CONFIDENCE_MIN; the test exercises
+            # the VIX-soft bypass, not the high-confidence-alignment gate.
+            confidence=0.80,
             entry={"level": 185.0, "stop": 188.0, "target": 175.0},
         )
-        results, _ = _run([a], vix=26.0, macro={"risk_on": True})
+        # Bear-aligned snapshots so server-side reconciliation yields a non-zero
+        # sources_agree for SHORT direction.
+        results, _ = _run([a], snaps=[_bear_snap()], vix=26.0, macro={"risk_on": True})
         assert len(results) == 1
 
 
@@ -528,8 +627,14 @@ class TestEntryOrderValidation:
 
     def test_short_valid_order_passes(self) -> None:
         """SHORT with target < level < stop → passes Gate 0."""
-        a = _alert(direction="SHORT", entry={"level": 185.0, "stop": 190.0, "target": 175.0})
-        results, _ = _run([a])
+        a = _alert(
+            direction="SHORT",
+            entry={"level": 185.0, "stop": 190.0, "target": 175.0},
+            # confidence=0.80 stays under HIGH_CONFIDENCE_MIN given the
+            # 4-family bear snapshot (reconciled sa below HIGH_CONFIDENCE_MIN_SA).
+            confidence=0.80,
+        )
+        results, _ = _run([a], snaps=[_bear_snap()])
         assert len(results) == 1
 
     def test_short_stop_below_entry_rejected(self) -> None:
@@ -622,7 +727,7 @@ class TestMacroVetoBypass:
         assert len(results) == 1
 
     def test_low_conviction_still_vetoed(self) -> None:
-        """SA=5, EP=0.85 in 1h with strong risk-off → LONG vetoed."""
+        """SA=5, EP=0.85 in 1h with risk-off macro + elevated VIX → LONG vetoed."""
         a = _alert(
             direction="LONG",
             timeframe="1h",
@@ -630,7 +735,15 @@ class TestMacroVetoBypass:
             edge_probability=0.85,
             confidence=0.85,
         )
-        results, _ = _run([a], snaps=self._macro_snaps(), timeframe="1h")
+        # Macro veto requires the top-level macro regime + VIX, not just the
+        # snapshot's macro_risk_off score. Set both so the gate actually fires.
+        results, _ = _run(
+            [a],
+            snaps=self._macro_snaps(),
+            macro={"risk_on": False},
+            vix=26.0,
+            timeframe="1h",
+        )
         assert len(results) == 0
 
     def test_macro_veto_only_applies_1h(self) -> None:
@@ -653,7 +766,10 @@ class TestMacroVetoBypass:
             edge_probability=0.75,
             entry={"level": 185.0, "stop": 188.0, "target": 175.0},
         )
-        results, _ = _run([a], vix=26.0, macro={"risk_on": False})
+        # Bear-aligned snapshots so reconciliation gives the SHORT a non-zero
+        # sources_agree. With risk_off + bear snaps + macro context bonus,
+        # reconciled sa lands at HIGH_CONFIDENCE_MIN_SA so default conf passes.
+        results, _ = _run([a], snaps=[_bear_snap()], vix=26.0, macro={"risk_on": False})
         # In risk-off, weak LONGs are suppressed but SHORTs pass
         assert len(results) == 1
 
@@ -800,11 +916,13 @@ class TestGateRejectionEnum:
             assert isinstance(member.value, str)
 
     def test_expected_members_exist(self) -> None:
+        # Updated 2026-05-22: synced with GateRejection in validate_and_filter.py
         expected = {
             "vix_hard",
             "source_hallucination",
             "ep_threshold",
             "sa_threshold",
+            "high_confidence_alignment",
             "conf_threshold",
             "rr_minimum",
             "rr_zero_risk",
@@ -813,7 +931,15 @@ class TestGateRejectionEnum:
             "vix_soft",
             "forecast_contradicts",
             "timeframe_invalid",
+            "entry_market_drift",
             "volume_unconfirmed",
+            "watch_ep_threshold",
+            "watch_sa_threshold",
+            "watch_conf_threshold",
+            "watch_cap",
+            "watch_dropped_directional_present",
+            "watch_decay",
+            "market_session_closed",
         }
         assert {m.value for m in GateRejection} == expected
 
@@ -1099,7 +1225,9 @@ class TestRiskOffHighVixRegime:
         # if _GATE_RR bump is only 0.03 above 0.70 → ep_gate=0.73; 0.76 > 0.73 ✓
         # But we need to confirm it won't be caught by SA gate: sa_gate = 3+1=4 with
         # risk_off_high_vix.  sa=3 fails sa_gate=4.  Use sa=4, ep=0.74 for a clean path.
-        a = _alert(
+        # _a documents the realistic alert shape this scenario assumes (the test
+        # exercises _dynamic_gates directly because regime is not injectable).
+        _a = _alert(
             direction="LONG",
             sources_agree=4,
             edge_probability=0.74,

@@ -24,7 +24,7 @@ def user_template():
         / "prompts"
         / "user.jinja2"
     )
-    with open(template_path, 'r') as f:
+    with open(template_path) as f:
         return Template(f.read())
 
 
