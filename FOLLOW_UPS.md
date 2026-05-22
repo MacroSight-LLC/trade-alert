@@ -12,6 +12,43 @@ commit that closed it.
 
 ## Open
 
+### FU-005 — Document implicit gate input contracts for test authors
+
+**Opened:** 2026-05-22
+**References:** [`validate_and_filter.py`](./validate_and_filter.py),
+[`CONTRIBUTING.md`](./CONTRIBUTING.md)
+
+Two server-side stages in `validate_and_filter.py` silently transform
+inputs in ways that are invisible from the public `validate_and_filter()`
+signature, which has bitten test authors before (see the 11 pre-existing
+unit-test failures fixed in commit `7c79763`):
+
+1. `_aligned_family_count` (called at line 1014, assigned at line 1054)
+   overwrites the LLM-claimed `sources_agree` with a reconciled value
+   derived from snapshot signal families plus a macro-context bonus.
+   Tests that hardcode both a `sources_agree` value and a snapshot
+   fixture get the LLM value clobbered without warning.
+2. `HIGH_CONFIDENCE_ALIGNMENT` (line 1207) imposes a tighter
+   `sources_agree >= HIGH_CONFIDENCE_MIN_SA` requirement whenever
+   `confidence >= HIGH_CONFIDENCE_MIN` (defaults: 5 and 0.85). Tests
+   built around the older "high confidence is its own conviction"
+   model now reject silently.
+
+**Action**
+1. Add a `# TESTING NOTE` comment block near each of these two stages
+   in `validate_and_filter.py` (comments only — no logic change)
+   summarising the implicit contract and pointing test authors at the
+   helper.
+2. Add a short "Reconciliation pipeline" section to
+   [`CONTRIBUTING.md`](./CONTRIBUTING.md) under the existing testing
+   guidance, explaining the family-alignment reconciliation and the
+   confidence/sa coupling so future tests use realistic fixtures.
+
+**Exit condition:** both notes landed; new test_validate_and_filter
+fixtures match the documented contract; no production logic changed.
+
+---
+
 ### FU-004 — Authoritative `detect-secrets` rescan
 
 **Opened:** 2026-05-22
