@@ -19,7 +19,8 @@ All architecture, schemas, file names, and implementation rules are defined in:
 - 24 containers (docker-compose.prod.yml)
 - 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM
 - 11 signal types: technical_trend, volume_spike, sentiment_bull/bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest, price_forecast
-- 7 collectors → merger → Claude Sonnet 4 decision → 7-gate validate_and_filter → notifier
+- 7 collectors → merger → claude-sonnet-4-5 decision → 23-gate validate_and_filter → notifier
+- Gate inventory: SSOT §10.4 + `GateRejection` enum in `validate_and_filter.py`
 - Redis for snapshot queues (TTL 900s)
 - Postgres for alert logging (JSONB) and win-rate history
 - Vault (server mode, file backend, auto-unseal)

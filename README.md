@@ -2,7 +2,7 @@
 
 > Production trading alert engine built on [CUGA](./README.cuga.md) — see [`README.cuga.md`](./README.cuga.md) for the upstream framework reference; this README focuses only on trade-alert specifics.
 
-12 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest · forecast · time-series) → Claude Sonnet 4.5 probabilistic reasoning → 22-gate validation → Discord trade playbooks with candlestick charts, EMA/ATR overlays, entry, stop, target, thesis & edge probability.
+12 MCP ensemble (TA · flow · sentiment · options · insider · macro · EDGAR · short interest · forecast · time-series) → Claude Sonnet 4.5 probabilistic reasoning → 23-gate validation → Discord trade playbooks with candlestick charts, EMA/ATR overlays, entry, stop, target, thesis & edge probability.
 
 ## Documentation
 - **Quick-start overview:** this file (`README.md`)
@@ -17,7 +17,7 @@
 | Layer                 | Components                                                                                                                                                                                                           |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Data (12 MCPs)**    | TradingView (:8001), Polygon (:8002), Discord (:8003), Finnhub (:8004), ROT (:8005), EDGAR (:8006), YFinance (:8007), Trading (:8008), FRED (:8009), SpamShield (:8010), Alpaca (:8011), TimesFM (:8012) |
-| **Pipeline**          | 7 collectors → merger (time-decay, diversity scoring, composite signals) → Claude Sonnet 4.5 decision → 22-gate validate & filter → notifier                                                                           |
+| **Pipeline**          | 7 collectors → merger (time-decay, diversity scoring, composite signals) → Claude Sonnet 4.5 decision → 23-gate validate & filter → notifier                                                                           |
 | **Signal types (11)** | `technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`, `options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`, `catalyst_event`, `short_interest`, `price_forecast`                |
 | **Infra**             | Redis (snapshot queues), Postgres (alert logging), Vault (secrets, file backend), Langfuse (prompt mgmt + tracing), Prometheus + Grafana (metrics)                                                                   |
 | **Output**            | Discord embeds with mplfinance candlestick charts, EMA/ATR overlays, confidence color-coding, historical win-rate stats, tiered channel routing                                                                      |
@@ -29,7 +29,7 @@
 
 | Phase | Scope |
 |-------|-------|
-| **Hardening** | Pydantic validators, 22-gate validation, NaN/Inf guards, AST-based exec sandbox, Redis connection pooling, persist-first ordering, atomic SET NX dedup, non-root Docker, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton |
+| **Hardening** | Pydantic validators, 23-gate validation, NaN/Inf guards, AST-based exec sandbox, Redis connection pooling, persist-first ordering, atomic SET NX dedup, non-root Docker, resource limits, Postgres CHECK constraints & indexes, thread-safe Langfuse singleton |
 | **Signal Quality** | Continuous interpolation scoring, graceful degradation, merger time-decay & diversity tuning, composite signal detection (VOLATILITY_CATALYST, VOLUME_CONFIRMED_BREAKOUT), EP calibration |
 | **Validation Gates** | VIX hard/soft gates, forecast contradiction gate, volume confirmation, macro staleness guard, symbol hallucination detection, price-normalized micro-risk floor, high-confidence alignment guard (conf >= 0.85 requires SA >= 5/7) |
 | **Alert Output** | Historical win-rate embeds, confidence color-coding, EMA/ATR overlays, truncate-safe fields, tiered channel routing |
@@ -82,7 +82,7 @@ pytest tests/unit/ -q   # 620+ tests
 | `models.py`              | Pydantic schemas: Signal, Snapshot, PlaybookAlert              |
 | `pipeline_runner.py`     | Generic YAML workflow engine (collectors → decision)           |
 | `merger.py`              | Deduplicates & ranks snapshots from Redis                      |
-| `validate_and_filter.py` | 22-gate server-side filter + confidence/alignment consistency guardrails |
+| `validate_and_filter.py` | 23-gate server-side filter + confidence/alignment consistency guardrails |
 | `notifier_and_logger.py` | Discord embeds + candlestick charts + Postgres logging         |
 | `chart_gen.py`           | mplfinance candlestick PNG generation from Polygon data        |
 | `db.py`                  | Postgres connection pool, insert/update/query for alerts       |
@@ -131,7 +131,7 @@ python tests/integration/integration_smoke.py
 | Concern | Owner |
 |---------|-------|
 | Market analysis, scoring, ranking, filtering | `trade-alert` |
-| Regime-aware gating, 22-gate validation | `trade-alert` |
+| Regime-aware gating, 23-gate validation | `trade-alert` |
 | Alert generation, conviction normalization | `trade-alert` |
 | Broker logic, order routing, execution workflows | `trade-execute` |
 

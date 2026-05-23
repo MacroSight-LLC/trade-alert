@@ -122,6 +122,15 @@ Why this matters:
 - Do not include generated files, large assets, secrets, or local config (e.g., `.env`).
 - Ensure CI passes. If you see flaky tests, note it in the PR description.
 
+## CI Workflows
+
+trade-alert uses two CI workflow families:
+
+- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates all trade-alert PRs; path-filtered to trade-alert source files; runs unit + integration tests.
+- [`.github/workflows/tests.yml`](.github/workflows/tests.yml) / [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream suite; uses Python 3.12 and Playwright; do not modify for trade-alert changes.
+
+When opening a trade-alert PR, only `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
+
 ### Pull Request Templates
 
 We provide specific PR templates to help you create well-structured pull requests. When creating a PR, you can use one of these templates by adding the appropriate query parameter to the GitHub URL:
@@ -216,6 +225,15 @@ Relevant env tunables: `SA_FAMILY_MIN_SCORE`, `SA_INCLUDE_MACRO_CONTEXT`,
 `SA_MACRO_CONTEXT_SCORE`, `HIGH_CONFIDENCE_MIN`, `HIGH_CONFIDENCE_MIN_SA`.
 
 Reference fixtures: [`tests/unit/test_validate_and_filter_extended.py`](./tests/unit/test_validate_and_filter_extended.py).
+
+### `gates/` package (validate_and_filter extraction)
+
+Gate helpers live under `gates/` (`regime`, `session`, `dedup`, `watch`, `rr_volume`).
+Circuit breaker, Prometheus metrics, and the public `validate_and_filter()` entry point
+stay in `validate_and_filter.py`.
+
+New helpers added to `gates/` must be re-exported from `validate_and_filter.py` if any
+test patches them via `vf._helper` or imports them from `validate_and_filter`.
 
 ### CUGA Framework Tests (upstream)
 

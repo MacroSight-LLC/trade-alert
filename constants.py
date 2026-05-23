@@ -153,7 +153,7 @@ def is_early_close(d: date | None = None) -> bool:
         if _xcal_nyse.is_session(ts):
             close_time = _xcal_nyse.session_close(ts)
             # NYSE early closes end at 18:00 UTC (1 PM ET) vs normal 21:00 UTC
-            return close_time.hour < 20
+            return bool(close_time.hour < 20)
         return False
     return (d.year, d.month, d.day) in MARKET_EARLY_CLOSES
 

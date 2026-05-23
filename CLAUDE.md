@@ -43,7 +43,7 @@ or function specified.
 - 24 containers (docker-compose.prod.yml)
 - 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM
 - 11 signal types: technical_trend, volume_spike, sentiment_bull, sentiment_bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest, price_forecast
-- 7 collectors, merger, Claude Sonnet 4.5 decision engine, 22-gate validate_and_filter, notifier with candlestick charts
+- 7 collectors, merger, Claude Sonnet 4.5 decision engine, 23-gate validate_and_filter, notifier with candlestick charts
 - Redis for snapshot queues; WATCH decay uses `watch:decay:{timeframe}:{symbol}` keys
 - Gate-level dedup keys: `dedup:alert:{timeframe}:{direction}:{symbol}`
 - Redis circuit breaker env vars: `REDIS_FAILURE_THRESHOLD`, `REDIS_FAILURE_WINDOW_SECONDS`

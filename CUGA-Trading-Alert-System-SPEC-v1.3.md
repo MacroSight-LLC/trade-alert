@@ -81,7 +81,9 @@ When using Claude Opus 4.5 or GitHub Copilot:
 
 ## 1. Project Overview
 
-Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 12 MCP servers → normalized ensemble signals → Claude Sonnet 4.5 decision agent → 7‑gate validation → **Discord trading playbook alerts**.
+Production CUGA‑based trading alert system. **Timer‑driven (15‑minute / 1‑hour cron)** → 12 MCP servers → normalized ensemble signals → Claude Sonnet 4.5 decision agent → 23‑gate validation pipeline → **Discord trading playbook alerts**.
+
+The server-side gate pipeline (§10.4) applies threshold gates (EP/SA/conf/R:R/entry), regime and session overlays (VIX, macro veto, market hours), dedup/decay, WATCH lifecycle, forecast/volume confirmation, and a Redis circuit breaker — distinct from the decision-prompt thresholds in §10.2/§10.3.
 
 Output per alert:
 
@@ -617,18 +619,61 @@ Same as 15m, but:
 - Optionally require `edge_probability ≥ 0.75` to account for longer holding periods.
 - Macro regime may weigh more heavily (strong risk‑off can veto otherwise good technical setups).
 
+> **Prompt gates vs server gates:** §10.2 and §10.3 describe thresholds the LLM decision agent is instructed to apply. §10.4 documents the authoritative server-side gate cascade in `validate_and_filter.py` that runs after the LLM response is parsed.
+
+### 10.4 Server-side validation pipeline (`validate_and_filter.py`)
+
+**File:** `validate_and_filter.py` — authoritative gate inventory is the `GateRejection` enum in that module.
+
+**Pipeline-level (non-enum):** When the Redis circuit breaker opens, `GATE_REJECTIONS.labels(gate="redis_circuit_open")` is incremented for observability. This is **not** a `GateRejection` enum member; WATCH decay and dedup paths fail-open instead of rejecting with a named gate.
+
+| Family | Enum member | Description | Applying function/block |
+| ------ | ----------- | ----------- | ----------------------- |
+| Threshold | `EP_THRESHOLD` | Edge probability below dynamic ceiling for timeframe/regime | Main candidate loop + `_dynamic_gates` |
+| Threshold | `SA_THRESHOLD` | Sources-agree count below required alignment | Main candidate loop + `_dynamic_gates` |
+| Threshold | `CONF_THRESHOLD` | Confidence below minimum threshold | Main candidate loop + `_dynamic_gates` |
+| Threshold | `HIGH_CONFIDENCE_ALIGNMENT` | High confidence without sufficient source alignment | Main candidate loop |
+| Threshold | `SOURCE_HALLUCINATION` | Signal types cited not present in snapshots | `_build_snap_type_index` check |
+| Threshold | `ENTRY_ORDER_INVALID` | Entry/stop/target ordering invalid for direction | Entry validation block |
+| Threshold | `ENTRY_MARKET_DRIFT` | Entry level drifted from reference price | `_get_reference_prices` check |
+| Threshold | `TIMEFRAME_INVALID` | Alert timeframe not in allowed set | Timeframe guard |
+| Regime/session | `VIX_HARD` | VIX above hard veto threshold | `_classify_regime` overlay |
+| Regime/session | `VIX_SOFT` | VIX in soft penalty band | `_classify_regime` overlay |
+| Regime/session | `MACRO_VETO` | Stale or strong macro risk-off veto (1h) | `_get_macro_risk_off_score`, `_is_macro_stale` |
+| Regime/session | `MARKET_SESSION_CLOSED` | Market closed for directional alert | `_market_session_bucket`, `_apply_market_session_gate_overlays` |
+| R:R / forecast / volume | `RR_MINIMUM` | Reward:risk below minimum | `_rr` |
+| R:R / forecast / volume | `RR_ZERO_RISK` | Zero or negative risk distance | `_rr` |
+| R:R / forecast / volume | `FORECAST_CONTRADICTS` | TimesFM forecast opposes alert direction | `_get_forecast_scores` |
+| R:R / forecast / volume | `VOLUME_UNCONFIRMED` | Volume spike not confirming setup | `_get_volume_spike_scores` |
+| WATCH | `WATCH_EP_THRESHOLD` | WATCH candidate below EP floor | WATCH branch |
+| WATCH | `WATCH_SA_THRESHOLD` | WATCH candidate below SA floor | WATCH branch |
+| WATCH | `WATCH_CONF_THRESHOLD` | WATCH candidate below confidence floor | WATCH branch |
+| WATCH | `WATCH_CAP` | Per-regime WATCH cap exceeded | `_watch_max_for_regime` |
+| WATCH | `WATCH_DROPPED_DIRECTIONAL_PRESENT` | WATCH dropped because directional alert exists | WATCH branch |
+| WATCH | `WATCH_DECAY` | WATCH not improving over consecutive cycles | `_get_watch_cycles`, `_watch_is_improving` |
+| Dedup | `DEDUP_SUPPRESSED` | Duplicate alert within dedup window | `_try_dedup_set`, `_dedup_key` |
+
 ---
 
 ## 11. Discord Notifier & Output
 
-**File:** `notifier.yaml` + Python `notifier_and_logger.py`.
+**Files:** `notifier.yaml` + decomposed Python modules (v1.1.0+).
 
-- `notifier_and_logger.py`:
-    - Parse `alerts_json` from decision workflow.
-    - Validate each against `PlaybookAlert`.
-    - Compute reward:risk (R:R).
-    - Call Discord MCP `send_rich_embed` with a structured embed matching the spec below.
-    - Insert alerts into Postgres using `db.insert_alert`.
+**Call flow:**
+
+```
+workflow YAML
+  └─ notifier_and_logger.notify()  [shim / orchestrator]
+       ├─ discord_formatter.py      [embed construction + channel routing]
+       ├─ alert_logger.py           [Postgres persist + win-rate stats]
+       └─ notifier.py                 [Discord HTTP send, retry/backoff, circuit breaker]
+            └─ send_discord_embed()   [called by orchestrator after format_embed()]
+```
+
+- `notifier_and_logger.py` — backward-compat shim and workflow entry point (dedup, charts, execution bridge). Re-exports `notify()` for existing YAML callers.
+- `discord_formatter.py` — builds Discord embed dicts (`format_embed`, `compute_rr`, channel routing). Does **not** perform HTTP.
+- `alert_logger.py` — Postgres persistence (`persist_alert`) and historical win-rate lookup.
+- `notifier.py` — Discord HTTP delivery with retry/backoff and circuit breaker (`send_discord_embed`, `send_ops_embed`).
 
 **Embed Logical Layout:**
 

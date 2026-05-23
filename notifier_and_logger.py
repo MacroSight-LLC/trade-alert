@@ -2,6 +2,8 @@
 
 Orchestrates validated PlaybookAlert delivery: dedup, chart generation,
 Postgres persist-first, Discord send. Implements SSOT §11.
+
+TODO: migrate callers to notifier.notify() directly, then remove this shim
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ import concurrent.futures
 import hashlib
 import json
 import logging
-import time  # noqa: F401 — patched by tests for Discord backoff
+import time
 
 import httpx
 import redis

@@ -441,7 +441,8 @@ def validate_and_filter_step(
     _regime = "unknown"
     _session = "unknown"
     try:
-        from validate_and_filter import _classify_regime, _market_session_bucket, _signal_surface
+        from gates.regime import _classify_regime, _signal_surface
+        from gates.session import _market_session_bucket
 
         _risk_off = not _macro.get("risk_on", True)
         _snaps = json.loads(merge_result.get("snapshots_json", "[]"))

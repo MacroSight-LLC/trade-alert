@@ -28,7 +28,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import yaml
@@ -58,6 +58,7 @@ MCP_ENDPOINTS: dict[str, str] = {
     "fred-mcp": os.getenv("FRED_MCP_URL", "http://fred-mcp:8009"),
     "spamshield-mcp": os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010"),
     "alpaca-mcp": os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011"),
+    "timesfm-mcp": os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012"),
 }
 
 # Also accept workflow-level mcp_servers overrides
@@ -228,7 +229,7 @@ def _safe_eval(expr: str, ns: dict[str, Any]) -> Any:
             func = _eval(node.func, depth + 1)
             if callable(func) and getattr(func, "__name__", "") in _SAFE_FUNCS:
                 args = [_eval(a, depth + 1) for a in node.args]
-                kwargs = {kw.arg: _eval(kw.value, depth + 1) for kw in node.keywords}
+                kwargs = {kw.arg: _eval(kw.value, depth + 1) for kw in node.keywords if kw.arg is not None}
                 return func(*args, **kwargs)
             raise ValueError(f"Function call not allowed: {ast.dump(node.func)}")
         if isinstance(node, ast.IfExp):
@@ -240,7 +241,7 @@ def _safe_eval(expr: str, ns: dict[str, Any]) -> Any:
         if isinstance(node, ast.Tuple):
             return tuple(_eval(e, depth + 1) for e in node.elts)
         if isinstance(node, ast.Dict):
-            return {_eval(k, depth + 1): _eval(v, depth + 1) for k, v in zip(node.keys, node.values)}
+            return {_eval(k, depth + 1): _eval(v, depth + 1) for k, v in zip(node.keys, node.values, strict=False)}  # type: ignore[arg-type,misc]
         raise ValueError(f"AST node {type(node).__name__} is not allowed")
 
     return _eval(tree)
@@ -345,7 +346,7 @@ async def _mcp_call_async(
         # Success — reset circuit
         circuit.failures = 0
         circuit.open_until = 0.0
-        return resp.json()
+        return cast(dict[str, Any], resp.json())
     except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
         MCP_CALL_DURATION.labels(tool=tool, method=method).observe(time.monotonic() - _mcp_start)
         circuit.failures += 1
@@ -449,7 +450,8 @@ def _llm_call(
                     timeout=120,
                     metadata=lf_metadata,
                 )
-                return response.choices[0].message.content
+                content = response.choices[0].message.content
+                return content if content is not None else ""
             except (
                 litellm.exceptions.RateLimitError,
                 litellm.exceptions.ServiceUnavailableError,
@@ -671,7 +673,7 @@ def _exec_parallel_tool_calls(
                 method = call["method"]
                 params = _render_params(call.get("params", {}), steps, extra_vars)
                 tasks.append(_mcp_call_async(tool, method, params, client=client))
-            return await asyncio.gather(*tasks, return_exceptions=True)
+            return cast(list[Any], await asyncio.gather(*tasks, return_exceptions=True))
 
     raw = asyncio.run(_run())
     for i, r in enumerate(raw):

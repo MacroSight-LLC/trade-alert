@@ -11,8 +11,8 @@ SSOT §13 — observability.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
 
-def _build_eod_embed() -> dict:
+def _build_eod_embed() -> dict[str, Any]:
     from redis_client import get_redis
     from db import get_recent_alerts
 
@@ -39,7 +39,7 @@ def _build_eod_embed() -> dict:
     gate_totals: dict[str, int] = {}
 
     for tf in ["15m", "1h"]:
-        session = r.hgetall(f"session:stats:{today}:{tf}") or {}
+        session = cast(dict[bytes, bytes], r.hgetall(f"session:stats:{today}:{tf}") or {})
         total_runs += int(session.get(b"decision_runs", b"0"))
         total_candidates += int(session.get(b"llm_candidates", b"0"))
         total_fired += int(session.get(b"alerts_passed_total", b"0"))

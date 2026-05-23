@@ -39,6 +39,41 @@ from metrics import (
 from models import PlaybookAlert
 from redis_client import get_redis
 
+from gates.dedup import _dedup_key, _reset_dedup_keys, _try_dedup_set
+from gates.regime import (
+    EP_CEILING,
+    _classify_regime,
+    _dynamic_gates,
+    _load_ep_ceiling,
+    _signal_surface,
+)
+from gates.rr_volume import (
+    _candidate_distribution,
+    _get_forecast_scores,
+    _get_macro_risk_off_score,
+    _get_reference_prices,
+    _get_volume_spike_scores,
+    _is_macro_stale,
+    _median,
+    _rr,
+)
+from gates.session import (
+    _apply_market_session_gate_overlays,
+    _market_session_bucket,
+    _record_session_gate_metrics,
+    _session_stats_key,
+)
+from gates.watch import (
+    _get_watch_cycles,
+    _get_watch_prev_state,
+    _incr_watch_cycles,
+    _reset_watch_cycles,
+    _watch_decay_key,
+    _watch_is_improving,
+    _watch_max_for_regime,
+)
+
+
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 _SESSION_STATS_TTL_SECONDS = int(os.environ.get("SESSION_STATS_TTL_SECONDS", "604800"))
@@ -77,44 +112,6 @@ class GateRejection(str, Enum):
 _VALID_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1D"}
 
 
-# ── EP ceiling lookup table ──────────────────────────────────────
-# Maps the number of *actual* distinct signal types in the snapshot
-# to the maximum allowed edge_probability.  Prevents the LLM from
-# assigning inflated EP values that aren't supported by the evidence.
-# Overridable via EP_CEILING_JSON env var (JSON dict str→float).
-_DEFAULT_EP_CEILING: dict[int, float] = {
-    1: 0.55,
-    2: 0.65,
-    3: 0.75,
-    4: 0.85,
-    5: 0.90,
-    6: 0.92,
-    7: 0.95,
-    8: 0.96,
-    9: 0.97,
-    10: 0.98,
-    11: 0.99,
-}
-
-
-def _load_ep_ceiling() -> dict[int, float]:
-    """Load EP ceiling from EP_CEILING_JSON env var or use defaults.
-
-    Returns:
-        Mapping of source count → max edge_probability.
-    """
-    raw = os.environ.get("EP_CEILING_JSON", "")
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            return {int(k): float(v) for k, v in parsed.items()}
-        except (json.JSONDecodeError, TypeError, ValueError) as e:
-            logger.warning("Invalid EP_CEILING_JSON, using defaults: %s", e)
-    return dict(_DEFAULT_EP_CEILING)
-
-
-EP_CEILING: dict[int, float] = _load_ep_ceiling()
-
 # Per-timeframe gate thresholds (SSOT §10.2 / §10.3)
 # Configurable via env vars: GATE_EP_15M, GATE_EP_1H, GATE_SA, GATE_CONF
 _GATE_EP: dict[str, float] = {
@@ -136,22 +133,6 @@ _GATE_RR: dict[str, float] = {
     "1h": float(os.environ.get("GATE_RR_1H", "2.5")),
 }
 
-# Limited WATCH policy (borderline-only, conservative)
-_WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
-_WATCH_SA_MIN: int = int(os.environ.get("WATCH_SA_MIN", "2"))
-_WATCH_CONF_MIN: float = float(os.environ.get("WATCH_CONF_MIN", "0.60"))
-_WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
-# WATCH decay: drop WATCH alerts that persist unresolved across N pipeline cycles
-_WATCH_DECAY_CYCLES: int = int(os.environ.get("WATCH_DECAY_CYCLES", "4"))
-_WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", str(60 * 60 * 24)))
-# WATCH cap by market regime — stressed regimes get fewer WATCHes.
-# _WATCH_MAX_PER_RUN is kept as the backward-compatible default for stressed regimes.
-_WATCH_MAX_STRESSED: int = int(os.environ.get("WATCH_MAX_STRESSED", str(_WATCH_MAX_PER_RUN)))
-_WATCH_MAX_NEUTRAL: int = int(os.environ.get("WATCH_MAX_NEUTRAL", "2"))
-_WATCH_MAX_TRENDING: int = int(os.environ.get("WATCH_MAX_TRENDING", "3"))
-# WATCH promotion: sort bonus multiplier for setups with improving EP across cycles.
-_WATCH_PROMOTION_BONUS_MULT: float = float(os.environ.get("WATCH_PROMOTION_BONUS_MULT", "1.15"))
-_WATCH_PROMOTION_MIN_CYCLES: int = int(os.environ.get("WATCH_PROMOTION_MIN_CYCLES", "2"))
 
 # Deterministic sources_agree from server-side family alignment.
 # Minimum mean family score to count a family as directionally aligned.
@@ -164,11 +145,6 @@ _SA_MACRO_CONTEXT_SCORE: float = float(os.environ.get("SA_MACRO_CONTEXT_SCORE", 
 _SA_FORECAST_CONFIRM_BONUS_ENABLED: bool = os.environ.get("SA_FORECAST_CONFIRM_BONUS_ENABLED", "1") == "1"
 _SA_FORECAST_BONUS_THRESHOLD: float = float(os.environ.get("SA_FORECAST_BONUS_THRESHOLD", "0.80"))
 
-# Server-side market-session gating controls.
-_MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED", "1") == "1"
-_SESSION_PREPOST_EP_BUMP: float = float(os.environ.get("SESSION_PREPOST_EP_BUMP", "0.03"))
-_SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.05"))
-_SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "2"))
 
 # Macro veto bypass thresholds (configurable)
 _MACRO_VETO_SA: int = int(os.environ.get("MACRO_VETO_SA", "6"))
@@ -179,53 +155,47 @@ _VIX_SOFT_THRESHOLD: float = float(os.environ.get("VIX_SOFT_THRESHOLD", "25.0"))
 _VIX_SOFT_SA: int = int(os.environ.get("VIX_SOFT_SA", "3"))
 _VIX_SOFT_EP: float = float(os.environ.get("VIX_SOFT_EP", "0.72"))
 
+# Limited WATCH policy (borderline-only, conservative)
+_WATCH_MAX_PER_RUN: int = int(os.environ.get("WATCH_MAX_PER_RUN", "1"))
+_WATCH_SA_MIN: int = int(os.environ.get("WATCH_SA_MIN", "2"))
+_WATCH_CONF_MIN: float = float(os.environ.get("WATCH_CONF_MIN", "0.60"))
+_WATCH_EP_DELTA: float = float(os.environ.get("WATCH_EP_DELTA", "0.05"))
+_WATCH_DECAY_CYCLES: int = int(os.environ.get("WATCH_DECAY_CYCLES", "4"))
+_WATCH_MAX_STRESSED: int = int(os.environ.get("WATCH_MAX_STRESSED", str(_WATCH_MAX_PER_RUN)))
+_WATCH_MAX_NEUTRAL: int = int(os.environ.get("WATCH_MAX_NEUTRAL", "2"))
+_WATCH_MAX_TRENDING: int = int(os.environ.get("WATCH_MAX_TRENDING", "3"))
+_WATCH_PROMOTION_BONUS_MULT: float = float(os.environ.get("WATCH_PROMOTION_BONUS_MULT", "1.15"))
+_WATCH_PROMOTION_MIN_CYCLES: int = int(os.environ.get("WATCH_PROMOTION_MIN_CYCLES", "2"))
+
 # Forecast contradiction gate thresholds (configurable)
 _FORECAST_GATE_SCORE_THRESHOLD: float = float(os.environ.get("FORECAST_GATE_SCORE_THRESHOLD", "0.8"))
 _FORECAST_GATE_SA: int = int(os.environ.get("FORECAST_GATE_SA", "5"))
 _FORECAST_GATE_EP: float = float(os.environ.get("FORECAST_GATE_EP", "0.85"))
 
-# Volume confirmation: minimum volume_spike score required for LONG/SHORT.
-# Alerts without volume confirmation get confidence downgraded by this amount.
-# In choppy / risk_off_high_vix regimes the penalty is larger — thin-volume
-# breakouts are significantly more unreliable in indecisive or stressed markets.
+# Volume confirmation penalties
 _VOLUME_CONFIRM_SCORE: float = float(os.environ.get("VOLUME_CONFIRM_SCORE", "1.5"))
 _VOLUME_CONFIRM_PENALTY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY", "0.05"))
 _VOLUME_CONFIRM_PENALTY_CHOPPY: float = float(os.environ.get("VOLUME_CONFIRM_PENALTY_CHOPPY", "0.10"))
 
-# Reject alerts where entry is too far from latest reference price (e.g., stale/unrealistic fills)
+# Entry market drift gates
 _ENTRY_MARKET_DRIFT_MAX_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_MAX_PCT", "0.03"))
 _ENTRY_MARKET_DRIFT_VIX_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_BUMP", "0.01"))
 _ENTRY_MARKET_DRIFT_PREPOST_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_PREPOST_BUMP", "0.01"))
 _ENTRY_MARKET_DRIFT_CAP_PCT: float = float(os.environ.get("ENTRY_MARKET_DRIFT_CAP_PCT", "0.08"))
-# Second VIX tier: extreme-volatility regimes (VIX >= 30) add extra tolerance on top of soft-threshold bump
 _ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD: float = float(
     os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD", "30.0")
 )
 _ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP: float = float(os.environ.get("ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP", "0.02"))
 
-# Dynamic gate controls (regime + timeframe overlays)
-_DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
-_REGIME_CHOPPY_EP_BUMP: float = float(os.environ.get("REGIME_CHOPPY_EP_BUMP", "0.03"))
-_REGIME_CHOPPY_CONF_BUMP: float = float(os.environ.get("REGIME_CHOPPY_CONF_BUMP", "0.03"))
-_REGIME_CHOPPY_SA_BUMP: int = int(os.environ.get("REGIME_CHOPPY_SA_BUMP", "1"))
-_REGIME_TRENDING_EP_REDUCE: float = float(os.environ.get("REGIME_TRENDING_EP_REDUCE", "0.01"))
-_REGIME_TRENDING_CONF_REDUCE: float = float(os.environ.get("REGIME_TRENDING_CONF_REDUCE", "0.01"))
-# risk_off_high_vix regime (VIX 25–30 + risk_off=True): tighter gates, same magnitude as choppy.
-# Previously this regime was classified but completely unhandled — gates fell through unchanged.
-_REGIME_RISK_OFF_HIGH_VIX_EP_BUMP: float = float(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_EP_BUMP", "0.03"))
-_REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP: float = float(
-    os.environ.get("REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP", "0.03")
-)
-_REGIME_RISK_OFF_HIGH_VIX_SA_BUMP: int = int(os.environ.get("REGIME_RISK_OFF_HIGH_VIX_SA_BUMP", "1"))
-_TF_EP_OFFSET_15M: float = float(os.environ.get("TF_EP_OFFSET_15M", "0.00"))
-_TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
-_TF_CONF_OFFSET_15M: float = float(os.environ.get("TF_CONF_OFFSET_15M", "0.00"))
-_TF_CONF_OFFSET_1H: float = float(os.environ.get("TF_CONF_OFFSET_1H", "0.00"))
+# Server-side market-session gating controls (also in gates.session)
+_MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED", "1") == "1"
+_SESSION_PREPOST_EP_BUMP: float = float(os.environ.get("SESSION_PREPOST_EP_BUMP", "0.03"))
+_SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.05"))
+_SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "2"))
 
-# Alert deduplication (per symbol/direction/timeframe)
-_DEDUP_TTL_SECONDS: int = int(os.environ.get("ALERT_DEDUP_TTL_SECONDS", "300"))
-_DEDUP_ENABLED: bool = os.environ.get("ALERT_DEDUP_ENABLED", "1") == "1"
-_WATCH_DEDUP_TTL_SECONDS: int = int(os.environ.get("WATCH_DEDUP_TTL_SECONDS", "900"))
+# Dynamic gate controls (regime overlays — patched by tests via this module)
+_DYNAMIC_GATES_ENABLED: bool = os.environ.get("DYNAMIC_GATES_ENABLED", "1") == "1"
+
 
 # Redis circuit breaker for WATCH decay path
 _REDIS_FAILURE_COUNT = 0
@@ -248,132 +218,6 @@ _TYPE_FAMILY: dict[str, str] = {
     "macro_risk_off": "macro",
     "short_interest": "positioning",
 }
-
-
-def _median(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    vals = sorted(values)
-    n = len(vals)
-    mid = n // 2
-    if n % 2:
-        return vals[mid]
-    return (vals[mid - 1] + vals[mid]) / 2.0
-
-
-def _rr(alert: PlaybookAlert) -> float:
-    risk = abs(alert.entry["level"] - alert.entry["stop"])
-    if risk <= 0:
-        return 0.0
-    reward = abs(alert.entry["target"] - alert.entry["level"])
-    return reward / risk
-
-
-def _candidate_distribution(alerts: list[PlaybookAlert]) -> dict[str, float]:
-    return {
-        "count": float(len(alerts)),
-        "median_ep": _median([a.edge_probability for a in alerts]),
-        "median_conf": _median([a.confidence for a in alerts]),
-        "median_rr": _median([_rr(a) for a in alerts]),
-        "median_sa": _median([float(a.sources_agree) for a in alerts]),
-    }
-
-
-def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
-    bulls = 0
-    bears = 0
-    strengths: list[float] = []
-    for snap in snaps:
-        for sig in snap.get("signals", []):
-            st = sig.get("type", "")
-            try:
-                sc = float(sig.get("score", 0.0))
-            except (TypeError, ValueError):
-                continue
-            if sc > 0 and st in (
-                "technical_trend",
-                "sentiment_bull",
-                "options_flow",
-                "relative_strength",
-                "price_forecast",
-                "insider_activity",
-                "catalyst_event",
-            ):
-                bulls += 1
-                strengths.append(min(abs(sc) / 3.0, 1.0))
-            elif sc < 0 and st in (
-                "technical_trend",
-                "options_flow",
-                "relative_strength",
-                "price_forecast",
-                "insider_activity",
-                "catalyst_event",
-            ):
-                bears += 1
-                strengths.append(min(abs(sc) / 3.0, 1.0))
-            elif st in ("sentiment_bear", "macro_risk_off") and sc > 0:
-                bears += 1
-                strengths.append(min(abs(sc) / 3.0, 1.0))
-            elif st == "short_interest" and sc > 0:
-                # High short interest amplifies existing bulls (squeeze potential)
-                bulls += 1
-                strengths.append(min(abs(sc) / 3.0, 1.0))
-    trend_strength = sum(strengths) / len(strengths) if strengths else 0.0
-    return bulls, bears, trend_strength
-
-
-def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_strength: float) -> str:
-    """Classify market regime for dynamic gate overlays (SSOT §10.2 regime classification)."""
-    total = bulls + bears
-    bull_ratio = (bulls / total) if total else 0.5
-    if vix > 30:
-        return "extreme"
-    if risk_off and vix >= 25:
-        return "risk_off_high_vix"
-    if trend_strength < 0.35 or (0.45 <= bull_ratio <= 0.55):
-        return "choppy"
-    if bull_ratio > 0.55 and not risk_off:
-        return "trending_up"
-    if bull_ratio < 0.45 and risk_off:
-        return "trending_down"
-    return "neutral"
-
-
-def _dynamic_gates(
-    base_ep: float, base_sa: int, base_conf: float, timeframe: str, regime: str
-) -> tuple[float, int, float]:
-    """Apply regime/timeframe overlays to base gate thresholds (SSOT §10.2 dynamic gates)."""
-    ep = base_ep
-    sa = base_sa
-    conf = base_conf
-    if not _DYNAMIC_GATES_ENABLED:
-        return ep, sa, conf
-    if regime == "choppy":
-        ep += _REGIME_CHOPPY_EP_BUMP
-        sa += _REGIME_CHOPPY_SA_BUMP
-        conf += _REGIME_CHOPPY_CONF_BUMP
-    elif regime == "risk_off_high_vix":
-        # Previously unhandled — gates fell through unchanged.
-        # Now applies a matching tightening: elevated conviction required
-        # when VIX is 25–30 and macro is risk-off.
-        ep += _REGIME_RISK_OFF_HIGH_VIX_EP_BUMP
-        sa += _REGIME_RISK_OFF_HIGH_VIX_SA_BUMP
-        conf += _REGIME_RISK_OFF_HIGH_VIX_CONF_BUMP
-    elif regime in ("trending_up", "trending_down"):
-        ep -= _REGIME_TRENDING_EP_REDUCE
-        conf -= _REGIME_TRENDING_CONF_REDUCE
-
-    if timeframe == "15m":
-        ep += _TF_EP_OFFSET_15M
-        conf += _TF_CONF_OFFSET_15M
-    elif timeframe == "1h":
-        ep += _TF_EP_OFFSET_1H
-        conf += _TF_CONF_OFFSET_1H
-
-    ep = min(max(ep, 0.50), 0.95)
-    sa = max(sa, 1)
-    conf = min(max(conf, 0.50), 0.99)
-    return ep, sa, conf
 
 
 def _check_redis_circuit() -> bool:
@@ -419,218 +263,6 @@ def _record_redis_failure() -> None:
 def is_redis_circuit_open() -> bool:
     """Public accessor for healthcheck / dashboard."""
     return _check_redis_circuit()
-
-
-def _dedup_key(symbol: str, direction: str, timeframe: str) -> str:
-    return f"dedup:alert:{timeframe}:{direction}:{symbol}"
-
-
-def _reset_dedup_keys(symbols: list[str], timeframe: str) -> None:
-    """Clear WATCH and directional dedup keys when a symbol graduates."""
-    if _check_redis_circuit():
-        return
-    try:
-        r = get_redis()
-        for sym in symbols:
-            for direction in ("LONG", "SHORT", "WATCH"):
-                r.delete(_dedup_key(sym, direction, timeframe))
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-
-
-def _try_dedup_set(symbol: str, direction: str, timeframe: str) -> bool:
-    """Return True if alert should be suppressed (dedup key already exists).
-
-    Fail-open when dedup disabled or Redis circuit is open.
-    """
-    if not _DEDUP_ENABLED or _check_redis_circuit():
-        return False
-    ttl = _WATCH_DEDUP_TTL_SECONDS if direction == "WATCH" else _DEDUP_TTL_SECONDS
-    try:
-        was_set = get_redis().set(_dedup_key(symbol, direction, timeframe), "1", nx=True, ex=ttl)
-        return not was_set
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-        return False
-
-
-def _watch_max_for_regime(regime: str) -> int:
-    """Return the maximum number of WATCH alerts to emit for a given regime.
-
-    Stressed regimes (extreme, risk_off_high_vix) are capped tight.
-    Neutral/choppy regimes allow 2.  Clear trending regimes allow 3.
-    All values are env-var overridable via WATCH_MAX_STRESSED /
-    WATCH_MAX_NEUTRAL / WATCH_MAX_TRENDING.
-    """
-    if regime in ("extreme", "risk_off_high_vix"):
-        return _WATCH_MAX_STRESSED
-    if regime in ("choppy", "neutral"):
-        return _WATCH_MAX_NEUTRAL
-    return _WATCH_MAX_TRENDING  # trending_up, trending_down
-
-
-# ── WATCH cycle-decay helpers ────────────────────────────────────
-
-
-def _watch_decay_key(symbol: str, timeframe: str) -> str:
-    return f"watch:decay:{timeframe}:{symbol}"
-
-
-def _get_watch_cycles(symbol: str, timeframe: str) -> int:
-    """Return the number of consecutive pipeline cycles a WATCH has persisted."""
-    if _check_redis_circuit():
-        return 0
-    try:
-        val = get_redis().hget(_watch_decay_key(symbol, timeframe), "cycles")
-        return int(val) if val else 0
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-        return 0
-
-
-def _incr_watch_cycles(symbol: str, timeframe: str, ep: float, conf: float) -> int:
-    """Increment the watch cycle counter. Returns the new cycle count."""
-    if _check_redis_circuit():
-        return 0
-    try:
-        r = get_redis()
-        key = _watch_decay_key(symbol, timeframe)
-        pipe = r.pipeline()
-        pipe.hincrby(key, "cycles", 1)
-        pipe.hset(key, mapping={"last_ep": str(ep), "last_conf": str(conf)})
-        pipe.expire(key, _WATCH_DECAY_TTL_SECONDS)
-        results = pipe.execute()
-        return int(results[0])
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-        return 0
-
-
-def _reset_watch_cycles(symbols: list[str], timeframe: str) -> None:
-    """Delete watch-cycle state for symbols that graduated to a directional alert."""
-    if _check_redis_circuit():
-        return
-    try:
-        r = get_redis()
-        for sym in symbols:
-            r.delete(_watch_decay_key(sym, timeframe))
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-
-
-def _get_watch_prev_state(symbol: str, timeframe: str) -> dict[str, str] | None:
-    """Return the Redis watch-cycle state dict for symbol, or None if absent."""
-    if _check_redis_circuit():
-        return None
-    try:
-        r = get_redis()
-        state = r.hgetall(_watch_decay_key(symbol, timeframe))
-        if state:
-            return {
-                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
-                for k, v in state.items()
-            }
-        return None
-    except Exception:  # noqa: BLE001
-        _record_redis_failure()
-        return None
-
-
-def _watch_is_improving(
-    symbol: str,
-    current_ep: float,
-    prev_states: dict[str, dict[str, str] | None],
-) -> bool:
-    """Return True if the symbol's current EP exceeds its recorded prev EP.
-
-    Used to boost improving WATCH setups in the sort ranking and to
-    add a [\u2191 STRENGTHENING] prefix to the thesis after min cycles.
-    Returns False if no prior state exists (new WATCH, never seen before).
-    """
-    state = prev_states.get(symbol)
-    if not state:
-        return False
-    try:
-        return current_ep > float(state.get("last_ep", 0.0))
-    except (TypeError, ValueError):
-        return False
-
-
-def _session_stats_key(timeframe: str, now: datetime | None = None) -> str:
-    now_utc = now or datetime.now(UTC)
-    session_date = now_utc.astimezone(_ET).date().isoformat()
-    return f"session:stats:{session_date}:{timeframe}"
-
-
-def _record_session_gate_metrics(
-    timeframe: str,
-    llm_candidates: int,
-    directional_passed: int,
-    watch_kept: int,
-    directional_rejections: list[tuple[str, GateRejection]],
-    watch_rejections: list[tuple[str, GateRejection]],
-    dedup_suppressed_count: int = 0,
-) -> None:
-    try:
-        redis_client = get_redis()
-        key = _session_stats_key(timeframe)
-        pipe = redis_client.pipeline()
-        pipe.hincrby(key, "decision_runs", 1)
-        pipe.hincrby(key, "llm_candidates", llm_candidates)
-        pipe.hincrby(key, "alerts_passed", directional_passed)
-        pipe.hincrby(key, "alerts_passed_directional", directional_passed)
-        pipe.hincrby(key, "alerts_passed_total", directional_passed + watch_kept)
-        pipe.hincrby(key, "watch_kept", watch_kept)
-        total_rejections = len(directional_rejections) + len(watch_rejections)
-        pipe.hincrby(key, "alerts_rejected", total_rejections)
-        pipe.hincrby(key, "alerts_rejected_directional", len(directional_rejections))
-        pipe.hincrby(key, "alerts_rejected_watch", len(watch_rejections))
-        if dedup_suppressed_count:
-            pipe.hincrby(key, "alerts_dedup_suppressed", dedup_suppressed_count)
-        for _symbol, gate in directional_rejections:
-            pipe.hincrby(key, f"gate_dir_{gate.value}", 1)
-            pipe.hincrby(key, f"gate_{gate.value}", 1)
-        for _symbol, gate in watch_rejections:
-            pipe.hincrby(key, f"gate_watch_{gate.value}", 1)
-            pipe.hincrby(key, f"gate_{gate.value}", 1)
-        pipe.expire(key, _SESSION_STATS_TTL_SECONDS)
-        pipe.execute()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Failed to record session gate metrics: %s", exc)
-
-
-def _market_session_bucket(now: datetime | None = None) -> str:
-    status = get_market_hours_status(now)
-    lower = status.lower()
-    if lower.startswith("regular trading hours"):
-        return "regular"
-    if lower.startswith("pre-market"):
-        return "pre"
-    if lower.startswith("after-hours"):
-        return "after"
-    return "closed"
-
-
-def _apply_market_session_gate_overlays(
-    ep_gate: float,
-    sa_gate: int,
-    conf_gate: float,
-    timeframe: str,
-    now: datetime | None = None,
-) -> tuple[float, int, float, str]:
-    """Apply market-session gate overlays (SSOT §10.2 market session gates)."""
-    session_bucket = _market_session_bucket(now)
-    if not _MARKET_HOURS_GATES_ENABLED:
-        return ep_gate, sa_gate, conf_gate, session_bucket
-
-    if timeframe == "15m" and session_bucket in {"pre", "after"}:
-        return (
-            min(ep_gate + _SESSION_PREPOST_EP_BUMP, 0.95),
-            sa_gate + _SESSION_PREPOST_SA_BUMP,
-            min(conf_gate + _SESSION_PREPOST_CONF_BUMP, 0.99),
-            session_bucket,
-        )
-    return ep_gate, sa_gate, conf_gate, session_bucket
 
 
 def _parse_snapshots(snapshots_json: str) -> list[dict[str, Any]]:
@@ -718,166 +350,6 @@ def _aligned_family_count(family_scores: dict[str, float], direction: str) -> in
     long_count = sum(1 for score in family_scores.values() if score >= _SA_FAMILY_MIN_SCORE)
     short_count = sum(1 for score in family_scores.values() if score <= -_SA_FAMILY_MIN_SCORE)
     return max(long_count, short_count)
-
-
-def _get_forecast_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
-    """Extract per-symbol price_forecast scores from parsed snapshots.
-
-    Args:
-        snaps: List of parsed Snapshot dicts.
-
-    Returns:
-        Mapping of symbol → highest absolute price_forecast score.
-    """
-    scores: dict[str, float] = {}
-    for s in snaps:
-        sym = s.get("symbol", "")
-        for sig in s.get("signals", []):
-            if sig.get("type") == "price_forecast":
-                try:
-                    val = float(sig.get("score", 0))
-                    if sym not in scores or abs(val) > abs(scores[sym]):
-                        scores[sym] = val
-                except (TypeError, ValueError):
-                    pass
-    return scores
-
-
-def _get_macro_risk_off_score(snaps: list[dict[str, Any]]) -> float:
-    """Extract max macro_risk_off score from parsed snapshot signals.
-
-    Used by the 1h macro veto gate.
-
-    Args:
-        snaps: List of parsed Snapshot dicts.
-
-    Returns:
-        Maximum absolute macro_risk_off score, or 0.0 if none found.
-    """
-    score = 0.0
-    for s in snaps:
-        for sig in s.get("signals", []):
-            if sig.get("type") == "macro_risk_off":
-                try:
-                    score = max(score, abs(float(sig.get("score", 0))))
-                except (TypeError, ValueError):
-                    pass
-    return score
-
-
-def _is_macro_stale(snaps: list[dict[str, Any]]) -> bool:
-    """Check if the most recent macro snapshot is older than the staleness threshold.
-
-    Args:
-        snaps: List of parsed Snapshot dicts.
-
-    Returns:
-        True if macro data is stale or absent.
-    """
-    now = datetime.now(UTC)
-    newest_macro_ts: datetime | None = None
-    for s in snaps:
-        for sig in s.get("signals", []):
-            if sig.get("type") == "macro_risk_off":
-                ts_str = s.get("timestamp", "")
-                if not ts_str:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if newest_macro_ts is None or ts > newest_macro_ts:
-                        newest_macro_ts = ts
-                except (ValueError, TypeError):
-                    continue
-    if newest_macro_ts is None:
-        return True
-    age = (now - newest_macro_ts).total_seconds()
-    if age > _MACRO_STALE_SECONDS:
-        logger.warning("Macro data is stale (%.0fs old, threshold=%ds)", age, _MACRO_STALE_SECONDS)
-        return True
-    return False
-
-
-def _get_volume_spike_scores(snaps: list[dict[str, Any]]) -> dict[str, float]:
-    """Extract per-symbol max volume_spike score from parsed snapshots.
-
-    Args:
-        snaps: List of parsed Snapshot dicts.
-
-    Returns:
-        Mapping of symbol → highest volume_spike score.
-    """
-    scores: dict[str, float] = {}
-    for s in snaps:
-        sym = s.get("symbol", "")
-        for sig in s.get("signals", []):
-            if sig.get("type") == "volume_spike":
-                try:
-                    val = float(sig.get("score", 0))
-                    if sym not in scores or val > scores[sym]:
-                        scores[sym] = val
-                except (TypeError, ValueError):
-                    pass
-    return scores
-
-
-def _get_reference_prices(snaps: list[dict[str, Any]]) -> dict[str, float]:
-    """Extract per-symbol latest reference prices from snapshot signal raw payloads.
-
-    Priority order (0 = highest):
-      0) technical_trend  — live TradingView quote (most reliable real-time price)
-      1) volume_spike     — live Polygon trade print
-      2) options_flow     — Polygon/Alpaca options last price
-      3) insider_activity — EDGAR trade execution price
-      4) catalyst_event   — ROT/SpamShield reference price
-      5) short_interest   — short interest data price
-      6) price_forecast   — TimesFM model input feature (stale training price, lowest priority)
-    """
-    prices: dict[str, float] = {}
-    candidates: dict[str, tuple[int, int, float]] = {}
-    type_priority = {
-        "technical_trend": 0,
-        "volume_spike": 1,
-        "options_flow": 2,
-        "insider_activity": 3,
-        "catalyst_event": 4,
-        "short_interest": 5,
-        "price_forecast": 6,
-    }
-    key_priority = {
-        "current_price": 0,
-        "last": 1,
-        "last_price": 2,
-        "price": 3,
-        "close": 4,
-    }
-
-    for s in snaps:
-        sym = s.get("symbol", "")
-        if not sym:
-            continue
-        for sig in s.get("signals", []):
-            raw = sig.get("raw") or {}
-            if not isinstance(raw, dict):
-                continue
-
-            sig_type = str(sig.get("type", ""))
-            sig_rank = type_priority.get(sig_type, 99)
-            for k in ("current_price", "last", "last_price", "price", "close"):
-                try:
-                    v = float(raw.get(k, 0.0))
-                    if v > 0:
-                        key_rank = key_priority.get(k, 99)
-                        existing = candidates.get(sym)
-                        proposal = (sig_rank, key_rank, v)
-                        if existing is None or proposal < existing:
-                            candidates[sym] = proposal
-                        break
-                except (TypeError, ValueError):
-                    continue
-
-    for sym, (_, _, px) in candidates.items():
-        prices[sym] = px
-    return prices
 
 
 def validate_and_filter(
@@ -1357,7 +829,7 @@ def validate_and_filter(
         # 15m: 2.0:1 minimum (break-even at 33% win-rate)
         # 1h:  2.5:1 minimum (break-even at 29% win-rate, longer holds need better payoff)
         risk = abs(alert.entry["level"] - alert.entry["stop"])
-        reward = abs(alert.entry["target"] - alert.entry["level"])
+        rr_ratio = _rr(alert)
         if directional and GateRejection.ENTRY_ORDER_INVALID not in reason_set:
             if risk == 0:
                 logger.warning(
@@ -1380,11 +852,11 @@ def validate_and_filter(
                 )
                 _add_reason(GateRejection.RR_ZERO_RISK)
             _rr_min = _GATE_RR.get(timeframe, 2.0)
-            if risk > 0 and reward / risk < _rr_min:
+            if risk > 0 and rr_ratio < _rr_min:
                 logger.info(
                     "Alert filtered: %s R:R %.2f:1 below %.1f:1 minimum (%s)",
                     alert.symbol,
-                    reward / risk,
+                    rr_ratio,
                     _rr_min,
                     timeframe,
                 )

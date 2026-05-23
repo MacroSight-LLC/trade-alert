@@ -208,12 +208,16 @@ async def ta_scan(params: dict[str, Any]) -> dict:
 
 
 # Keep legacy tool names as aliases so older workflow YAML still works
+# DEPRECATED: alias for backward compat; no active workflows use this as of v1.1.0.
+# Remove after confirming via CHANGELOG that old callers are gone.
 async def bollinger_scan(params: dict[str, Any]) -> dict:
     """Legacy alias — delegates to ta_scan, returns only BB fields."""
     full = await ta_scan(params)
     return {"results": [{k: v for k, v in r.items() if k != "rsi"} for r in full.get("results", [])]}
 
 
+# DEPRECATED: alias for backward compat; no active workflows use this as of v1.1.0.
+# Remove after confirming via CHANGELOG that old callers are gone.
 async def rsi_scan(params: dict[str, Any]) -> dict:
     """Legacy alias — delegates to ta_scan, returns only RSI fields."""
     full = await ta_scan(params)

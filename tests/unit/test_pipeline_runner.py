@@ -4,13 +4,22 @@ from __future__ import annotations
 
 # pipeline_runner imports vault_env_loader at module level; stub it early
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.modules.setdefault("vault_env_loader", MagicMock())
 
-from pipeline_runner import _render_template, _safe_eval  # noqa: E402
+from pipeline_runner import (  # noqa: E402
+    MCP_ENDPOINTS,
+    _exec_parallel_tool_calls,
+    _exec_parallel_workflows,
+    _mcp_call_async,
+    _render_template,
+    _safe_eval,
+    mcp_call,
+    run_workflow,
+)
 
 # ── _safe_eval ──────────────────────────────────────────────────
 
@@ -148,3 +157,194 @@ class TestRenderTemplate:
         steps = {"fetch": {"results": [{"symbol": "AAPL"}]}}
         result = _render_template("{{ steps['fetch']['results'][0]['symbol'] }}", steps)
         assert result == "AAPL"
+
+
+# ── MCP dispatch ──────────────────────────────────────────────────
+
+
+class TestMcpEndpoints:
+    def test_timesfm_mcp_present(self) -> None:
+        assert "timesfm-mcp" in MCP_ENDPOINTS
+        assert MCP_ENDPOINTS["timesfm-mcp"] == "http://timesfm-mcp:8012"
+
+    @pytest.mark.asyncio
+    async def test_unknown_mcp_returns_error(self) -> None:
+        result = await _mcp_call_async("nonexistent-mcp", "ping", {})
+        assert result == {"error": "Unknown MCP: nonexistent-mcp"}
+
+    @pytest.mark.asyncio
+    async def test_mcp_dispatch_resolves_endpoint(self) -> None:
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        result = await _mcp_call_async(
+            "timesfm-mcp",
+            "forecast",
+            {"symbols": ["AAPL"]},
+            client=mock_client,
+        )
+
+        assert result == {"ok": True}
+        mock_client.post.assert_awaited_once_with(
+            "http://timesfm-mcp:8012/tool/forecast",
+            json={"symbols": ["AAPL"]},
+        )
+
+    @patch("pipeline_runner.asyncio.run")
+    def test_mcp_call_sync_wrapper(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = {"data": 1}
+        result = mcp_call("polygon-mcp", "quote", {"symbol": "AAPL"})
+        assert result == {"data": 1}
+        mock_run.assert_called_once()
+
+
+class TestParallelToolCalls:
+    @patch("pipeline_runner.asyncio.gather", new_callable=MagicMock)
+    @patch("pipeline_runner._new_http_client")
+    @patch("pipeline_runner._mcp_call_async", new_callable=MagicMock)
+    def test_dispatches_all_tools(
+        self,
+        mock_mcp: MagicMock,
+        mock_client_ctx: MagicMock,
+        mock_gather: MagicMock,
+    ) -> None:
+        import asyncio
+
+        async def _fake_gather(*tasks: object, return_exceptions: bool = False) -> list[object]:
+            assert return_exceptions is True
+            assert len(tasks) == 2
+            return [{"a": 1}, {"b": 2}]
+
+        mock_gather.side_effect = _fake_gather
+        mock_client_ctx.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+        mock_client_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        step = {
+            "calls": [
+                {"tool": "polygon-mcp", "method": "quote", "params": {}},
+                {"tool": "timesfm-mcp", "method": "forecast", "params": {}},
+            ]
+        }
+        results = _exec_parallel_tool_calls(step, {})
+        assert results == [{"a": 1}, {"b": 2}]
+
+
+class TestParallelWorkflows:
+    @patch("pipeline_runner.run_workflow")
+    @patch("pipeline_runner.concurrent.futures.ThreadPoolExecutor")
+    def test_uses_thread_pool(
+        self,
+        mock_executor_cls: MagicMock,
+        mock_run_workflow: MagicMock,
+        tmp_path,
+    ) -> None:
+        workflows_dir = tmp_path / "wf"
+        workflows_dir.mkdir()
+        mock_run_workflow.side_effect = [{"ok": 1}, {"ok": 2}]
+
+        mock_future_a = MagicMock()
+        mock_future_a.result.return_value = ("a.yaml", {"ok": 1})
+        mock_future_b = MagicMock()
+        mock_future_b.result.return_value = ("b.yaml", {"ok": 2})
+        mock_pool = MagicMock()
+        mock_pool.__enter__.return_value = mock_pool
+        mock_pool.__exit__.return_value = False
+        mock_pool.submit.side_effect = [mock_future_a, mock_future_b]
+        mock_executor_cls.return_value = mock_pool
+
+        from concurrent.futures import as_completed
+
+        with patch("pipeline_runner.concurrent.futures.as_completed", return_value=[mock_future_a, mock_future_b]):
+            result = _exec_parallel_workflows(
+                {"workflows": ["a.yaml", "b.yaml"]},
+                workflows_dir,
+                {},
+                {},
+            )
+
+        assert mock_executor_cls.called
+        assert result["a.yaml"] == {"ok": 1}
+        assert result["b.yaml"] == {"ok": 2}
+
+
+class TestWorkflowOrchestration:
+    def test_sequential_code_steps_chain(self, tmp_path) -> None:
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        wf_file = wf_dir / "chain.yaml"
+        wf_file.write_text(
+            """
+name: chain-test
+steps:
+  - name: step-one
+    type: code
+    code: |
+      result = 1
+  - name: step-two
+    type: code
+    code: |
+      result = steps['step-one'] + 2
+  - name: step-three
+    type: code
+    code: |
+      result = steps['step-two'] * 3
+""".strip()
+        )
+        results = run_workflow(wf_file)
+        assert results["step-one"] == 1
+        assert results["step-two"] == 3
+        assert results["step-three"] == 9
+
+    @patch("pipeline_runner._execute_step", side_effect=[RuntimeError("boom"), {"recovered": True}])
+    def test_abort_on_failure_stops_subsequent_steps(self, _mock_exec: MagicMock, tmp_path) -> None:
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        wf_file = wf_dir / "abort.yaml"
+        wf_file.write_text(
+            """
+name: abort-test
+error_handling:
+  abort_on_failure: true
+steps:
+  - name: fail-step
+    type: code
+    code: "result = 1"
+  - name: skipped-step
+    type: code
+    code: "result = 2"
+  - name: on-failure-handler
+    type: code
+    run_on: failure
+    code: "result = 'handled'"
+""".strip()
+        )
+        results = run_workflow(wf_file)
+        assert results["fail-step"] is None
+        assert "skipped-step" not in results
+        assert results.get("on-failure-handler") == {"recovered": True}
+
+    @patch("pipeline_runner._execute_step", side_effect=[RuntimeError("boom"), {"ok": True}])
+    def test_continue_on_failure_runs_later_steps(self, _mock_exec: MagicMock, tmp_path) -> None:
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        wf_file = wf_dir / "continue.yaml"
+        wf_file.write_text(
+            """
+name: continue-test
+error_handling:
+  abort_on_failure: false
+steps:
+  - name: fail-step
+    type: code
+    code: "result = 1"
+  - name: next-step
+    type: code
+    code: "result = 2"
+""".strip()
+        )
+        results = run_workflow(wf_file)
+        assert results["fail-step"] is None
+        assert results["next-step"] == {"ok": True}

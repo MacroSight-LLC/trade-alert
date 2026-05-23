@@ -54,7 +54,7 @@ class _RRZeroEntry:
 
     def __getitem__(self, key: str) -> float:
         in_rr = any(
-            f.filename.endswith("validate_and_filter.py") and f.lineno == 1352
+            f.name == "_rr" and f.filename.endswith("rr_volume.py")
             for f in traceback.extract_stack()
         )
         if in_rr and key == "stop":

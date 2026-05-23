@@ -26,7 +26,8 @@ _HORIZON = int(os.getenv("TIMESFM_HORIZON", "24"))
 _QUANTILES = [0.1, 0.5, 0.9]
 _MAX_BATCH = int(os.getenv("TIMESFM_MAX_BATCH", "50"))
 _POLYGON_TIMEOUT = float(os.getenv("TIMESFM_POLYGON_TIMEOUT", "10.0"))
-_HF_REPO = os.getenv("TIMESFM_HF_REPO", "google/timesfm-1.0-200m-pytorch")
+# Override via TIMESFM_HF_REPO env var; default is 2.5 as of v1.1.0
+_HF_REPO = os.getenv("TIMESFM_HF_REPO", "google/timesfm-2.5-200m-pytorch")
 
 # Timeframe → (multiplier, span) for Polygon range endpoint
 _TIMEFRAME_MAP: dict[str, tuple[int, str]] = {

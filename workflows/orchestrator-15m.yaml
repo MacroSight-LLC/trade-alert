@@ -1,4 +1,7 @@
 # orchestrator-15m.yaml
+# NOTE: orchestrator-15m.yaml and orchestrator-1h.yaml share the same step structure.
+# The only difference is the `timeframe` parameter. Drift risk: changes to one must be
+# mirrored to the other until the DSL supports parameterized includes.
 # SSOT Reference: Section 2, 5, 13 — Cron orchestrator for 15m pipeline
 # Purpose: Top-level cron workflow that sequences every collector → merger →
 #   decision → notifier for the 15m timeframe. Runs every 15 minutes.

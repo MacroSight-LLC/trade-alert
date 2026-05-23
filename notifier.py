@@ -32,10 +32,8 @@ _discord_cb_open_since: float = 0.0
 
 
 def _sleep(seconds: float) -> None:
-    """Sleep via notifier_and_logger.time so tests can patch backoff."""
-    import notifier_and_logger as nal
-
-    nal.time.sleep(seconds)
+    """Sleep hook for backoff; patch ``notifier.time.sleep`` in tests."""
+    time.sleep(seconds)
 
 
 def _get_discord_client() -> httpx.Client:
@@ -86,8 +84,8 @@ def _backoff_seconds(attempt: int, status_code: int | None) -> float:
     """Exponential backoff; 429 responses add jitter to reduce thundering herd."""
     delay = DISCORD_SEND_BACKOFF_BASE * (2 ** (attempt - 1))
     if status_code == 429:
-        return delay + random.uniform(0, 1)
-    return delay
+        return float(delay + random.uniform(0, 1))
+    return float(delay)
 
 
 def _send_with_backoff(
