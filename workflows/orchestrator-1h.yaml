@@ -155,7 +155,7 @@ steps:
                   macro = get_macro_regime()
 
                   snapshots_json = json.dumps(
-                      [snap.model_dump() for snap in snapshots], indent=2
+                      [snap.model_dump(mode="json") for snap in snapshots], indent=2
                   )
                   n = len(snapshots)
                   logger.info(
