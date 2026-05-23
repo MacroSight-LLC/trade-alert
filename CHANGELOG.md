@@ -11,6 +11,8 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-23
+
 ### Added
 - Exhaustive gate unit tests (`tests/unit/test_validate_and_filter_extended.py`) covering all
   23 `GateRejection` variants, regime classification, dynamic gates, EP ceiling, JSON parse
@@ -59,14 +61,22 @@ phase ordering in the SSOT phase table.
   `DATABASE_URL`) with inline `# pragma: allowlist secret` comments —
   pre-existing dev fixtures that were never in the baseline (tracked
   for an authoritative rescan in FU-004).
-
-### Tracked
-- FU-002: Sonnet 4.5 end-to-end output validation (needs live env).
-- FU-003: `VAULT_REQUIRED=true` production enablement (ops-team action).
-- FU-004: Authoritative `detect-secrets` rescan with IBM 1.5.0 fork in a
-  network-enabled CI environment.
+- FU-002 closed: Sonnet 4.5 end-to-end validation (15m + 1h local cycles,
+  PlaybookAlert parse through `validate_and_filter`; merger datetime fix in
+  orchestrator YAML — `model_dump(mode="json")`). See [`FOLLOW_UPS.md`](./FOLLOW_UPS.md).
+- Orchestrator merger datetime serialization (`model_dump(mode="json")` in
+  `orchestrator-15m.yaml` / `orchestrator-1h.yaml`) — fixes zero-candidate
+  merger failures from non-JSON-serializable `datetime` fields.
 
 ### Changed
+- FU-003/004/005 repo work landed: `VAULT_REQUIRED=true` default and tests,
+  authoritative `.secrets.baseline` + CI drift check, gate test-author docs in
+  [`CONTRIBUTING.md`](./CONTRIBUTING.md). See [`FOLLOW_UPS.md`](./FOLLOW_UPS.md).
+- [`docker-compose.yml`](docker-compose.yml): add `timesfm-mcp` (:8012) for
+  full 12-MCP dev parity; expand `cuga` volume mounts to match prod hot-reload
+  paths (`validate_and_filter.py`, `decision_helpers.py`, `metrics.py`, etc.).
+- [`README.md`](README.md): align gate count wording with the 22-member
+  `GateRejection` enum (was "7-gate").
 - [`docker-compose.yml`](docker-compose.yml): strengthened the existing
   dev-compose banner with an explicit warning against using a production
   `.env` file (`VAULT_DEV_ROOT_TOKEN_ID` is a known insecure value).
