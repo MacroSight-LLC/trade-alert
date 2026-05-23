@@ -31,10 +31,10 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Ruff check
-        run: xargs uv run ruff check < .github/ruff-targets.txt
+        run: uv run ruff check .
 
       - name: Ruff format check
-        run: xargs uv run ruff format --check < .github/ruff-targets.txt
+        run: uv run ruff format --check .
 
   # ── Job 2: Unit tests ────────────────────────────────────────────
   test:
@@ -87,10 +87,7 @@ jobs:
         run: |
           uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing \
-            --ignore=tests/unit/test_plan_controller_prompt.py \
-            --ignore=tests/unit/test_llm_override.py \
-            --ignore=tests/unit/test_variables_manager_langgraph.py \
-            --ignore=tests/unit/test_variables_manager_with_state.py
+            --ignore=tests/cuga_upstream/
 
   # ── Job 3: Build + push to GHCR ─────────────────────────────────
   build:

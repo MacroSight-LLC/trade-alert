@@ -20,7 +20,7 @@ echo ""
 echo "=== Unit tests (with coverage) ==="
 pytest tests/unit/ -v --tb=short \
     --cov=. --cov-report=term-missing \
-    --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,healthcheck.py,outcome_tracker.py,normalizers/*"
+    --ignore=tests/cuga_upstream/
 
 echo ""
 echo "=== All checks passed ==="

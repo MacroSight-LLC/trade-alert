@@ -65,7 +65,7 @@ jobs:
       - name: Circular import check
         run: uv run python -c "import validate_and_filter; import gates.watch; import gates.regime; print('OK')"
 
-      - name: Type-check with mypy
+      - name: Type-check with mypy (FU-009 advisory)
         continue-on-error: true
         run: uv run mypy --config-file pyproject.toml
 
