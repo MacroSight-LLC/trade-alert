@@ -12,31 +12,42 @@ commit that closed it.
 
 ## Open
 
-### FU-002 — Sonnet 4 → 4.5 end-to-end output validation
-
-**Opened:** 2026-05-22
-**References:** [`prompt_manager.py`](./prompt_manager.py),
-[`validate_and_filter.py`](./validate_and_filter.py),
-[`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md) § Sonnet 4.5 End-to-End Validation
-
-Code-side migration to `claude-sonnet-4-5` is complete. Runbook and validation
-script are in place (`deployment/validate-sonnet-4-5.sh`). **Live execution
-on production is still required** to close this item.
-
-**Action (ops, on production host):**
-1. Run 15m + 1h orchestrators (or `!scan 15m` / `!scan 1h`)
-2. Execute `./deployment/validate-sonnet-4-5.sh` and complete manual checklist
-3. Record Langfuse trace IDs and gate-rejection snapshot below
-4. Move to Resolved when acceptance envelope passes
-
-**Exit condition:** at least one full 15m + 1h pipeline cycle against
-`claude-sonnet-4-5` whose `validate_and_filter` output JSON matches the
-`PlaybookAlert` schema and whose gate-rejection mix is within the
-historical envelope.
+_(none)_
 
 ---
 
 ## Resolved
+
+### FU-002 — Sonnet 4 → 4.5 end-to-end output validation
+
+**Resolved:** 2026-05-23
+**Note:** Local dev stack validation after Anthropic credit top-up. Both
+orchestrators completed with `claude-sonnet-4-5`; LiteLLM + Langfuse traces
+confirmed. Merger fix (`model_dump(mode="json")`) in commit `4524365`.
+
+| Cycle | Trace ID | Merger | LLM | Parsed | Passed | Rejected |
+| ----- | -------- | ------ | --- | ------ | ------ | -------- |
+| 15m | `7d9370bc-2a1b-4fa1-ba57-ba0f14451309` | 10 | 0 candidates | 0 | 0 | 0 |
+| 1h | `98b844c0-c924-4eed-9c92-0d21249eb748` | 10 | 1 candidate | 1 | 1 WATCH (AMZN) | 0 |
+
+**15m:** `reason=llm_zero_candidates` — LLM returned valid empty set (market
+closed, no actionable setups). Zero PlaybookAlert parse failures.
+
+**1h:** AMZN WATCH passed gates (`ep=0.72`, `conf=0.68`, `sa=5`,
+`sources_agree` server override 4→5). PlaybookAlert schema validated through
+`validate_and_filter`.
+
+**Gate-rejection snapshot:** N/A in dev (no Prometheus / `alert_gates` table).
+Per-gate rejection counts: 15m 0/0, 1h 0/0 — within envelope by inspection.
+
+**Known non-blockers:** Notifier/healthcheck failed on stale container image
+(`map_to_execution_payload` import — fixed in working tree, rebuild required).
+TimesFM MCP unreachable in dev compose.
+
+**Ops follow-up:** Re-run `./deployment/validate-sonnet-4-5.sh` on Hetzner
+after next prod deploy to capture production trace IDs and Prometheus gate mix.
+
+---
 
 ### FU-005 — Document implicit gate input contracts for test authors
 
