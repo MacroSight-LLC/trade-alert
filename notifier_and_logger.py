@@ -12,7 +12,6 @@ import concurrent.futures
 import hashlib
 import json
 import logging
-import time
 
 import httpx
 import redis

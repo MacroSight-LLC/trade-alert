@@ -170,9 +170,7 @@ def _deliver_webhook(
         return True
 
     if not TRADE_EXECUTE_WEBHOOK_URL:
-        logger.error(
-            "TRADE_EXECUTE_ENABLED=true but TRADE_EXECUTE_WEBHOOK_URL is not set — skipping"
-        )
+        logger.error("TRADE_EXECUTE_ENABLED=true but TRADE_EXECUTE_WEBHOOK_URL is not set — skipping")
         GATE_REJECTIONS.labels(gate="execution_webhook_failed").inc()
         return False
 
@@ -197,8 +195,7 @@ def _deliver_webhook(
 
             if accepted:
                 logger.info(
-                    "ExecutionPayload delivered: event_id=%s symbol=%s execution_id=%s "
-                    "status=%d attempt=%d",
+                    "ExecutionPayload delivered: event_id=%s symbol=%s execution_id=%s status=%d attempt=%d",
                     event_id,
                     symbol,
                     execution_id,

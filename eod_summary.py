@@ -11,7 +11,7 @@ SSOT §13 — observability.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -26,8 +26,8 @@ _ET = ZoneInfo("America/New_York")
 
 
 def _build_eod_embed() -> dict[str, Any]:
-    from redis_client import get_redis
     from db import get_recent_alerts
+    from redis_client import get_redis
 
     r = get_redis()
     today = datetime.now(tz=_ET).date().isoformat()
@@ -56,10 +56,7 @@ def _build_eod_embed() -> dict[str, Any]:
     # Today's fired alerts from Postgres
     try:
         all_alerts = get_recent_alerts(limit=50)
-        today_alerts = [
-            a for a in all_alerts
-            if str(a.get("created_at", "")).startswith(today)
-        ]
+        today_alerts = [a for a in all_alerts if str(a.get("created_at", "")).startswith(today)]
     except Exception as exc:
         logger.warning("EOD: could not fetch today's alerts — %s", exc)
         today_alerts = []
@@ -94,7 +91,7 @@ def _build_eod_embed() -> dict[str, Any]:
                     {"name": "🚧 Top Gate Rejections", "value": gate_str, "inline": False},
                     {"name": "📣 Alerts", "value": alert_str, "inline": False},
                 ],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "footer": {"text": "trade-alert · EOD summary"},
             }
         ]

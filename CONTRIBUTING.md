@@ -126,10 +126,17 @@ Why this matters:
 
 trade-alert uses two CI workflow families:
 
-- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates all trade-alert PRs; path-filtered to trade-alert source files; runs unit + integration tests.
+- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs; path-filtered to trade-alert source files; runs unit + integration tests + docker build.
+- [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — runs on every push to `main`; lint → test → build GHCR images → deploy to production → smoke test.
 - [`.github/workflows/tests.yml`](.github/workflows/tests.yml) / [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream suite; uses Python 3.12 and Playwright; do not modify for trade-alert changes.
 
-When opening a trade-alert PR, only `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
+When opening a trade-alert PR, `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
+
+**Branch protection:** `deploy.yml` is independent of the path-filtered PR gate. Direct pushes to `main` skip `trade-alert-tests.yml`. Require PR checks (at minimum `trade-alert-tests.yml`) via branch protection before merging to `main`.
+
+Ruff lint/format targets are centralized in [`.github/ruff-targets.txt`](.github/ruff-targets.txt) and used by both workflows.
+
+Release process: see [`RELEASING.md`](RELEASING.md).
 
 ### Pull Request Templates
 

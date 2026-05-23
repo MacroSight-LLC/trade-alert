@@ -163,7 +163,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.mcp
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       vault:
         condition: service_healthy
@@ -194,7 +194,7 @@ services:
     restart: unless-stopped
 
   polygon-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -221,7 +221,7 @@ services:
     restart: unless-stopped
 
   discord-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -248,7 +248,7 @@ services:
     restart: unless-stopped
 
   finnhub-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -275,7 +275,7 @@ services:
     restart: unless-stopped
 
   rot-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -302,7 +302,7 @@ services:
     restart: unless-stopped
 
   trading-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -329,7 +329,7 @@ services:
     restart: unless-stopped
 
   fred-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -356,7 +356,7 @@ services:
     restart: unless-stopped
 
   spamshield-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -383,7 +383,7 @@ services:
     restart: unless-stopped
 
   edgar-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -410,7 +410,7 @@ services:
     restart: unless-stopped
 
   yfinance-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -437,7 +437,7 @@ services:
     restart: unless-stopped
 
   alpaca-mcp:
-    image: trade-alert-mcp:latest
+    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -468,7 +468,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.timesfm
-    image: trade-alert-timesfm:latest
+    image: ${TIMESFM_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/timesfm:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -499,6 +499,7 @@ services:
   # --- Application ---
 
   cuga:
+    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: &cuga-build
       context: .
       dockerfile: docker/Dockerfile.cuga
@@ -581,6 +582,7 @@ services:
           cpus: "2.0"
 
   cron:
+    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
       cuga:
@@ -646,6 +648,7 @@ services:
   # --- Discord Bot (manual trigger) ---
 
   discord-bot:
+    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
       vault:
@@ -711,6 +714,7 @@ services:
   # --- Dashboard (Phase 9) ---
 
   dashboard:
+    image: ${DASHBOARD_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/dashboard:latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard

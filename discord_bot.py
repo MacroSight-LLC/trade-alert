@@ -25,7 +25,8 @@ import sys
 import threading
 import time
 from collections import Counter
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -213,12 +214,15 @@ def _get_status() -> str:
                 ]
                 gate_parts.sort(key=lambda x: int(x.split(": ")[1]), reverse=True)
                 top_gates = " | ".join(gate_parts[:3]) if gate_parts else "none"
-                lines.append(f"  `{tf}`: {runs} runs | {fired} fired | {rejected} rejected | top gates: {top_gates}")
+                lines.append(
+                    f"  `{tf}`: {runs} runs | {fired} fired | {rejected} rejected | top gates: {top_gates}"
+                )
             else:
                 lines.append(f"  `{tf}`: no session data yet today")
         # Last fired alert
         try:
             from db import get_recent_alerts as _get_last_alert
+
             last = _get_last_alert(limit=1)
             if last:
                 a = last[0]
@@ -327,7 +331,7 @@ def _previous_trading_day(start: date) -> date:
 
 
 def _session_window(now: datetime | None = None) -> tuple[str, datetime, datetime, date]:
-    now_et = (now or datetime.now(timezone.utc)).astimezone(_ET)
+    now_et = (now or datetime.now(UTC)).astimezone(_ET)
 
     if now_et.weekday() >= 5 or is_holiday(now_et.date()):
         session_date = _previous_trading_day(now_et.date())
@@ -346,7 +350,7 @@ def _session_window(now: datetime | None = None) -> tuple[str, datetime, datetim
     close_time = dt_time(13, 0) if is_early_close(session_date) else dt_time(16, 0)
     start_et = datetime.combine(session_date, dt_time(9, 30), tzinfo=_ET)
     end_et = datetime.combine(session_date, close_time, tzinfo=_ET)
-    return label, start_et.astimezone(timezone.utc), end_et.astimezone(timezone.utc), session_date
+    return label, start_et.astimezone(UTC), end_et.astimezone(UTC), session_date
 
 
 def _format_gate_counts(stats: dict[str, str], prefix: str = "gate_") -> str:
@@ -422,7 +426,8 @@ def _build_session_report() -> str:
         ]
         if timeframe_counts:
             lines.append(
-                "By timeframe: " + ", ".join(f"{tf}={count}" for tf, count in sorted(timeframe_counts.items()))
+                "By timeframe: "
+                + ", ".join(f"{tf}={count}" for tf, count in sorted(timeframe_counts.items()))
             )
 
         total_runs = 0
@@ -438,14 +443,21 @@ def _build_session_report() -> str:
             alerts_passed = int(stats.get("alerts_passed", "0") or 0)
             alerts_passed_total = int(stats.get("alerts_passed_total", str(alerts_passed)) or alerts_passed)
             alerts_rejected = int(stats.get("alerts_rejected", "0") or 0)
-            directional_rejected = int(stats.get("alerts_rejected_directional", str(alerts_rejected)) or alerts_rejected)
             watch_rejected = int(stats.get("alerts_rejected_watch", "0") or 0)
             watch_kept = int(stats.get("watch_kept", "0") or 0)
             watch_dropped_directional_present = int(
-                stats.get("gate_watch_watch_dropped_directional_present", stats.get("gate_watch_dropped_directional_present", "0")) or 0
+                stats.get(
+                    "gate_watch_watch_dropped_directional_present",
+                    stats.get("gate_watch_dropped_directional_present", "0"),
+                )
+                or 0
             )
-            watch_cap_rejections = int(stats.get("gate_watch_watch_cap", stats.get("gate_watch_cap", "0")) or 0)
-            watch_decay_rejections = int(stats.get("gate_watch_watch_decay", stats.get("gate_watch_decay", "0")) or 0)
+            watch_cap_rejections = int(
+                stats.get("gate_watch_watch_cap", stats.get("gate_watch_cap", "0")) or 0
+            )
+            watch_decay_rejections = int(
+                stats.get("gate_watch_watch_decay", stats.get("gate_watch_decay", "0")) or 0
+            )
             alert_rate = (alerts_passed / runs) if runs else 0.0
             pass_rate = (alerts_passed / llm_candidates) if llm_candidates else 0.0
             lines.append(
@@ -458,7 +470,9 @@ def _build_session_report() -> str:
             lines.append(f"{timeframe} top watch rejections: {_format_gate_counts(stats, 'gate_watch_')}")
 
         if totals[0] and total_runs == 0:
-            lines.append("Note: alerts exist for this session, but gate telemetry started after the latest deploy/restart.")
+            lines.append(
+                "Note: alerts exist for this session, but gate telemetry started after the latest deploy/restart."
+            )
 
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001

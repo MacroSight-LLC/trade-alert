@@ -711,6 +711,40 @@ When moving from localhost to a remote host (VPS, cloud VM, dedicated server),
 the codebase is **already parameterized** — you only need to change environment
 variables, not code. Here's what to configure:
 
+### CI deploy (GitHub Actions → Hetzner)
+
+Every push to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+1. Lint and unit-test the commit (locked `uv` deps, `pgvector/pgvector:pg16` Postgres).
+2. Build and push four images to GHCR tagged with the commit SHA: `cuga`, `mcp`, `timesfm`, `dashboard`.
+3. SSH to the VPS, `git checkout` the exact SHA, `docker login ghcr.io`, pull pre-built images, and `docker compose up --no-build`.
+
+Required GitHub Actions secrets: `HETZNER_HOST`, `HETZNER_SSH_KEY`, `GHCR_READ_TOKEN` (PAT with `read:packages`). See [`RELEASING.md`](RELEASING.md) for the full release/deploy matrix.
+
+Image overrides in [`docker-compose.prod.yml`](docker-compose.prod.yml) (defaults point at GHCR `latest`; CI sets SHA tags):
+
+```bash
+export CUGA_IMAGE=ghcr.io/MacroSight-LLC/trade-alert/cuga:<sha>
+export MCP_IMAGE=ghcr.io/MacroSight-LLC/trade-alert/mcp:<sha>
+export TIMESFM_IMAGE=ghcr.io/MacroSight-LLC/trade-alert/timesfm:<sha>
+export DASHBOARD_IMAGE=ghcr.io/MacroSight-LLC/trade-alert/dashboard:<sha>
+docker compose -f docker-compose.prod.yml pull cuga cron discord-bot dashboard timesfm-mcp tradingview-mcp
+docker compose -f docker-compose.prod.yml up -d --no-build
+docker compose -f docker-compose.prod.yml --profile mcp up -d --no-build
+```
+
+Production `cuga` bind-mounts Python sources from the git checkout, so the deploy pins **both** git SHA and image SHA.
+
+### Manual deploy (local build)
+
+For first-time setup or when GHCR is unavailable, use [`scripts/deploy.sh`](scripts/deploy.sh) or:
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ### 1. Port Security (Critical)
 
 By default, `docker-compose.prod.yml` binds internal services to **127.0.0.1**

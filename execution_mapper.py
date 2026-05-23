@@ -57,16 +57,12 @@ class ExecutionPayload(BaseModel):
     @model_validator(mode="after")
     def validate_price_ordering(self) -> ExecutionPayload:
         """Enforce direction-correct stop/entry/target ordering."""
-        if self.direction == "LONG" and not (
-            self.stop_level < self.entry_level < self.target_level
-        ):
+        if self.direction == "LONG" and not (self.stop_level < self.entry_level < self.target_level):
             raise ValueError(
                 f"LONG requires stop < entry < target, got "
                 f"stop={self.stop_level}, entry={self.entry_level}, target={self.target_level}"
             )
-        if self.direction == "SHORT" and not (
-            self.target_level < self.entry_level < self.stop_level
-        ):
+        if self.direction == "SHORT" and not (self.target_level < self.entry_level < self.stop_level):
             raise ValueError(
                 f"SHORT requires target < entry < stop, got "
                 f"stop={self.stop_level}, entry={self.entry_level}, target={self.target_level}"
@@ -181,8 +177,10 @@ def map_to_execution_payload(
         raise ValueError("WATCH alerts are not executable")
 
     now = datetime.now(UTC)
-    ttl = expiry_seconds if expiry_seconds is not None else execution_expiry_seconds_for_timeframe(
-        alert.timeframe
+    ttl = (
+        expiry_seconds
+        if expiry_seconds is not None
+        else execution_expiry_seconds_for_timeframe(alert.timeframe)
     )
     expires = now + timedelta(seconds=ttl)
 

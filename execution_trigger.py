@@ -80,9 +80,7 @@ class EntryV1(BaseModel):
     price: float
     stop: float
     target: float
-    risk_reward: float = Field(
-        description="Reward:Risk ratio. 0.0 for WATCH alerts or when risk is zero."
-    )
+    risk_reward: float = Field(description="Reward:Risk ratio. 0.0 for WATCH alerts or when risk is zero.")
 
 
 class ExecutionTriggerV1(BaseModel):

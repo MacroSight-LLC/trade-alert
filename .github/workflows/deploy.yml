@@ -9,6 +9,8 @@ env:
   REGISTRY: ghcr.io
   IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga
   IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp
+  IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm
+  IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard
 
 jobs:
   # ── Job 1: Lint ──────────────────────────────────────────────────
@@ -17,32 +19,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install linter
-        run: pip install ruff
+      - name: Set up Python (from .python-version, locked via uv.lock)
+        run: uv python install
+
+      - name: Install dependencies (locked)
+        run: uv sync --frozen --group dev
 
       - name: Ruff check
-        run: |
-          ruff check \
-            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
-            healthcheck.py outcome_tracker.py langfuse_client.py \
-            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
-            vault_env_loader.py dashboard_api.py alert_quality.py \
-            validate_and_filter.py decision_helpers.py pipeline_runner.py \
-            normalizers/
+        run: xargs uv run ruff check < .github/ruff-targets.txt
 
       - name: Ruff format check
-        run: |
-          ruff format --check \
-            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
-            healthcheck.py outcome_tracker.py langfuse_client.py \
-            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
-            vault_env_loader.py dashboard_api.py alert_quality.py \
-            validate_and_filter.py decision_helpers.py pipeline_runner.py \
-            normalizers/
+        run: xargs uv run ruff format --check < .github/ruff-targets.txt
 
   # ── Job 2: Unit tests ────────────────────────────────────────────
   test:
@@ -58,7 +50,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         ports: ["5432:5432"]
         env:
           POSTGRES_USER: trade_alert
@@ -75,24 +67,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pydantic httpx psycopg2-binary redis pytest pytest-cov \
-            mypy ruff "hvac>=2.0.0" "langfuse>=2.0,<3.0" python-dotenv \
-            "fastapi[standard]" uvicorn litellm mplfinance
+      - name: Set up Python (from .python-version, locked via uv.lock)
+        run: uv python install
+
+      - name: Install dependencies (locked)
+        run: uv sync --frozen --group dev
 
       - name: Init Postgres schema
         run: |
-          PGPASSWORD=test_password psql -h localhost -U trade_alert -d trade_alert -f schema.sql || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client > /dev/null
+          PGPASSWORD=test_password psql -h localhost -U trade_alert -d trade_alert -f schema.sql
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ \
+          uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing \
             --ignore=tests/unit/test_plan_controller_prompt.py \
             --ignore=tests/unit/test_llm_override.py \
@@ -143,38 +136,97 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build & push TimesFM image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.timesfm
+          push: true
+          tags: |
+            ${{ env.IMAGE_TIMESFM }}:latest
+            ${{ env.IMAGE_TIMESFM }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push Dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.dashboard
+          push: true
+          tags: |
+            ${{ env.IMAGE_DASHBOARD }}:latest
+            ${{ env.IMAGE_DASHBOARD }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ── Job 4: Deploy to Hetzner VPS ────────────────────────────────
   deploy:
     needs: build
     runs-on: ubuntu-latest
     environment: production
+    env:
+      DEPLOY_SHA: ${{ github.sha }}
+      GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+      GHCR_USER: ${{ github.repository_owner }}
+      IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga:${{ github.sha }}
+      IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp:${{ github.sha }}
+      IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm:${{ github.sha }}
+      IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard:${{ github.sha }}
     steps:
+      - name: Require GHCR_READ_TOKEN
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          if [ -z "$GHCR_TOKEN" ]; then
+            echo "::error::GHCR_READ_TOKEN is not set. Add a GitHub PAT with read:packages to repository secrets before deploying."
+            echo "See RELEASING.md § Production deploy prerequisites."
+            exit 1
+          fi
+          echo "Deploy commit: ${{ github.sha }}"
+          echo "Pull tags: cuga/mcp/timesfm/dashboard @ ${{ github.sha }} (same SHA pushed by build job via needs: build)"
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+          GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USER: ${{ github.repository_owner }}
+          IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga:${{ github.sha }}
+          IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp:${{ github.sha }}
+          IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm:${{ github.sha }}
+          IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard:${{ github.sha }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: deploy
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script_stop: true
+          envs: DEPLOY_SHA,GHCR_TOKEN,GHCR_USER,IMAGE_CUGA,IMAGE_MCP,IMAGE_TIMESFM,IMAGE_DASHBOARD
           script: |
             set -euo pipefail
             cd ~/trade-alert
 
-            # Pull latest code
-            git pull origin main
+            git fetch origin
+            git checkout "${DEPLOY_SHA}"
 
-            # Rebuild images from updated source
-            docker compose -f docker-compose.prod.yml build --parallel
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
 
-            # Rolling restart — infra first, then app, then MCPs
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            docker compose -f docker-compose.prod.yml --profile mcp up -d --remove-orphans
+            export CUGA_IMAGE="${IMAGE_CUGA}"
+            export MCP_IMAGE="${IMAGE_MCP}"
+            export TIMESFM_IMAGE="${IMAGE_TIMESFM}"
+            export DASHBOARD_IMAGE="${IMAGE_DASHBOARD}"
 
-            # Re-seed Langfuse prompts (idempotent — skips if unchanged)
-            docker compose -f docker-compose.prod.yml exec -T cuga \
+            DC="docker compose -f docker-compose.prod.yml"
+            PULL_SERVICES="cuga cron discord-bot dashboard timesfm-mcp tradingview-mcp"
+
+            ${DC} pull ${PULL_SERVICES}
+
+            ${DC} up -d --no-build --remove-orphans
+            ${DC} --profile mcp up -d --no-build --remove-orphans
+
+            ${DC} exec -T cuga \
               python scripts/seed_langfuse_prompts.py --update --host http://langfuse:3000 || true
 
-            # Clean up dangling images
             docker image prune -f
 
   # ── Job 5: Post-deploy smoke test ───────────────────────────────
@@ -219,8 +271,9 @@ jobs:
             check "VAULT_REQUIRED" "$DC exec -T cuga printenv VAULT_REQUIRED | grep -qi true"
             check "Vault secrets loaded" "$DC exec -T cuga python vault_env_loader.py | grep -q 'Loaded'"
 
-            # MCP spot-check (first 3)
-            for port in 8001 8002 8003; do
+            # MCP health checks — SSOT §3 ports 8001-8012
+            MCP_PORTS="8001 8002 8003 8004 8005 8006 8007 8008 8009 8010 8011 8012"
+            for port in ${MCP_PORTS}; do
               check "MCP:${port}" "curl -sf http://localhost:${port}/health"
             done
 
