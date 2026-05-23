@@ -12,6 +12,7 @@ sys.modules.setdefault("vault_env_loader", MagicMock())
 
 from pipeline_runner import (  # noqa: E402
     MCP_ENDPOINTS,
+    _exec_code_step,
     _exec_parallel_tool_calls,
     _exec_parallel_workflows,
     _mcp_call_async,
@@ -348,3 +349,28 @@ steps:
         results = run_workflow(wf_file)
         assert results["fail-step"] is None
         assert results["next-step"] == {"ok": True}
+
+
+# ── _exec_code_step import allowlist ────────────────────────────
+
+
+class TestExecCodeStepImportAllowlist:
+    """Workflow code blocks may only import whitelisted modules."""
+
+    @pytest.mark.parametrize(
+        "import_stmt",
+        [
+            "import gates.regime",
+            "import gates.session",
+            "import notifier",
+            "import alert_logger",
+            "import discord_formatter",
+        ],
+    )
+    def test_allowed_project_imports(self, import_stmt: str) -> None:
+        code = f"{import_stmt}\nresult = True"
+        assert _exec_code_step(code, {}, {}) is True
+
+    def test_blocked_import_raises(self) -> None:
+        with pytest.raises(ImportError, match="not allowed"):
+            _exec_code_step("import subprocess\nresult = True", {}, {})

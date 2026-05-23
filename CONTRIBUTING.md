@@ -235,6 +235,10 @@ stay in `validate_and_filter.py`.
 New helpers added to `gates/` must be re-exported from `validate_and_filter.py` if any
 test patches them via `vf._helper` or imports them from `validate_and_filter`.
 
+Workflow code blocks import via a sandbox allowlist in `pipeline_runner.py`
+(`_IMPORT_ALLOWLIST`). When adding a new project module callable from workflow
+`code:` steps, add its dotted path to that set (including `gates.*` submodules).
+
 ### CUGA Framework Tests (upstream)
 
 ```bash

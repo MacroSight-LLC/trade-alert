@@ -91,6 +91,8 @@ dist/
 build/
 *.whl
 .venv/
+.coverage
+htmlcov/
 
 # Extra secret-bearing patterns (in addition to .env.secrets / .secrets.*)
 *.secrets
