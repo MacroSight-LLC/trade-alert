@@ -403,6 +403,36 @@ services:
       - trade-net
     restart: unless-stopped
 
+  # TimesFM MCP — time-series forecasting (dedicated image: torch + timesfm)
+  timesfm-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.timesfm
+    image: trade-alert-timesfm:latest
+    depends_on:
+      tradingview-mcp:
+        condition: service_started
+    profiles: [mcp]
+    command: ["8012"]
+    ports:
+      - "8012:8012"
+    environment: *mcp-env
+    env_file: *mcp-envfile
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8012/health'')"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - trade-net
+    restart: unless-stopped
+    mem_limit: 6g
+
   # --- Application ---
 
   cuga:
@@ -433,11 +463,16 @@ services:
       LANGFUSE_HOST: http://langfuse:3000
       PROMPT_VERSION: ${PROMPT_VERSION:-v1.0}
     volumes:
+      - ./scripts:/app/scripts
       - ./workflows:/app/workflows
       - ./normalizers:/app/normalizers
       - ./models.py:/app/models.py
       - ./merger.py:/app/merger.py
       - ./db.py:/app/db.py
+      - ./constants.py:/app/constants.py
+      - ./redis_client.py:/app/redis_client.py
+      - ./log_config.py:/app/log_config.py
+      - ./metrics.py:/app/metrics.py
       - ./discord_formatter.py:/app/discord_formatter.py
       - ./alert_logger.py:/app/alert_logger.py
       - ./notifier.py:/app/notifier.py
@@ -453,6 +488,9 @@ services:
       - ./alert_quality.py:/app/alert_quality.py
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
+      - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./decision_helpers.py:/app/decision_helpers.py
+      - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./logs:/app/logs
       - ./tests:/app/tests
