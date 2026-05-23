@@ -12,12 +12,66 @@ See README.md §Downstream Execution Integration.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal
+import logging
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+logger = logging.getLogger(__name__)
+
 ConvictionBand = Literal["watch", "low", "base", "high", "extreme"]
 AlertClass = Literal["execute", "watch", "info"]
+
+# Timeframe-aware execution TTL defaults (seconds).
+_EXECUTION_EXPIRY_BY_TIMEFRAME: dict[str, int] = {
+    "5m": 180,
+    "15m": 240,  # 4 minutes
+    "1h": 900,  # 15 minutes
+    "4h": 1800,
+    "1D": 3600,
+}
+_DEFAULT_EXECUTION_EXPIRY_SECONDS = 900
+
+
+def execution_expiry_seconds_for_timeframe(timeframe: str) -> int:
+    """Return execution payload TTL in seconds for *timeframe*."""
+    return _EXECUTION_EXPIRY_BY_TIMEFRAME.get(timeframe, _DEFAULT_EXECUTION_EXPIRY_SECONDS)
+
+
+def is_execution_expired(expires_at: str, *, now: datetime | None = None) -> bool:
+    """Return True when *expires_at* (ISO 8601 UTC) is in the past."""
+    reference = now if now is not None else datetime.now(UTC)
+    expiry = datetime.fromisoformat(expires_at)
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    return reference > expiry
+
+
+def should_dispatch_execution(
+    *,
+    expires_at: str,
+    idempotency_key: str,
+    already_dispatched: bool = False,
+) -> bool:
+    """Return False when dispatch should be skipped (expired or duplicate).
+
+    Logs the skip reason at INFO level.
+    """
+    if already_dispatched:
+        logger.info(
+            "Duplicate execution dispatch suppressed: idempotency_key=%s",
+            idempotency_key,
+        )
+        return False
+    if is_execution_expired(expires_at):
+        logger.info(
+            "Alert expired, not dispatching: idempotency_key=%s expires_at=%s",
+            idempotency_key,
+            expires_at,
+        )
+        return False
+    return True
 
 
 class EntryV1(BaseModel):
@@ -75,4 +129,4 @@ class ExecutionTriggerV1(BaseModel):
     conviction_score: float = Field(ge=0.0, le=1.0)
     conviction_band: ConvictionBand
     thesis_summary: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)

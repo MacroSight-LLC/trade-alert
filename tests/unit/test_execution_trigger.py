@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
-from execution_trigger import AlertClass, ConvictionBand, EntryV1, ExecutionTriggerV1
+from execution_trigger import (
+    EntryV1,
+    ExecutionTriggerV1,
+    execution_expiry_seconds_for_timeframe,
+    is_execution_expired,
+    should_dispatch_execution,
+)
 
 
 def _make_trigger(**overrides) -> ExecutionTriggerV1:
@@ -154,3 +162,58 @@ def test_metadata_populated_and_accessible():
     t = _make_trigger(metadata={"sources_agree": 5, "macro_regime": "risk-on"})
     assert t.metadata["sources_agree"] == 5
     assert t.metadata["macro_regime"] == "risk-on"
+
+
+# ── Expiry guards ──────────────────────────────────────────────────────────
+
+
+def test_execution_expiry_seconds_15m():
+    assert execution_expiry_seconds_for_timeframe("15m") == 240
+
+
+def test_execution_expiry_seconds_1h():
+    assert execution_expiry_seconds_for_timeframe("1h") == 900
+
+
+def test_is_execution_expired_past():
+    past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    assert is_execution_expired(past) is True
+
+
+def test_is_execution_expired_future():
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+    assert is_execution_expired(future) is False
+
+
+def test_should_dispatch_execution_expired():
+    past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    assert (
+        should_dispatch_execution(
+            expires_at=past,
+            idempotency_key="key-1",
+        )
+        is False
+    )
+
+
+def test_should_dispatch_execution_duplicate():
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+    assert (
+        should_dispatch_execution(
+            expires_at=future,
+            idempotency_key="key-1",
+            already_dispatched=True,
+        )
+        is False
+    )
+
+
+def test_should_dispatch_execution_ok():
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+    assert (
+        should_dispatch_execution(
+            expires_at=future,
+            idempotency_key="key-1",
+        )
+        is True
+    )

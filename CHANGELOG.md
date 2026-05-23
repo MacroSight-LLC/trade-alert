@@ -11,6 +11,24 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+### Added
+- Exhaustive gate unit tests (`tests/unit/test_validate_and_filter_extended.py`) covering all
+  23 `GateRejection` variants, regime classification, dynamic gates, EP ceiling, JSON parse
+  robustness, WATCH decay, dedup, and Redis circuit breaker behavior.
+- Gate-level alert deduplication (`DEDUP_SUPPRESSED`) with configurable TTL for directional
+  and WATCH alerts; dedup keys reset on WATCH→directional graduation.
+- Redis circuit breaker for WATCH decay path with `REDIS_CIRCUIT_OPEN` and
+  `WATCH_DECAY_SKIPPED` Prometheus metrics.
+- Hardened execution bridge: `ExecutionPayload` schema v1.0, DB `idempotency_key`, strict
+  webhook ack handling, expiry checks before dispatch.
+- Notifier decomposition: `discord_formatter.py`, `alert_logger.py`, `notifier.py` with
+  embed limit enforcement and Discord 429 backoff.
+- Dashboard API endpoints: `/api/health`, `/api/kpis`, `/api/session-stats`, `/api/circuit-breaker`
+  with Redis response caching; modernized `dashboard.html` (Nexus tokens, 30s polling).
+- Prompt token budget guard, per-(symbol,direction,timeframe) win-rate injection, ensemble
+  decision Langfuse logging, and optional `DECISION_FALLBACK_MODEL`.
+- CI: `uv sync --frozen --check` step, pre-commit uv-lock hook, Dependabot config.
+
 ### Fixed
 - Relocate CUGA-internal unit tests to `tests/cuga_upstream/`
   (FU-001 resolved); CI now uses a single `--ignore=tests/cuga_upstream/`

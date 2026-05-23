@@ -1,17 +1,21 @@
-"""Unit tests for the PlaybookAlert → ExecutionTriggerV1 mapper."""
+"""Unit tests for the PlaybookAlert → ExecutionTriggerV1 / ExecutionPayload mapper."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from execution_mapper import (
     _alert_class,
     _compute_risk_reward,
     _conviction_band,
+    _parse_vix_from_macro,
+    map_to_execution_payload,
     map_to_execution_trigger,
 )
+from execution_trigger import execution_expiry_seconds_for_timeframe
 from models import PlaybookAlert
 
 
@@ -209,3 +213,106 @@ def test_map_short_alert_class_and_rr(short_alert: PlaybookAlert):
     assert trigger.alert_class == "execute"
     assert trigger.direction == "SHORT"
     assert trigger.entry.risk_reward > 0
+
+
+# ── ExecutionPayload ───────────────────────────────────────────────────────
+
+
+def test_execution_payload_schema_version(sample_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        sample_alert,
+        alert_id="42",
+        idempotency_key="key-001",
+    )
+    assert payload.schema_version == "1.0"
+    data = payload.model_dump()
+    assert data["schema_version"] == "1.0"
+
+
+def test_execution_payload_fields(sample_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        sample_alert,
+        alert_id="42",
+        idempotency_key="key-001",
+        pipeline_trace_id="trace-abc",
+    )
+    assert payload.alert_id == "42"
+    assert payload.idempotency_key == "key-001"
+    assert payload.symbol == "NVDA"
+    assert payload.direction == "LONG"
+    assert payload.entry_level == 875.0
+    assert payload.stop_level == 865.0
+    assert payload.target_level == 900.0
+    assert payload.edge_probability == pytest.approx(0.82)
+    assert payload.confidence == pytest.approx(0.85)
+    assert payload.sources_agree == sample_alert.sources_agree
+    assert payload.regime == sample_alert.macro_regime
+    assert payload.pipeline_trace_id == "trace-abc"
+
+
+def test_execution_payload_parses_vix_from_macro(sample_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        sample_alert,
+        alert_id="1",
+        idempotency_key="k",
+    )
+    assert payload.vix == pytest.approx(13.2)
+
+
+def test_parse_vix_from_macro_missing_returns_zero():
+    assert _parse_vix_from_macro("Risk-on environment") == 0.0
+
+
+def test_execution_payload_invalid_long_ordering_raises(sample_alert: PlaybookAlert):
+    bad = sample_alert.model_copy(
+        update={"entry": {"level": 875.0, "stop": 900.0, "target": 880.0}}
+    )
+    with pytest.raises(ValidationError):
+        map_to_execution_payload(bad, alert_id="1", idempotency_key="k")
+
+
+def test_execution_payload_invalid_short_ordering_raises(short_alert: PlaybookAlert):
+    bad = short_alert.model_copy(
+        update={"entry": {"level": 250.0, "stop": 240.0, "target": 235.0}}
+    )
+    with pytest.raises(ValidationError):
+        map_to_execution_payload(bad, alert_id="1", idempotency_key="k")
+
+
+def test_execution_payload_watch_raises(watch_alert: PlaybookAlert):
+    with pytest.raises(ValueError, match="not executable"):
+        map_to_execution_payload(watch_alert, alert_id="1", idempotency_key="k")
+
+
+def test_execution_payload_frozen(sample_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        sample_alert,
+        alert_id="1",
+        idempotency_key="k",
+    )
+    with pytest.raises(ValidationError):
+        payload.symbol = "AAPL"
+
+
+def test_execution_payload_timeframe_expiry_15m(sample_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        sample_alert,
+        alert_id="1",
+        idempotency_key="k",
+    )
+    created = datetime.fromisoformat(payload.created_at)
+    expires = datetime.fromisoformat(payload.expires_at)
+    expected = execution_expiry_seconds_for_timeframe("15m")
+    assert abs((expires - created).total_seconds() - expected) < 2
+
+
+def test_execution_payload_timeframe_expiry_1h(short_alert: PlaybookAlert):
+    payload = map_to_execution_payload(
+        short_alert,
+        alert_id="1",
+        idempotency_key="k",
+    )
+    created = datetime.fromisoformat(payload.created_at)
+    expires = datetime.fromisoformat(payload.expires_at)
+    expected = execution_expiry_seconds_for_timeframe("1h")
+    assert abs((expires - created).total_seconds() - expected) < 2

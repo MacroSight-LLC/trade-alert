@@ -392,12 +392,21 @@ def run_healthcheck(timeframe: str) -> None:
         langfuse_status = check_langfuse()
         check_recent_alerts(timeframe)
 
+        redis_circuit_degraded = False
+        try:
+            from validate_and_filter import is_redis_circuit_open
+
+            redis_circuit_degraded = is_redis_circuit_open()
+        except ImportError:
+            pass
+
         # SSOT §13: structured JSONL log entry
         _append_jsonl(
             {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "timeframe": timeframe,
                 "redis_ok": redis_ok,
+                "redis_circuit_open": redis_circuit_degraded,
                 "snapshot_stale_warning": snapshot_stale_warning,
                 "pg_ok": pg_ok,
                 "mcp_healthy": healthy_mcps,
@@ -421,6 +430,8 @@ def run_healthcheck(timeframe: str) -> None:
             failures.append(f"MCPs={mcp_icon} ({', '.join(unhealthy_mcps)})")
         if langfuse_status == "DEGRADED":
             failures.append("Langfuse=⚠️ DEGRADED")
+        if redis_circuit_degraded:
+            failures.append("Redis circuit=⚠️ DEGRADED (WATCH decay disabled)")
 
         if failures:
             msg = f"⚠️ Healthcheck FAILED [{timeframe}]: {' | '.join(failures)}"

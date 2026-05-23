@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -115,6 +116,7 @@ def insert_alert(
     forecast_score: float | None = None,
     forecast_contradicted: bool = False,
     trace_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> int:
     """Insert a PlaybookAlert into the alerts table.
 
@@ -124,21 +126,25 @@ def insert_alert(
         forecast_score: TimesFM price_forecast score for this symbol (optional).
         forecast_contradicted: Whether the forecast gate was triggered (optional).
         trace_id: Langfuse trace ID for outcome linkage (optional).
+        idempotency_key: UUID for execution dedup (generated when omitted).
 
     Returns:
         The auto-generated ``id`` of the new row.
     """
+    key = idempotency_key or str(uuid.uuid4())
     sql = """
         INSERT INTO alerts (
             symbol, direction, edge_probability, confidence, timeframe,
             thesis, entry, timeframe_rationale, sentiment_context,
             unusual_activity, macro_regime, sources_agree, raw_snapshots,
-            forecast_score, forecast_contradicted, langfuse_trace_id
+            forecast_score, forecast_contradicted, langfuse_trace_id,
+            idempotency_key
         ) VALUES (
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s
+            %s, %s, %s,
+            %s
         )
         RETURNING id
     """
@@ -164,11 +170,53 @@ def insert_alert(
                     forecast_score,
                     forecast_contradicted,
                     trace_id,
+                    key,
                 ),
             )
             row = cur.fetchone()
             conn.commit()
             return row[0]
+    finally:
+        _put_conn(conn)
+
+
+def check_idempotency_key_exists(key: str) -> bool:
+    """Return True if an alert row already exists with *key*."""
+    sql = "SELECT 1 FROM alerts WHERE idempotency_key = %s LIMIT 1"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (key,))
+            return cur.fetchone() is not None
+    finally:
+        _put_conn(conn)
+
+
+def is_execution_dispatched(alert_id: int) -> bool:
+    """Return True when execution webhook ack was recorded for *alert_id*."""
+    sql = "SELECT execution_dispatched FROM alerts WHERE id = %s"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (alert_id,))
+            row = cur.fetchone()
+            return bool(row and row[0])
+    finally:
+        _put_conn(conn)
+
+
+def mark_execution_dispatched(alert_id: int) -> None:
+    """Mark an alert as successfully dispatched to trade-execute."""
+    sql = """
+        UPDATE alerts
+        SET execution_dispatched = TRUE, updated_at = NOW()
+        WHERE id = %s
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (alert_id,))
+            conn.commit()
     finally:
         _put_conn(conn)
 

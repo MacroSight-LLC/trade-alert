@@ -193,6 +193,30 @@ pytest tests/unit/ --cov=. --cov-report=term-missing
 python tests/integration/integration_smoke.py
 ```
 
+### Reconciliation pipeline (validate_and_filter test fixtures)
+
+Two server-side stages in `validate_and_filter.py` silently transform inputs
+in ways that are invisible from the public `validate_and_filter()` signature.
+Test fixtures must account for both:
+
+1. **Server-side `sources_agree` reconciliation** — Before gate thresholds
+   run, the LLM-claimed `sources_agree` is overwritten with a deterministic
+   value from `_aligned_family_count()` over aligned signal families in the
+   snapshot, plus optional macro-context injection (`SA_INCLUDE_MACRO_CONTEXT`)
+   and forecast confirmation bonus. Tests that hardcode both a `sources_agree`
+   value and a snapshot fixture get the LLM value clobbered without warning.
+   Derive expected SA from snapshot signal families instead.
+
+2. **High-confidence / SA coupling** — When `confidence >= HIGH_CONFIDENCE_MIN`
+   (default `0.85`), `sources_agree` must also be `>= HIGH_CONFIDENCE_MIN_SA`
+   (default `5`) or the alert is rejected with `HIGH_CONFIDENCE_ALIGNMENT`.
+   High confidence alone does not bypass the SA gate.
+
+Relevant env tunables: `SA_FAMILY_MIN_SCORE`, `SA_INCLUDE_MACRO_CONTEXT`,
+`SA_MACRO_CONTEXT_SCORE`, `HIGH_CONFIDENCE_MIN`, `HIGH_CONFIDENCE_MIN_SA`.
+
+Reference fixtures: [`tests/unit/test_validate_and_filter_extended.py`](./tests/unit/test_validate_and_filter_extended.py).
+
 ### CUGA Framework Tests (upstream)
 
 ```bash
@@ -207,6 +231,11 @@ Any new `.py` file added to the repo root or a tracked subdirectory MUST be adde
 to the directory layout in `CUGA-Trading-Alert-System-SPEC-v1.3.md` §6 in the
 same PR. The SSOT is the single source of truth for what lives in the repo, so a
 new module that is missing from §6 will fail review.
+
+`SSOT.md` at the repo root is a symlink to `CUGA-Trading-Alert-System-SPEC-v1.3.md`.
+Application Python modules live at the repo root by design; `src/cuga/` is the
+upstream CUGA library and must not be edited. CUGA runtime workflows live in
+`workflows/`; GitHub Actions CI configs live in `.github/workflows/`.
 
 Design prototypes (mockups, HTML/CSS sketches, visual references) belong in
 `docs/`, not at the repo root. The original `design.html` was moved to
@@ -227,7 +256,7 @@ uv run detect-secrets scan --baseline .secrets.baseline
 
 | Baseline audit | Date       | Commit SHA |
 | -------------- | ---------- | ---------- |
-| Last update    | 2026-05-22 | (this PR)  |
+| Last update    | 2026-05-23 | IBM fork `0.13.1+ibm.64.dss` rescan |
 
 Do not commit any of `.env`, `.env.secrets`, `.env.local`, `secrets/`, or any
 other file whose name suggests credentials. The relevant `.gitignore` patterns

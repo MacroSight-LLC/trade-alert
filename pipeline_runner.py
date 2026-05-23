@@ -394,14 +394,15 @@ def _llm_call(
 ) -> str:
     """Call the LLM via litellm.completion with Langfuse tracing.
 
-    Retries transient failures with exponential backoff + jitter
-    (SSOT §0.1: all external calls must have retries).
+    Retries transient failures with exponential backoff + jitter.
+    Falls back to ``DECISION_FALLBACK_MODEL`` when primary exhausts retries.
     """
     import random
 
     import litellm
 
-    # Parse SYSTEM: ... USER: ... format if present
+    fallback_model = os.environ.get("DECISION_FALLBACK_MODEL", "").strip()
+
     system_msg = ""
     user_msg = prompt
     if prompt.startswith("SYSTEM:"):
@@ -415,63 +416,80 @@ def _llm_call(
         messages.append({"role": "system", "content": system_msg})
     messages.append({"role": "user", "content": user_msg})
 
-    # Add provider prefix if not already present
-    if "/" not in model:
-        litellm_model = f"anthropic/{model}"
-    else:
-        litellm_model = model
+    def _resolve_litellm_model(name: str) -> str:
+        if "/" not in name:
+            return f"anthropic/{name}"
+        return name
 
-    # Langfuse metadata — links generation to the pipeline trace.
-    # Use existing_trace_id (not trace_id) so LiteLLM's Langfuse callback
-    # links the generation to our trace without overwriting its name.
-    lf_metadata: dict[str, Any] = {
-        "generation_name": step_name,
-    }
-    if trace_id:
-        lf_metadata["existing_trace_id"] = trace_id
-        lf_metadata["update_trace_keys"] = []
+    def _run_model(model_name: str, *, used_fallback: bool) -> str:
+        litellm_model = _resolve_litellm_model(model_name)
+        lf_metadata: dict[str, Any] = {"generation_name": step_name}
+        if trace_id:
+            lf_metadata["existing_trace_id"] = trace_id
+            lf_metadata["update_trace_keys"] = []
+        if used_fallback:
+            lf_metadata["used_fallback"] = True
+        try:
+            from prompt_manager import get_gate_defaults, get_prompt_source, get_prompt_version
+
+            lf_metadata["prompt_version"] = get_prompt_version()
+            lf_metadata["prompt_source"] = get_prompt_source()
+            lf_metadata["gates"] = get_gate_defaults()
+        except (ImportError, AttributeError, TypeError):
+            pass
+
+        last_exc: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = litellm.completion(
+                    model=litellm_model,
+                    messages=messages,
+                    max_tokens=4096,
+                    temperature=0.2,
+                    timeout=120,
+                    metadata=lf_metadata,
+                )
+                return response.choices[0].message.content
+            except (
+                litellm.exceptions.RateLimitError,
+                litellm.exceptions.ServiceUnavailableError,
+                litellm.exceptions.APIConnectionError,
+                litellm.exceptions.Timeout,
+            ) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    backoff = (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "LLM call attempt %d/%d failed (%s), retrying in %.1fs",
+                        attempt,
+                        max_retries,
+                        type(exc).__name__,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                else:
+                    logger.error("LLM call failed after %d attempts: %s", max_retries, exc)
+        raise last_exc  # type: ignore[misc]
 
     try:
-        from prompt_manager import get_gate_defaults, get_prompt_source, get_prompt_version
+        return _run_model(model, used_fallback=False)
+    except Exception as primary_exc:
+        if not fallback_model or fallback_model == model:
+            raise
+        logger.warning(
+            "Primary model %s failed — falling back to %s: %s",
+            model,
+            fallback_model,
+            primary_exc,
+        )
+        if trace_id:
+            try:
+                from pipeline_tracing import tag_trace
 
-        lf_metadata["prompt_version"] = get_prompt_version()
-        lf_metadata["prompt_source"] = get_prompt_source()
-        lf_metadata["gates"] = get_gate_defaults()
-    except (ImportError, AttributeError, TypeError):
-        pass
-
-    last_exc: Exception | None = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = litellm.completion(
-                model=litellm_model,
-                messages=messages,
-                max_tokens=4096,
-                temperature=0.2,
-                timeout=120,
-                metadata=lf_metadata,
-            )
-            return response.choices[0].message.content
-        except (
-            litellm.exceptions.RateLimitError,
-            litellm.exceptions.ServiceUnavailableError,
-            litellm.exceptions.APIConnectionError,
-            litellm.exceptions.Timeout,
-        ) as exc:
-            last_exc = exc
-            if attempt < max_retries:
-                backoff = (2**attempt) + random.uniform(0, 1)
-                logger.warning(
-                    "LLM call attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt,
-                    max_retries,
-                    type(exc).__name__,
-                    backoff,
-                )
-                time.sleep(backoff)
-            else:
-                logger.error("LLM call failed after %d attempts: %s", max_retries, exc)
-    raise last_exc  # type: ignore[misc]
+                tag_trace(trace_id, ["used_fallback=True"])
+            except ImportError:
+                pass
+        return _run_model(fallback_model, used_fallback=True)
 
 
 # ── Step executors ───────────────────────────────────────────────────

@@ -27,7 +27,7 @@ jobs:
       - name: Ruff check
         run: |
           ruff check \
-            models.py merger.py db.py notifier_and_logger.py \
+            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
             healthcheck.py outcome_tracker.py langfuse_client.py \
             prompt_manager.py pipeline_tracing.py trace_analyzer.py \
             vault_env_loader.py dashboard_api.py alert_quality.py \
@@ -37,7 +37,7 @@ jobs:
       - name: Ruff format check
         run: |
           ruff format --check \
-            models.py merger.py db.py notifier_and_logger.py \
+            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
             healthcheck.py outcome_tracker.py langfuse_client.py \
             prompt_manager.py pipeline_tracing.py trace_analyzer.py \
             vault_env_loader.py dashboard_api.py alert_quality.py \
@@ -216,6 +216,8 @@ jobs:
             # Application
             check "Dashboard" "curl -sf http://localhost:8080/api/summary"
             check "Cuga"      "$DC ps cuga --format '{{.Health}}' | grep -q healthy"
+            check "VAULT_REQUIRED" "$DC exec -T cuga printenv VAULT_REQUIRED | grep -qi true"
+            check "Vault secrets loaded" "$DC exec -T cuga python vault_env_loader.py | grep -q 'Loaded'"
 
             # MCP spot-check (first 3)
             for port in 8001 8002 8003; do

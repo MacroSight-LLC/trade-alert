@@ -438,7 +438,11 @@ services:
       - ./models.py:/app/models.py
       - ./merger.py:/app/merger.py
       - ./db.py:/app/db.py
+      - ./discord_formatter.py:/app/discord_formatter.py
+      - ./alert_logger.py:/app/alert_logger.py
+      - ./notifier.py:/app/notifier.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./trace_analyzer.py:/app/trace_analyzer.py

@@ -7,17 +7,45 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
         :root {
-            --bg: #0f1117;
-            --card: #1a1d29;
-            --border: #2a2d3a;
-            --text: #e1e4ea;
-            --muted: #8a8f9d;
-            --green: #22c55e;
-            --red: #ef4444;
-            --blue: #3b82f6;
-            --purple: #a855f7;
-            --amber: #f59e0b;
-            --cyan: #06b6d4;
+            --color-bg: #1a1814;
+            --color-surface: #252119;
+            --color-surface-2: #2f2a22;
+            --color-primary: #2dd4bf;
+            --color-error: #7f1d1d;
+            --color-gold: #d4a853;
+            --color-text: #e8e4dc;
+            --color-muted: #9a9288;
+            --text-xs: 0.75rem;
+            --text-sm: 0.875rem;
+            --text-base: 1rem;
+            --text-xl: 1.25rem;
+            /* legacy aliases */
+            --bg: var(--color-bg);
+            --card: var(--color-surface);
+            --border: #3d362c;
+            --text: var(--color-text);
+            --muted: var(--color-muted);
+            --green: var(--color-primary);
+            --red: #c45c5c;
+            --blue: var(--color-primary);
+            --amber: var(--color-gold);
+        }
+        body.light {
+            --color-bg: #f5f0e8;
+            --color-surface: #fffdf9;
+            --color-surface-2: #ebe4d8;
+            --color-text: #1a1814;
+            --color-muted: #6b6358;
+            --bg: var(--color-bg);
+            --card: var(--color-surface);
+            --text: var(--color-text);
+            --muted: var(--color-muted);
+            --border: #d4ccc0;
+        }
+        .kpi.flash .value { animation: kpiFlash 0.6s ease; }
+        @keyframes kpiFlash {
+            0%, 100% { color: inherit; }
+            50% { color: var(--color-primary); }
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -194,6 +222,8 @@
     <div class="header">
         <h1>📊 <span>Trade Alert</span> Dashboard</h1>
         <div class="status">
+            <span id="system-status" class="badge badge-open">—</span>
+            <button type="button" id="theme-toggle" style="margin-left:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer">Theme</button>
             <div class="dot"></div>
             <span id="last-updated">Loading...</span>
         </div>
@@ -204,6 +234,10 @@
     </div>
 
     <div class="charts-grid">
+        <div class="chart-card">
+            <h3>Gate Rejections (session)</h3>
+            <canvas id="gateChart"></canvas>
+        </div>
         <div class="chart-card">
             <h3>Winrate by Edge Probability</h3>
             <canvas id="winrateChart"></canvas>
@@ -249,9 +283,15 @@
 
 <script>
 const API = window.location.origin + '/api';
+const POLL_MS = 30000;
+let gateChartInstance = null;
 
-Chart.defaults.color = '#8a8f9d';
-Chart.defaults.borderColor = '#2a2d3a';
+document.getElementById('theme-toggle')?.addEventListener('click', () => {
+    document.body.classList.toggle('light');
+});
+
+Chart.defaults.color = '#9a9288';
+Chart.defaults.borderColor = '#3d362c';
 Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 Chart.defaults.font.size = 12;
 
@@ -279,40 +319,66 @@ async function fetchJSON(url) {
 // ── KPIs ────────────────────────────────────────────────
 async function loadKPIs() {
     try {
-        const s = await fetchJSON(API + '/summary');
+        const [s, health, kpis] = await Promise.all([
+            fetchJSON(API + '/summary'),
+            fetchJSON(API + '/health'),
+            fetchJSON(API + '/kpis'),
+        ]);
+        const statusEl = document.getElementById('system-status');
+        if (statusEl) {
+            const st = health.status || 'unknown';
+            statusEl.textContent = st.toUpperCase();
+            statusEl.className = 'badge ' + (st === 'live' ? 'badge-win' : st === 'degraded' ? 'badge-open' : 'badge-loss');
+        }
         const grid = document.getElementById('kpi-grid');
-        const kpiTarget70 = s.kpi_winrate_70 != null ? s.kpi_winrate_70 >= 0.65 : null;
+        const rejRate = kpis.gate_rejection_rate != null ? (kpis.gate_rejection_rate * 100).toFixed(1) + '%' : '—';
         grid.innerHTML = `
-            <div class="kpi">
-                <div class="label">Total Alerts</div>
-                <div class="value neutral">${s.total_alerts}</div>
-                <div class="sub">${s.alerts_today} today</div>
-                <div class="target">Target: ≥12/day</div>
+            <div class="kpi flash">
+                <div class="label">Alerts Today</div>
+                <div class="value neutral">${s.alerts_today ?? 0}</div>
+                <div class="sub">${s.total_alerts} total</div>
             </div>
-            <div class="kpi">
-                <div class="label">Overall Winrate</div>
+            <div class="kpi flash">
+                <div class="label">Win Rate (30d)</div>
                 <div class="value ${s.overall_winrate >= 0.65 ? 'positive' : s.overall_winrate != null ? 'negative' : ''}">${pct(s.overall_winrate)}</div>
-                <div class="sub">${s.wins}W / ${s.losses}L / ${s.scratches}S</div>
+                <div class="sub">${s.wins}W / ${s.losses}L</div>
             </div>
-            <div class="kpi">
-                <div class="label">KPI Winrate (Edge≥70%)</div>
-                <div class="value ${kpiTarget70 === true ? 'positive' : kpiTarget70 === false ? 'negative' : ''}">${pct(s.kpi_winrate_70)}</div>
-                <div class="target">Target: ≥65%</div>
+            <div class="kpi flash">
+                <div class="label">Gate Rejection Rate</div>
+                <div class="value">${rejRate}</div>
             </div>
-            <div class="kpi">
-                <div class="label">Avg Edge Probability</div>
-                <div class="value">${pct(s.avg_edge)}</div>
-            </div>
-            <div class="kpi">
-                <div class="label">Avg PnL</div>
-                <div class="value ${s.avg_pnl > 0 ? 'positive' : s.avg_pnl < 0 ? 'negative' : ''}">${num(s.avg_pnl, 4)}</div>
-                <div class="sub">${s.resolved} resolved</div>
+            <div class="kpi flash">
+                <div class="label">Redis Health</div>
+                <div class="value ${health.redis_ok ? 'positive' : 'negative'}">${health.redis_ok ? 'OK' : 'DOWN'}</div>
+                <div class="sub">${health.redis_latency_ms != null ? health.redis_latency_ms + 'ms' : ''}</div>
             </div>
         `;
     } catch (err) {
         document.getElementById('kpi-grid').innerHTML =
             '<div class="error-msg">Failed to load KPIs: ' + err.message + '</div>';
     }
+}
+
+async function loadGateChart() {
+    try {
+        const data = await fetchJSON(API + '/session-stats?timeframe=15m&date=today');
+        const stats = data.stats || {};
+        const gates = Object.entries(stats)
+            .filter(([k]) => k.startsWith('gate_') && !k.includes('gate_dir') && !k.includes('gate_watch'))
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 12);
+        if (!gates.length) return;
+        const ctx = document.getElementById('gateChart');
+        if (gateChartInstance) gateChartInstance.destroy();
+        gateChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: gates.map(([k]) => k.replace('gate_', '')),
+                datasets: [{ label: 'Rejections', data: gates.map(([, v]) => v), backgroundColor: 'rgba(196,92,92,0.7)', borderRadius: 4 }],
+            },
+            options: { responsive: true, scales: { y: { beginAtZero: true } } },
+        });
+    } catch (err) { console.error('Gate chart error:', err); }
 }
 
 // ── Winrate Chart ───────────────────────────────────────
@@ -472,7 +538,7 @@ async function loadAlerts() {
                 <td>$${num(entry.stop)}</td>
                 <td>$${num(entry.target)}</td>
                 <td>${rr(entry)}</td>
-                <td>${a.sources_agree ?? '—'}/10</td>
+                <td>${a.sources_agree ?? '—'}/7</td>
                 <td><span class="badge ${outClass}">${out || 'OPEN'}</span></td>
                 <td>${a.outcome_pnl != null ? num(a.outcome_pnl, 4) : '—'}</td>
             </tr>`;
@@ -485,14 +551,13 @@ async function loadAlerts() {
 
 // ── Init ────────────────────────────────────────────────
 async function init() {
-    await Promise.all([loadKPIs(), loadWinrate(), loadFrequency(), loadSymbols(), loadAlerts()]);
+    await Promise.all([loadKPIs(), loadGateChart(), loadWinrate(), loadFrequency(), loadSymbols(), loadAlerts()]);
     document.getElementById('last-updated').textContent =
         'Updated ' + new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
 }
 
 init();
-// Auto-refresh every 5 minutes
-setInterval(init, 5 * 60 * 1000);
+setInterval(init, POLL_MS);
 </script>
 </body>
 </html>

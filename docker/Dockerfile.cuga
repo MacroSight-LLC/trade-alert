@@ -42,7 +42,11 @@ COPY constants.py /app/constants.py
 COPY redis_client.py /app/redis_client.py
 COPY log_config.py /app/log_config.py
 COPY metrics.py /app/metrics.py
+COPY discord_formatter.py /app/discord_formatter.py
+COPY alert_logger.py /app/alert_logger.py
+COPY notifier.py /app/notifier.py
 COPY notifier_and_logger.py /app/notifier_and_logger.py
+COPY eod_summary.py /app/eod_summary.py
 COPY healthcheck.py /app/healthcheck.py
 COPY outcome_tracker.py /app/outcome_tracker.py
 COPY trace_analyzer.py /app/trace_analyzer.py

@@ -362,6 +362,49 @@ def build_prompt(
     return {"prompt": full_prompt, "prompt_version": get_prompt_version()}
 
 
+def log_ensemble_decision(
+    trace_id: str | None,
+    *,
+    timeframe: str,
+    snapshots_json: str,
+    llm_response: Any,
+    macro: dict[str, Any],
+    vix: float,
+    regime: str = "unknown",
+    market_session: str = "unknown",
+) -> None:
+    """Log LLM decision I/O to Langfuse without exposing raw signal payloads."""
+    if not trace_id:
+        return
+    try:
+        from pipeline_tracing import add_score, tag_trace
+
+        snaps = json.loads(snapshots_json) if snapshots_json else []
+        type_counts: dict[str, int] = {}
+        for snap in snaps:
+            for sig in snap.get("signals", []):
+                t = str(sig.get("type", "unknown"))
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+        summary = f"symbols={len(snaps)} types={type_counts}"
+        add_score(trace_id, "decision_input_summary", float(len(snaps)), comment=summary[:500])
+
+        raw_out = str(llm_response or "")[:10240]
+        add_score(trace_id, "decision_raw_response_len", float(len(raw_out)), comment=raw_out[:2000])
+
+        tag_trace(
+            trace_id,
+            [
+                f"timeframe:{timeframe}",
+                f"vix:{vix:.1f}",
+                f"regime:{regime}",
+                f"session:{market_session}",
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Ensemble decision logging failed (non-blocking): %s", exc)
+
+
 def validate_and_filter_step(
     timeframe: str,
     llm_response: Any,
@@ -395,7 +438,31 @@ def validate_and_filter_step(
 
     from validate_and_filter import validate_and_filter as _vf
 
-    if add_score and trace_id:
+    _regime = "unknown"
+    _session = "unknown"
+    try:
+        from validate_and_filter import _classify_regime, _market_session_bucket, _signal_surface
+
+        _risk_off = not _macro.get("risk_on", True)
+        _snaps = json.loads(merge_result.get("snapshots_json", "[]"))
+        _b, _be, _ts = _signal_surface(_snaps)
+        _regime = _classify_regime(_vix, _risk_off, _b, _be, _ts)
+        _session = _market_session_bucket()
+    except Exception:  # noqa: BLE001
+        pass
+
+    log_ensemble_decision(
+        trace_id,
+        timeframe=timeframe,
+        snapshots_json=merge_result.get("snapshots_json", "[]"),
+        llm_response=llm_response,
+        macro=_macro,
+        vix=_vix,
+        regime=_regime,
+        market_session=_session,
+    )
+
+    if add_score is not None and trace_id:
         _ps = merge_result.get("prune_stats") or {}
         _in = float(_ps.get("input", 0))
         _kept = float(_ps.get("kept", 0))
@@ -457,7 +524,7 @@ def validate_and_filter_step(
     except Exception as de:
         logger.debug("Dataset capture failed (non-blocking): %s", de)
 
-    if tag_trace and trace_id:
+    if tag_trace is not None and trace_id:
         tag_trace(trace_id, [f"alerts:{len(alerts)}"])
 
     return result

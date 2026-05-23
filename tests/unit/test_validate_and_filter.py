@@ -940,6 +940,7 @@ class TestGateRejectionEnum:
             "watch_dropped_directional_present",
             "watch_decay",
             "market_session_closed",
+            "dedup_suppressed",
         }
         assert {m.value for m in GateRejection} == expected
 

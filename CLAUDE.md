@@ -43,8 +43,14 @@ or function specified.
 - 24 containers (docker-compose.prod.yml)
 - 12 MCP servers (ports 8001–8012): TradingView, Polygon, Discord, Finnhub, ROT, EDGAR, YFinance, Trading, FRED, SpamShield, Alpaca, TimesFM
 - 11 signal types: technical_trend, volume_spike, sentiment_bull, sentiment_bear, options_flow, insider_activity, relative_strength, macro_risk_off, catalyst_event, short_interest, price_forecast
-- 7 collectors, merger, Claude Sonnet 4 decision engine, 7-gate validate_and_filter, notifier with candlestick charts
-- Redis for snapshot queues (TTL 900s)
+- 7 collectors, merger, Claude Sonnet 4.5 decision engine, 22-gate validate_and_filter, notifier with candlestick charts
+- Redis for snapshot queues; WATCH decay uses `watch:decay:{timeframe}:{symbol}` keys
+- Gate-level dedup keys: `dedup:alert:{timeframe}:{direction}:{symbol}`
+- Redis circuit breaker env vars: `REDIS_FAILURE_THRESHOLD`, `REDIS_FAILURE_WINDOW_SECONDS`
+- Dedup env vars: `ALERT_DEDUP_TTL_SECONDS`, `ALERT_DEDUP_ENABLED`, `WATCH_DEDUP_TTL_SECONDS`
+- Execution bridge idempotency via `idempotency_key` column and `ExecutionPayload` schema v1.0
+- Notifier modules: `discord_formatter.py`, `alert_logger.py`, `notifier.py` (shim: `notifier_and_logger.py`)
+- Prometheus: `trade_alert_redis_circuit_open`, `trade_alert_watch_decay_skipped_total`
 - Postgres for alert logging (JSONB) and win-rate history
 - Vault (server mode, file backend, auto-unseal via deployment/vault-entrypoint.sh)
 - Langfuse for prompt management + observability tracing

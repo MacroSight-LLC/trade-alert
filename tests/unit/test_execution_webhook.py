@@ -9,7 +9,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from execution_mapper import ExecutionPayload
 from execution_trigger import EntryV1, ExecutionTriggerV1
+
+
+@pytest.fixture()
+def sample_payload() -> ExecutionPayload:
+    return ExecutionPayload(
+        idempotency_key="key-test-001",
+        alert_id="42",
+        symbol="AAPL",
+        direction="LONG",
+        timeframe="15m",
+        entry_level=185.0,
+        stop_level=182.0,
+        target_level=192.0,
+        edge_probability=0.82,
+        confidence=0.85,
+        sources_agree=5,
+        regime="Risk-on. VIX 14.0.",
+        vix=14.0,
+        created_at="2026-04-15T12:00:00+00:00",
+        expires_at="2026-04-15T12:15:00+00:00",
+    )
 
 
 @pytest.fixture()
@@ -31,10 +53,16 @@ def sample_trigger() -> ExecutionTriggerV1:
     )
 
 
-def _mock_response(status_code: int, text: str = "OK") -> MagicMock:
+def _mock_response(status_code: int, text: str = "OK", json_body: dict | None = None) -> MagicMock:
     r = MagicMock()
     r.status_code = status_code
     r.text = text
+    if json_body is None and status_code == 200:
+        json_body = {"accepted": True, "execution_id": "exec-123"}
+    if json_body is None:
+        r.json.side_effect = ValueError("no json")
+    else:
+        r.json.return_value = json_body
     return r
 
 
@@ -139,7 +167,7 @@ def test_deliver_success_on_first_attempt(sample_trigger: ExecutionTriggerV1):
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 3),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 3),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -159,7 +187,7 @@ def test_deliver_retries_on_503_then_succeeds(sample_trigger: ExecutionTriggerV1
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 3),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 3),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
         patch("execution_webhook.time.sleep"),
@@ -183,7 +211,7 @@ def test_deliver_no_retry_on_400(sample_trigger: ExecutionTriggerV1):
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 3),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 3),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -203,7 +231,7 @@ def test_deliver_exhausted_retries_returns_false(sample_trigger: ExecutionTrigge
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 3),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 3),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
         patch("execution_webhook.time.sleep"),
@@ -227,7 +255,7 @@ def test_deliver_inserts_success_audit_row(sample_trigger: ExecutionTriggerV1):
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 1),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 1),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -247,7 +275,7 @@ def test_deliver_inserts_failed_audit_row_on_exhaustion(sample_trigger: Executio
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 2),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 2),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
         patch("execution_webhook.time.sleep"),
@@ -269,7 +297,7 @@ def test_deliver_inserts_failed_audit_row_on_4xx(sample_trigger: ExecutionTrigge
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 3),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 3),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -293,7 +321,7 @@ def test_hmac_headers_present_in_post_call(sample_trigger: ExecutionTriggerV1):
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 1),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 1),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -317,7 +345,7 @@ def test_hmac_content_type_json(sample_trigger: ExecutionTriggerV1):
         patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
         patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
         patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
-        patch("execution_webhook.TRADE_EXECUTE_MAX_RETRIES", 1),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 1),
         patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
         patch("execution_webhook._get_client", return_value=mock_client),
     ):
@@ -327,4 +355,73 @@ def test_hmac_content_type_json(sample_trigger: ExecutionTriggerV1):
 
     headers = mock_client.post.call_args.kwargs["headers"]
     assert headers["Content-Type"] == "application/json"
+
+
+# ── strict ack contract ───────────────────────────────────────────────────
+
+
+def test_deliver_payload_requires_accepted_json(sample_payload: ExecutionPayload):
+    mock_db = _make_mock_db()
+    mock_client = MagicMock()
+    mock_client.post.return_value = _mock_response(
+        200,
+        json_body={"accepted": False},
+    )
+    with (
+        patch.dict(sys.modules, {"db": mock_db}),
+        patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
+        patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
+        patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 2),
+        patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
+        patch("execution_webhook._get_client", return_value=mock_client),
+        patch("execution_webhook.time.sleep"),
+        patch("execution_webhook.GATE_REJECTIONS") as mock_gate,
+    ):
+        from execution_webhook import deliver_execution_payload
+
+        result = deliver_execution_payload(sample_payload)
+    assert result is False
+    assert mock_client.post.call_count == 2
+    mock_gate.labels.assert_called_with(gate="execution_webhook_failed")
+
+
+def test_deliver_payload_success_on_valid_ack(sample_payload: ExecutionPayload):
+    mock_db = _make_mock_db()
+    mock_client = MagicMock()
+    mock_client.post.return_value = _mock_response(200)
+    with (
+        patch.dict(sys.modules, {"db": mock_db}),
+        patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
+        patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
+        patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 1),
+        patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
+        patch("execution_webhook._get_client", return_value=mock_client),
+    ):
+        from execution_webhook import deliver_execution_payload
+
+        assert deliver_execution_payload(sample_payload) is True
+
+
+def test_deliver_non_200_not_success(sample_trigger: ExecutionTriggerV1):
+    mock_db = _make_mock_db()
+    mock_client = MagicMock()
+    mock_client.post.return_value = _mock_response(
+        201,
+        json_body={"accepted": True, "execution_id": "x"},
+    )
+    with (
+        patch.dict(sys.modules, {"db": mock_db}),
+        patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
+        patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
+        patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
+        patch("execution_webhook.EXECUTION_WEBHOOK_MAX_RETRIES", 1),
+        patch("execution_webhook.TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", 0.0),
+        patch("execution_webhook._get_client", return_value=mock_client),
+        patch("execution_webhook.GATE_REJECTIONS"),
+    ):
+        from execution_webhook import deliver_execution_trigger
+
+        assert deliver_execution_trigger(sample_trigger) is False
 

@@ -198,6 +198,11 @@ TRADE_EXECUTE_TIMEOUT_SECONDS: float = float(
 TRADE_EXECUTE_MAX_RETRIES: int = int(os.environ.get("TRADE_EXECUTE_MAX_RETRIES", "3"))
 """Maximum delivery attempts (including first try). Default 3."""
 
+EXECUTION_WEBHOOK_MAX_RETRIES: int = int(
+    os.environ.get("EXECUTION_WEBHOOK_MAX_RETRIES", os.environ.get("TRADE_EXECUTE_MAX_RETRIES", "3"))
+)
+"""Maximum execution webhook delivery attempts (including first try). Default 3."""
+
 TRADE_EXECUTE_RETRY_BACKOFF_SECONDS: float = float(
     os.environ.get("TRADE_EXECUTE_RETRY_BACKOFF_SECONDS", "1.0")
 )

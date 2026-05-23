@@ -7,6 +7,9 @@ on:
       - "merger.py"
       - "db.py"
       - "notifier_and_logger.py"
+      - "discord_formatter.py"
+      - "alert_logger.py"
+      - "notifier.py"
       - "healthcheck.py"
       - "outcome_tracker.py"
       - "langfuse_client.py"
@@ -31,6 +34,9 @@ on:
       - "merger.py"
       - "db.py"
       - "notifier_and_logger.py"
+      - "discord_formatter.py"
+      - "alert_logger.py"
+      - "notifier.py"
       - "healthcheck.py"
       - "outcome_tracker.py"
       - "langfuse_client.py"
@@ -63,23 +69,30 @@ jobs:
       - name: Set up Python (from .python-version, locked via uv.lock)
         run: uv python install
 
+      - name: Verify uv.lock is in sync
+        run: |
+          uv sync --frozen --check || (
+            echo "uv.lock is out of sync. Run \`uv lock\` locally and commit the updated uv.lock file."
+            exit 1
+          )
+
       - name: Install dependencies (locked)
         run: uv sync --frozen --group dev
 
       - name: Lint with ruff
         run: |
           uv run ruff check \
-            models.py merger.py db.py notifier_and_logger.py \
+            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
             healthcheck.py outcome_tracker.py langfuse_client.py \
-            prompt_manager.py pipeline_tracing.py trace_analyzer.py \
+            prompt_manager.py pipeline_tracing.py trace_analyzer.py pipeline_runner.py \
             vault_env_loader.py dashboard_api.py alert_quality.py \
             validate_and_filter.py chart_gen.py winrate_injector.py \
-            decision_helpers.py normalizers/ scripts/smoke_models.py
+            decision_helpers.py execution_mapper.py execution_webhook.py execution_trigger.py normalizers/ scripts/smoke_models.py
 
       - name: Format check with ruff
         run: |
           uv run ruff format --check \
-            models.py merger.py db.py notifier_and_logger.py \
+            models.py merger.py db.py discord_formatter.py alert_logger.py notifier.py notifier_and_logger.py \
             healthcheck.py outcome_tracker.py langfuse_client.py \
             prompt_manager.py pipeline_tracing.py trace_analyzer.py \
             vault_env_loader.py dashboard_api.py alert_quality.py \
@@ -89,12 +102,17 @@ jobs:
       - name: Type-check with mypy
         run: uv run mypy --config-file pyproject.toml
 
+      - name: Verify secrets baseline (IBM detect-secrets)
+        run: |
+          uv pip install pre-commit
+          uv run pre-commit run detect-secrets --all-files
+
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing \
             --ignore=tests/cuga_upstream/ \
-            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,normalizers/*"
+            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,normalizers/*"
 
   docker-build:
     runs-on: ubuntu-latest

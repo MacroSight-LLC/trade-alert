@@ -41,3 +41,12 @@ repos:
         name: detect secrets
         args: ['--baseline', '.secrets.baseline']
         exclude: package.lock.json
+
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: Check uv.lock is up to date
+        entry: uv sync --frozen --check
+        language: system
+        pass_filenames: false
+        always_run: true

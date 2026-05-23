@@ -151,6 +151,28 @@ CREATE INDEX IF NOT EXISTS idx_alerts_winrate_lookup
     ON alerts(symbol, direction, edge_probability, created_at DESC)
     WHERE outcome IN ('WIN', 'LOSS');
 
+-- Execution bridge: idempotency key + dispatch tracking
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN idempotency_key VARCHAR(36);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD CONSTRAINT uq_alerts_idempotency_key UNIQUE (idempotency_key);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE alerts ADD COLUMN execution_dispatched BOOLEAN NOT NULL DEFAULT FALSE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_alerts_execution_dispatched
+    ON alerts(execution_dispatched) WHERE execution_dispatched = TRUE;
+
 -- ── Partitioning prep (run manually when alerts table exceeds ~1M rows) ─────
 -- Convert the alerts table to range-partitioned by created_at.
 -- This is a one-time migration: create the partitioned table, migrate data,

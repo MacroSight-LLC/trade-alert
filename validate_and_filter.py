@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import re
+import time
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -29,7 +30,12 @@ from zoneinfo import ZoneInfo
 
 from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
 from constants import get_market_hours_status
-from metrics import ALERTS_PER_CYCLE, GATE_REJECTIONS
+from metrics import (
+    ALERTS_PER_CYCLE,
+    GATE_REJECTIONS,
+    REDIS_CIRCUIT_OPEN,
+    WATCH_DECAY_SKIPPED,
+)
 from models import PlaybookAlert
 from redis_client import get_redis
 
@@ -64,6 +70,7 @@ class GateRejection(str, Enum):
     WATCH_DROPPED_DIRECTIONAL_PRESENT = "watch_dropped_directional_present"
     WATCH_DECAY = "watch_decay"
     MARKET_SESSION_CLOSED = "market_session_closed"
+    DEDUP_SUPPRESSED = "dedup_suppressed"
 
 
 # Valid alert timeframes
@@ -215,6 +222,19 @@ _TF_EP_OFFSET_1H: float = float(os.environ.get("TF_EP_OFFSET_1H", "0.00"))
 _TF_CONF_OFFSET_15M: float = float(os.environ.get("TF_CONF_OFFSET_15M", "0.00"))
 _TF_CONF_OFFSET_1H: float = float(os.environ.get("TF_CONF_OFFSET_1H", "0.00"))
 
+# Alert deduplication (per symbol/direction/timeframe)
+_DEDUP_TTL_SECONDS: int = int(os.environ.get("ALERT_DEDUP_TTL_SECONDS", "300"))
+_DEDUP_ENABLED: bool = os.environ.get("ALERT_DEDUP_ENABLED", "1") == "1"
+_WATCH_DEDUP_TTL_SECONDS: int = int(os.environ.get("WATCH_DEDUP_TTL_SECONDS", "900"))
+
+# Redis circuit breaker for WATCH decay path
+_REDIS_FAILURE_COUNT = 0
+_REDIS_FAILURE_THRESHOLD = int(os.environ.get("REDIS_FAILURE_THRESHOLD", "3"))
+_REDIS_FAILURE_WINDOW_SECONDS = int(os.environ.get("REDIS_FAILURE_WINDOW_SECONDS", "60"))
+_redis_last_failure_ts: float = 0.0
+_redis_circuit_open: bool = False
+_redis_circuit_warned_this_cycle: bool = False
+
 _TYPE_FAMILY: dict[str, str] = {
     "technical_trend": "trend",
     "relative_strength": "trend",
@@ -303,6 +323,7 @@ def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
 
 
 def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_strength: float) -> str:
+    """Classify market regime for dynamic gate overlays (SSOT §10.2 regime classification)."""
     total = bulls + bears
     bull_ratio = (bulls / total) if total else 0.5
     if vix > 30:
@@ -321,6 +342,7 @@ def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_s
 def _dynamic_gates(
     base_ep: float, base_sa: int, base_conf: float, timeframe: str, regime: str
 ) -> tuple[float, int, float]:
+    """Apply regime/timeframe overlays to base gate thresholds (SSOT §10.2 dynamic gates)."""
     ep = base_ep
     sa = base_sa
     conf = base_conf
@@ -354,6 +376,84 @@ def _dynamic_gates(
     return ep, sa, conf
 
 
+def _check_redis_circuit() -> bool:
+    """Return True when the circuit is open (skip Redis calls).
+
+    Lazy-resets the circuit after ``_REDIS_FAILURE_WINDOW_SECONDS`` with no
+    new failures.
+    """
+    global _redis_circuit_open, _REDIS_FAILURE_COUNT  # noqa: PLW0603
+
+    now = time.monotonic()
+    if _redis_circuit_open and (now - _redis_last_failure_ts) >= _REDIS_FAILURE_WINDOW_SECONDS:
+        _redis_circuit_open = False
+        _REDIS_FAILURE_COUNT = 0
+        REDIS_CIRCUIT_OPEN.set(0)
+        logger.info("Redis circuit breaker reset — WATCH decay re-enabled")
+
+    return _redis_circuit_open
+
+
+def _record_redis_failure() -> None:
+    """Increment failure counter and open circuit if threshold exceeded."""
+    global _redis_circuit_open, _REDIS_FAILURE_COUNT, _redis_last_failure_ts  # noqa: PLW0603
+
+    now = time.monotonic()
+    if _redis_last_failure_ts and (now - _redis_last_failure_ts) >= _REDIS_FAILURE_WINDOW_SECONDS:
+        _REDIS_FAILURE_COUNT = 0
+
+    _REDIS_FAILURE_COUNT += 1
+    _redis_last_failure_ts = now
+
+    if _REDIS_FAILURE_COUNT >= _REDIS_FAILURE_THRESHOLD and not _redis_circuit_open:
+        _redis_circuit_open = True
+        REDIS_CIRCUIT_OPEN.set(1)
+        GATE_REJECTIONS.labels(gate="redis_circuit_open").inc()
+        logger.warning(
+            "Redis circuit breaker OPEN after %d failures in %ds window",
+            _REDIS_FAILURE_COUNT,
+            _REDIS_FAILURE_WINDOW_SECONDS,
+        )
+
+
+def is_redis_circuit_open() -> bool:
+    """Public accessor for healthcheck / dashboard."""
+    return _check_redis_circuit()
+
+
+def _dedup_key(symbol: str, direction: str, timeframe: str) -> str:
+    return f"dedup:alert:{timeframe}:{direction}:{symbol}"
+
+
+def _reset_dedup_keys(symbols: list[str], timeframe: str) -> None:
+    """Clear WATCH and directional dedup keys when a symbol graduates."""
+    if _check_redis_circuit():
+        return
+    try:
+        r = get_redis()
+        for sym in symbols:
+            for direction in ("LONG", "SHORT", "WATCH"):
+                r.delete(_dedup_key(sym, direction, timeframe))
+    except Exception:  # noqa: BLE001
+        _record_redis_failure()
+
+
+def _try_dedup_set(symbol: str, direction: str, timeframe: str) -> bool:
+    """Return True if alert should be suppressed (dedup key already exists).
+
+    Fail-open when dedup disabled or Redis circuit is open.
+    """
+    if not _DEDUP_ENABLED or _check_redis_circuit():
+        return False
+    ttl = _WATCH_DEDUP_TTL_SECONDS if direction == "WATCH" else _DEDUP_TTL_SECONDS
+    try:
+        was_set = get_redis().set(_dedup_key(symbol, direction, timeframe), "1", nx=True, ex=ttl)
+        return not was_set
+    except Exception:  # noqa: BLE001
+        _record_redis_failure()
+        return False
+
+
 def _watch_max_for_regime(regime: str) -> int:
     """Return the maximum number of WATCH alerts to emit for a given regime.
 
@@ -378,15 +478,20 @@ def _watch_decay_key(symbol: str, timeframe: str) -> str:
 
 def _get_watch_cycles(symbol: str, timeframe: str) -> int:
     """Return the number of consecutive pipeline cycles a WATCH has persisted."""
+    if _check_redis_circuit():
+        return 0
     try:
         val = get_redis().hget(_watch_decay_key(symbol, timeframe), "cycles")
         return int(val) if val else 0
     except Exception:  # noqa: BLE001
+        _record_redis_failure()
         return 0
 
 
 def _incr_watch_cycles(symbol: str, timeframe: str, ep: float, conf: float) -> int:
     """Increment the watch cycle counter. Returns the new cycle count."""
+    if _check_redis_circuit():
+        return 0
     try:
         r = get_redis()
         key = _watch_decay_key(symbol, timeframe)
@@ -397,21 +502,26 @@ def _incr_watch_cycles(symbol: str, timeframe: str, ep: float, conf: float) -> i
         results = pipe.execute()
         return int(results[0])
     except Exception:  # noqa: BLE001
+        _record_redis_failure()
         return 0
 
 
 def _reset_watch_cycles(symbols: list[str], timeframe: str) -> None:
     """Delete watch-cycle state for symbols that graduated to a directional alert."""
+    if _check_redis_circuit():
+        return
     try:
         r = get_redis()
         for sym in symbols:
             r.delete(_watch_decay_key(sym, timeframe))
     except Exception:  # noqa: BLE001
-        pass
+        _record_redis_failure()
 
 
 def _get_watch_prev_state(symbol: str, timeframe: str) -> dict[str, str] | None:
     """Return the Redis watch-cycle state dict for symbol, or None if absent."""
+    if _check_redis_circuit():
+        return None
     try:
         r = get_redis()
         state = r.hgetall(_watch_decay_key(symbol, timeframe))
@@ -422,6 +532,7 @@ def _get_watch_prev_state(symbol: str, timeframe: str) -> dict[str, str] | None:
             }
         return None
     except Exception:  # noqa: BLE001
+        _record_redis_failure()
         return None
 
 
@@ -458,6 +569,7 @@ def _record_session_gate_metrics(
     watch_kept: int,
     directional_rejections: list[tuple[str, GateRejection]],
     watch_rejections: list[tuple[str, GateRejection]],
+    dedup_suppressed_count: int = 0,
 ) -> None:
     try:
         redis_client = get_redis()
@@ -473,6 +585,8 @@ def _record_session_gate_metrics(
         pipe.hincrby(key, "alerts_rejected", total_rejections)
         pipe.hincrby(key, "alerts_rejected_directional", len(directional_rejections))
         pipe.hincrby(key, "alerts_rejected_watch", len(watch_rejections))
+        if dedup_suppressed_count:
+            pipe.hincrby(key, "alerts_dedup_suppressed", dedup_suppressed_count)
         for _symbol, gate in directional_rejections:
             pipe.hincrby(key, f"gate_dir_{gate.value}", 1)
             pipe.hincrby(key, f"gate_{gate.value}", 1)
@@ -504,6 +618,7 @@ def _apply_market_session_gate_overlays(
     timeframe: str,
     now: datetime | None = None,
 ) -> tuple[float, int, float, str]:
+    """Apply market-session gate overlays (SSOT §10.2 market session gates)."""
     session_bucket = _market_session_bucket(now)
     if not _MARKET_HOURS_GATES_ENABLED:
         return ep_gate, sa_gate, conf_gate, session_bucket
@@ -801,6 +916,13 @@ def validate_and_filter(
     Returns:
         Tuple of (list of passing PlaybookAlerts, JSON string of alerts).
     """
+    global _redis_circuit_warned_this_cycle  # noqa: PLW0603
+    _redis_circuit_warned_this_cycle = False
+    if _check_redis_circuit():
+        logger.warning(
+            "Redis circuit open — WATCH decay disabled; alerts may repeat",
+        )
+        _redis_circuit_warned_this_cycle = True
 
     # ── Parse LLM JSON ───────────────────────────────────────────
     # Some providers return fenced markdown (```json ... ```) or wrap
@@ -956,6 +1078,7 @@ def validate_and_filter(
     rejections: list[tuple[str, GateRejection]] = []
     directional_rejections: list[tuple[str, GateRejection]] = []
     watch_rejections: list[tuple[str, GateRejection]] = []
+    dedup_suppressed_count = 0
 
     for item in raw:
         try:
@@ -988,6 +1111,10 @@ def validate_and_filter(
 
         directional = alert.direction in ("LONG", "SHORT")
 
+        # TESTING NOTE: alert.sources_agree from the LLM is overwritten here with
+        # _aligned_family_count() + macro injection + optional forecast bonus.
+        # Tests must derive expected SA from snapshot fixtures, not hardcode LLM values.
+        # See CONTRIBUTING.md § Reconciliation pipeline and _aligned_family_count().
         # Deterministic server-side sources_agree from aligned independent families.
         actual_sources = len(snap_types.get(alert.symbol, set()))
         if actual_sources == 0:
@@ -1204,6 +1331,9 @@ def validate_and_filter(
                     sa_gate,
                 )
                 _add_reason(GateRejection.SA_THRESHOLD)
+            # TESTING NOTE: when confidence >= HIGH_CONFIDENCE_MIN (default 0.85),
+            # sources_agree must also be >= HIGH_CONFIDENCE_MIN_SA (default 5).
+            # High confidence alone does not bypass SA — set both fields consistently in fixtures.
             if alert.confidence >= _HIGH_CONFIDENCE_MIN and alert.sources_agree < _HIGH_CONFIDENCE_MIN_SA:
                 logger.info(
                     "Alert filtered (HIGH_CONFIDENCE_ALIGNMENT): %s conf=%.2f >= %.2f but sa=%d < %d",
@@ -1380,6 +1510,14 @@ def validate_and_filter(
                 directional_rejections.extend(rejected_rows)
             else:
                 watch_rejections.extend(rejected_rows)
+        elif _try_dedup_set(alert.symbol, alert.direction, timeframe):
+            row = (alert.symbol, GateRejection.DEDUP_SUPPRESSED)
+            rejections.append(row)
+            dedup_suppressed_count += 1
+            if directional:
+                directional_rejections.append(row)
+            else:
+                watch_rejections.append(row)
         else:
             alerts.append(alert)
 
@@ -1460,6 +1598,8 @@ def validate_and_filter(
         # Neutral/choppy regimes → 2.  Clear trending regimes → 3.
         # All limits are env-var overridable.
         _effective_watch_max = _watch_max_for_regime(regime)
+        if _check_redis_circuit():
+            _effective_watch_max = min(_effective_watch_max, _WATCH_MAX_STRESSED)
         if len(watch_alerts) > _effective_watch_max:
             for w in watch_alerts[_effective_watch_max:]:
                 row = (w.symbol, GateRejection.WATCH_CAP)
@@ -1468,6 +1608,9 @@ def validate_and_filter(
             watch_alerts = watch_alerts[:_effective_watch_max]
 
         alerts = directional_alerts + watch_alerts
+        if _check_redis_circuit():
+            for _w in watch_alerts:
+                WATCH_DECAY_SKIPPED.inc()
 
     # ── Update Redis WATCH-cycle state ────────────────────────────
     # Increment cycle count for each kept WATCH alert, then check for
@@ -1490,6 +1633,7 @@ def validate_and_filter(
     directional_symbols = [a.symbol for a in alerts if a.direction in ("LONG", "SHORT")]
     if directional_symbols:
         _reset_watch_cycles(directional_symbols, timeframe)
+        _reset_dedup_keys(directional_symbols, timeframe)
         logger.debug("WATCH_CYCLE_RESET: %s", ", ".join(directional_symbols))
 
     pre_dist = _candidate_distribution(candidates)
@@ -1584,6 +1728,7 @@ def validate_and_filter(
         watch_kept,
         directional_rejections,
         watch_rejections,
+        dedup_suppressed_count,
     )
 
     # ── Structured gate telemetry ─────────────────────────────────

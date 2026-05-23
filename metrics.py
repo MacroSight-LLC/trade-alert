@@ -69,3 +69,16 @@ CHART_GEN_DURATION = Histogram(
     "Time to generate candlestick chart",
     buckets=(0.1, 0.5, 1, 2, 5, 10),
 )
+
+# ── Redis Circuit Breaker (WATCH decay) ────────────────────────────
+# Grafana panel: "Redis Circuit Breaker State" — 1=open (WATCH decay disabled), 0=closed
+
+REDIS_CIRCUIT_OPEN = Gauge(
+    "trade_alert_redis_circuit_open",
+    "1 when Redis circuit breaker is open",
+)
+
+WATCH_DECAY_SKIPPED = Counter(
+    "trade_alert_watch_decay_skipped_total",
+    "WATCH alerts that bypassed decay due to Redis outage",
+)

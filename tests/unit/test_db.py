@@ -112,6 +112,74 @@ class TestGetConn:
         assert result == 99
 
 
+# ── idempotency + execution dispatch ───────────────────────────
+
+
+class TestIdempotencyAndDispatch:
+    """Tests for idempotency_key and execution_dispatched helpers."""
+
+    @patch("db.get_conn")
+    def test_check_idempotency_key_exists_true(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (1,)
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import check_idempotency_key_exists
+
+        assert check_idempotency_key_exists("abc-123") is True
+
+    @patch("db.get_conn")
+    def test_check_idempotency_key_exists_false(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = None
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import check_idempotency_key_exists
+
+        assert check_idempotency_key_exists("missing") is False
+
+    @patch("db.get_conn")
+    def test_mark_execution_dispatched(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import mark_execution_dispatched
+
+        mark_execution_dispatched(7)
+        args = mock_cur.execute.call_args[0][1]
+        assert args == (7,)
+        mock_conn.commit.assert_called_once()
+
+    @patch("db.get_conn")
+    def test_is_execution_dispatched_true(self, mock_conn_fn: MagicMock) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (True,)
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import is_execution_dispatched
+
+        assert is_execution_dispatched(3) is True
+
+    @patch("db.get_conn")
+    def test_insert_alert_passes_idempotency_key(
+        self, mock_conn_fn: MagicMock, sample_alert: PlaybookAlert
+    ) -> None:
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (1,)
+        mock_conn = _mock_conn_with_cursor(mock_cur)
+        mock_conn_fn.return_value = mock_conn
+
+        from db import insert_alert
+
+        insert_alert(sample_alert, [], idempotency_key="uuid-test-key")
+        args = mock_cur.execute.call_args[0][1]
+        assert args[-1] == "uuid-test-key"
+
+
 # ── update_outcome ──────────────────────────────────────────────
 
 

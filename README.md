@@ -103,8 +103,10 @@ pytest tests/unit/ -q   # 620+ tests
 | `langfuse_client.py`     | Thread-safe singleton Langfuse client with graceful degradation|
 | `langfuse_datasets.py`   | Auto-promote golden datasets, quality gating                   |
 | `normalizers/`           | 8 normalizers (TA, flow, sentiment, market, macro, events, SI, forecast) |
-| `workflows/`             | CUGA YAML workflows (7 collectors, 2 decisions, orchestrators) |
-| `deployment/`            | Vault config, auto-unseal entrypoint, Prometheus config        |
+| `workflows/`             | CUGA runtime YAML (7 collectors, 2 decisions, orchestrators) — mounted into the cuga container |
+| `.github/workflows/`     | GitHub Actions CI/CD (tests, deploy, release) — not CUGA runtime workflows |
+| `src/cuga/`              | Upstream CUGA library (do not edit); application code lives at repo root |
+| `deployment/`            | Vault config, auto-unseal entrypoint, Prometheus config, ops verification scripts |
 | `schema.sql`             | Postgres schema: alerts table, indexes, CHECK constraints, views |
 
 ## Testing

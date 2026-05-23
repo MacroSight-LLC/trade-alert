@@ -1,7 +1,7 @@
 # Trade Alert: Complete Setup & Operations Guide
 
 > Last verified against: v0.10.0 (Phase 10 complete)
-> Updated: 2026-05-22
+> Updated: 2026-05-23
 
 **Status:** 24 containers, persistent Vault (file backend, auto-unseal), 12 MCP data sources, Langfuse observability, Prometheus + Grafana monitoring.
 
@@ -12,12 +12,13 @@
 2. [Vault Initialization (Critical)](#vault-initialization-critical)
 3. [Environment Variables](#environment-variables)
 4. [Full Stack Startup](#full-stack-startup)
-5. [Discord Bot Commands](#discord-bot-commands)
-6. [Health Checks & Monitoring](#health-checks--monitoring)
-7. [Cron Schedule (live)](#cron-schedule-live)
-8. [Common Operations](#common-operations)
-9. [Remote / VPS Deployment](#remote--vps-deployment)
-10. [Troubleshooting](#troubleshooting)
+5. [Sonnet 4.5 End-to-End Validation (FU-002)](#sonnet-45-end-to-end-validation-fu-002)
+6. [Discord Bot Commands](#discord-bot-commands)
+7. [Health Checks & Monitoring](#health-checks--monitoring)
+8. [Cron Schedule (live)](#cron-schedule-live)
+9. [Common Operations](#common-operations)
+10. [Remote / VPS Deployment](#remote--vps-deployment)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -128,6 +129,43 @@ For production, replace the file backend with cloud auto-unseal:
 - Generate a scoped AppRole or token (not root) and set `VAULT_TOKEN` in the
   deployment environment
 - See: https://www.vaultproject.io/docs/concepts/seal
+
+#### Enable fail-fast Vault enforcement (`VAULT_REQUIRED`)
+
+After `./scripts/vault-init.sh` completes on the production host, add to
+`~/trade-alert/.env` (loaded by `docker-compose.prod.yml`):
+
+```bash
+VAULT_REQUIRED=true
+```
+
+Then restart the stack:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+With `VAULT_REQUIRED=true`, `vault_env_loader.py` raises `RuntimeError` at
+import time when Vault credentials are missing, authentication fails, the
+secret path is empty, or Vault is unreachable after 3 retries. The pipeline
+never runs with empty credentials.
+
+**Verify after deploy:**
+
+```bash
+# Confirm the flag is set inside the cuga container
+docker compose -f docker-compose.prod.yml exec cuga printenv VAULT_REQUIRED
+
+# Confirm secrets were injected (expect a non-zero count)
+docker compose -f docker-compose.prod.yml exec cuga python vault_env_loader.py
+```
+
+**Negative test (once, manually):** temporarily set an invalid `VAULT_TOKEN` in
+`.env.secrets`, restart cuga, and confirm the container fails to start or logs
+a `VAULT_REQUIRED=true but ...` error. Restore the correct token afterward.
+
+The deploy workflow smoke test checks that `VAULT_REQUIRED` is truthy inside
+the cuga container after every production deploy.
 
 ### Vault Secrets Stored
 
@@ -396,6 +434,79 @@ docker compose -f docker-compose.prod.yml --profile mcp down -v
 # This deletes: Redis data, Vault data + secrets, Langfuse database, Postgres alerts
 # You will need to re-run vault-init.sh and seed_langfuse_prompts.py after restart
 ```
+
+---
+
+## Sonnet 4.5 End-to-End Validation (FU-002)
+
+The codebase uses `claude-sonnet-4-5` across all decision workflows. After any
+model migration, run at least one full 15m and 1h pipeline cycle in a live
+environment and confirm output quality before treating the switch as validated.
+
+### Trigger pipeline cycles
+
+```bash
+DC="docker compose -f docker-compose.prod.yml"
+
+# 15m orchestrator (collectors → merger → decision → notifier)
+$DC exec cuga python pipeline_runner.py workflows/orchestrator-15m.yaml
+
+# 1h orchestrator
+$DC exec cuga python pipeline_runner.py workflows/orchestrator-1h.yaml
+```
+
+Alternatively, wait for cron or use the Discord bot: `!scan 15m` / `!scan 1h`.
+
+### Capture evidence
+
+1. **Langfuse traces** — Open Langfuse UI and confirm the decision step shows
+   model `claude-sonnet-4-5`. Note trace IDs from the pipeline-summary JSON
+   logged at the end of each orchestrator run.
+
+2. **PlaybookAlert schema** — Decision output must parse cleanly:
+   ```bash
+   $DC exec cuga python -c "
+   import json
+   from models import PlaybookAlert
+   # Replace with actual decision output path from workflow logs
+   alerts = json.loads(open('/app/logs/decision-15m-output.json').read())
+   for a in alerts:
+       PlaybookAlert.model_validate(a)
+   print(f'Validated {len(alerts)} alert(s)')
+   "
+   ```
+
+3. **Gate-rejection mix** — Compare Prometheus `gate_rejections_total` breakdown
+   against the historical envelope (±15% per gate vs the 7-day median before
+   migration):
+   ```bash
+   curl -s http://localhost:9090/api/v1/query?query=gate_rejections_total
+   # Or use the dashboard: http://localhost:8080/api/summary
+   ```
+
+4. **Notifier stage** — Confirm the pipeline reaches Discord MCP even if zero
+   alerts pass gates (check notifier step in Langfuse trace or pipeline logs).
+
+### Acceptance envelope
+
+| Criterion | Pass condition |
+| --------- | -------------- |
+| Schema | Zero `PlaybookAlert` Pydantic validation failures in decision/notifier stages |
+| Gate mix | Per-gate rejection counts within ±15% of 7-day pre-migration median |
+| Model ID | Langfuse traces show `claude-sonnet-4-5` |
+| Pipeline | Both 15m and 1h orchestrators complete with pipeline-summary JSON |
+| Alerts | At least one alert through full pipeline **or** explicit zero-alert run during quiet market (document reason) |
+
+### Automated helper
+
+Run the checklist script on the production host:
+
+```bash
+./deployment/validate-sonnet-4-5.sh
+```
+
+Record trace IDs and gate-rejection snapshot in [`FOLLOW_UPS.md`](./FOLLOW_UPS.md)
+when validation passes, then move FU-002 to Resolved.
 
 ---
 

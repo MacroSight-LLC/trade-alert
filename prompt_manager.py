@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -31,6 +32,8 @@ from constants import get_market_hours_status  # noqa: F811 — re-exported
 from langfuse_client import get_langfuse_client, register_langfuse_failure
 
 logger = logging.getLogger(__name__)
+
+MAX_PROMPT_TOKENS: int = int(os.environ.get("MAX_PROMPT_TOKENS", "150000"))
 
 # ── Fallback prompts (verbatim from decision-15m / decision-1h YAML) ─────
 
@@ -263,8 +266,8 @@ _EXTRA_RULES: dict[str, str] = {
 
 # Per-timeframe gate defaults
 _GATE_DEFAULTS: dict[str, dict[str, str]] = {
-    "15m": {"ep_gate": "0.70", "sa_gate": "3", "conf_gate": "0.75"},
-    "1h": {"ep_gate": "0.75", "sa_gate": "3", "conf_gate": "0.75"},
+    "15m": {"ep_gate": "0.70", "sa_gate": "4", "conf_gate": "0.75"},
+    "1h": {"ep_gate": "0.75", "sa_gate": "4", "conf_gate": "0.75"},
 }
 
 
@@ -542,6 +545,67 @@ def get_recent_alerts_context(hours: int = 2, limit: int = 10) -> str:
         return "Unable to fetch recent alerts."
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token count (chars/4) when tiktoken unavailable."""
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:  # noqa: BLE001
+        return max(len(text) // 4, 1)
+
+
+def trim_snapshots_for_token_budget(
+    snapshots_json: str,
+    *,
+    reserved_tokens: int = 8000,
+) -> tuple[str, int]:
+    """Trim lowest-scoring snapshot signals until JSON fits token budget.
+
+    Returns:
+        Tuple of (trimmed JSON string, number of signals removed).
+    """
+    if not snapshots_json or snapshots_json == "[]":
+        return snapshots_json, 0
+
+    budget = MAX_PROMPT_TOKENS - reserved_tokens
+    if _estimate_tokens(snapshots_json) <= budget:
+        return snapshots_json, 0
+
+    try:
+        snaps: list[dict[str, Any]] = json.loads(snapshots_json)
+    except (json.JSONDecodeError, TypeError):
+        return snapshots_json, 0
+
+    flat: list[tuple[float, int, int]] = []
+    for si, snap in enumerate(snaps):
+        for sig_i, sig in enumerate(snap.get("signals", [])):
+            try:
+                score = abs(float(sig.get("score", 0.0)))
+            except (TypeError, ValueError):
+                score = 0.0
+            flat.append((score, si, sig_i))
+
+    flat.sort(key=lambda x: x[0])
+    removed = 0
+    while flat and _estimate_tokens(json.dumps(snaps, indent=2)) > budget:
+        _score, si, sig_i = flat.pop(0)
+        signals = snaps[si].get("signals", [])
+        if sig_i < len(signals):
+            signals.pop(sig_i)
+            removed += 1
+        snaps = [s for s in snaps if s.get("signals")]
+
+    if removed:
+        logger.warning(
+            "Prompt token budget exceeded — trimmed %d low-scoring signals (budget=%d tokens)",
+            removed,
+            MAX_PROMPT_TOKENS,
+        )
+    return json.dumps(snaps, indent=2), removed
+
+
 def get_decision_prompts(
     timeframe: str,
     variables: dict[str, Any],
@@ -579,6 +643,10 @@ def get_decision_prompts(
         **_GATE_DEFAULTS.get(timeframe, _GATE_DEFAULTS["15m"]),
         **variables,
     }
+
+    trimmed_json, _trimmed = trim_snapshots_for_token_budget(str(merged.get("snapshots_json", "[]")))
+    merged["snapshots_json"] = trimmed_json
+    merged["n"] = len(json.loads(trimmed_json)) if trimmed_json and trimmed_json != "[]" else 0
 
     # ── Inject snapshot data freshness (Group 3a) ────────────────
     snap_json = merged.get("snapshots_json", "")

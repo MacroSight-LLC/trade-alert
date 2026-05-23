@@ -220,7 +220,7 @@ class TestPostgresBeforeDiscord:
             patch("notifier_and_logger.format_embed", return_value={"embeds": [{}]}),
             patch("notifier_and_logger.generate_chart", return_value=None),
             patch(
-                "notifier_and_logger.insert_alert",
+                "alert_logger.insert_alert",
                 side_effect=RuntimeError("DB down"),
             ),
             patch("notifier_and_logger.send_discord_embed") as mock_discord,
@@ -242,7 +242,7 @@ class TestPostgresBeforeDiscord:
             patch("notifier_and_logger._is_duplicate_alert", return_value=False),
             patch("notifier_and_logger.format_embed", return_value={"embeds": [{}]}),
             patch("notifier_and_logger.generate_chart", return_value=None),
-            patch("notifier_and_logger.insert_alert") as mock_insert,
+            patch("alert_logger.insert_alert") as mock_insert,
             patch("notifier_and_logger.send_discord_embed", return_value=False),
         ):
             result = notify(alerts_json)

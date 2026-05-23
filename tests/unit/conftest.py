@@ -16,8 +16,30 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 # Must be set before any validate_and_filter / redis_client import occurs.
 os.environ.setdefault("MARKET_HOURS_GATES_ENABLED", "0")
 os.environ.setdefault("REDIS_RETRY_ATTEMPTS", "1")
 os.environ.setdefault("REDIS_RETRY_BACKOFF", "0.0")
 os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.5")
+
+
+def _reset_validate_and_filter_redis_state() -> None:
+    """Reset module-level Redis circuit breaker between tests."""
+    try:
+        import validate_and_filter as vf
+
+        vf._REDIS_FAILURE_COUNT = 0
+        vf._redis_circuit_open = False
+        vf._redis_last_failure_ts = 0.0
+        vf._redis_circuit_warned_this_cycle = False
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_redis_circuit_state() -> None:
+    _reset_validate_and_filter_redis_state()
+    yield
+    _reset_validate_and_filter_redis_state()

@@ -61,14 +61,14 @@ class TestYAMLFallback:
     def test_15m_gate_defaults(self, _mock: MagicMock) -> None:
         _, user = pm.get_decision_prompts("15m", _base_variables())
         assert "edge_probability >= 0.70" in user
-        assert "sources_agree >= 3" in user
+        assert "sources_agree >= 4" in user
         assert "confidence >= 0.75" in user
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
     def test_1h_gate_defaults(self, _mock: MagicMock) -> None:
         _, user = pm.get_decision_prompts("1h", _base_variables())
         assert "edge_probability >= 0.75" in user
-        assert "sources_agree >= 3" in user
+        assert "sources_agree >= 4" in user
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
     def test_1h_extra_rules_in_system(self, _mock: MagicMock) -> None:

@@ -535,7 +535,11 @@ services:
       - ./redis_client.py:/app/redis_client.py
       - ./log_config.py:/app/log_config.py
       - ./metrics.py:/app/metrics.py
+      - ./discord_formatter.py:/app/discord_formatter.py
+      - ./alert_logger.py:/app/alert_logger.py
+      - ./notifier.py:/app/notifier.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./trace_analyzer.py:/app/trace_analyzer.py
@@ -591,7 +595,11 @@ services:
       - ./redis_client.py:/app/redis_client.py
       - ./log_config.py:/app/log_config.py
       - ./metrics.py:/app/metrics.py
+      - ./discord_formatter.py:/app/discord_formatter.py
+      - ./alert_logger.py:/app/alert_logger.py
+      - ./notifier.py:/app/notifier.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./trace_analyzer.py:/app/trace_analyzer.py
@@ -662,7 +670,11 @@ services:
       - ./redis_client.py:/app/redis_client.py
       - ./log_config.py:/app/log_config.py
       - ./metrics.py:/app/metrics.py
+      - ./discord_formatter.py:/app/discord_formatter.py
+      - ./alert_logger.py:/app/alert_logger.py
+      - ./notifier.py:/app/notifier.py
       - ./notifier_and_logger.py:/app/notifier_and_logger.py
+      - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
       - ./trace_analyzer.py:/app/trace_analyzer.py

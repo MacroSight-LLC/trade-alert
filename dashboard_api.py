@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -40,6 +41,51 @@ from log_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)
+
+_DASHBOARD_CACHE_TTL: int = int(os.environ.get("DASHBOARD_CACHE_TTL_SECONDS", "60"))
+_DASHBOARD_POLL_INTERVAL_MS: int = int(os.environ.get("DASHBOARD_POLL_INTERVAL_MS", "30000"))
+
+
+def _cache_get(key: str) -> str | None:
+    try:
+        from redis_client import get_redis
+
+        raw = get_redis().get(key)
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode()
+        return str(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cache_set(key: str, value: str, ttl: int = _DASHBOARD_CACHE_TTL) -> None:
+    try:
+        from redis_client import get_redis
+
+        get_redis().setex(key, ttl, value)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Dashboard cache set failed: %s", exc)
+
+
+def _cached_json(key: str, builder: Any) -> dict[str, Any]:
+    import json as _json
+
+    cached = _cache_get(key)
+    if cached:
+        parsed = _json.loads(cached)
+        if isinstance(parsed, dict):
+            return parsed
+    data = builder()
+    if not isinstance(data, dict):
+        data = {"data": data}
+    try:
+        _cache_set(key, _json.dumps(data, default=str))
+    except (TypeError, ValueError):
+        pass
+    return data
+
 
 # ── Authentication ───────────────────────────────────────────────────────
 
@@ -258,9 +304,144 @@ def api_symbols(request: Request, limit: int = Query(default=20, ge=1, le=100)) 
 
 @router.get("/alerts")
 @limiter.limit(_RATE_LIMIT)
-def api_alerts(request: Request, limit: int = Query(default=50, ge=1, le=500)) -> list[dict]:
-    """Return recent alerts."""
-    return _clean_rows(get_recent_alerts(limit))
+def api_alerts(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict]:
+    """Return recent alerts with pagination."""
+    rows = get_recent_alerts(limit + offset)
+    return _clean_rows(rows[offset : offset + limit])
+
+
+@router.get("/health")
+@limiter.limit(_RATE_LIMIT)
+def api_health(request: Request) -> dict[str, Any]:
+    """Container health, Redis latency, last pipeline run."""
+
+    def _build() -> dict[str, Any]:
+        redis_latency_ms: float | None = None
+        redis_ok = False
+        try:
+            from redis_client import get_redis
+
+            start = time.monotonic()
+            get_redis().ping()
+            redis_latency_ms = round((time.monotonic() - start) * 1000, 2)
+            redis_ok = True
+        except Exception:  # noqa: BLE001
+            redis_ok = False
+
+        last_run: float | None = None
+        try:
+            from prometheus_client import REGISTRY
+
+            for metric in REGISTRY.collect():
+                if metric.name == "pipeline_last_run_timestamp":
+                    for sample in metric.samples:
+                        last_run = sample.value
+        except Exception:  # noqa: BLE001
+            pass
+
+        return {
+            "status": "live" if redis_ok else "degraded",
+            "redis_ok": redis_ok,
+            "redis_latency_ms": redis_latency_ms,
+            "last_pipeline_run_ts": last_run,
+        }
+
+    return _cached_json("dashboard:api:health", _build)
+
+
+@router.get("/session-stats")
+@limiter.limit(_RATE_LIMIT)
+def api_session_stats(
+    request: Request,
+    timeframe: str = Query(default="15m"),
+    date: str = Query(default="today"),
+) -> dict[str, Any]:
+    """Gate rejection counts and pass rates from Redis session stats."""
+
+    def _build() -> dict[str, Any]:
+        from zoneinfo import ZoneInfo
+
+        if date == "today":
+            session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        else:
+            session_date = date
+        key = f"session:stats:{session_date}:{timeframe}"
+        try:
+            from redis_client import get_redis
+
+            raw = get_redis().hgetall(key) or {}
+            stats: dict[str, int] = {}
+            if isinstance(raw, dict):
+                items = raw.items()
+            else:
+                items = []
+            for k, v in items:
+                field = k.decode() if isinstance(k, bytes) else str(k)
+                try:
+                    stats[field] = int(v)
+                except (TypeError, ValueError):
+                    continue
+            return {"date": session_date, "timeframe": timeframe, "stats": stats}
+        except Exception as exc:  # noqa: BLE001
+            return {"date": session_date, "timeframe": timeframe, "stats": {}, "error": str(exc)}
+
+    return _cached_json(f"dashboard:api:session-stats:{timeframe}:{date}", _build)
+
+
+@router.get("/kpis")
+@limiter.limit(_RATE_LIMIT)
+def api_kpis(request: Request) -> dict[str, Any]:
+    """Aggregated KPIs for dashboard header."""
+
+    def _build() -> dict[str, Any]:
+        summary = get_summary_stats()
+        rejected = 0
+        passed = 0
+        try:
+            from zoneinfo import ZoneInfo
+
+            from redis_client import get_redis
+
+            session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+            for tf in ("15m", "1h"):
+                key = f"session:stats:{session_date}:{tf}"
+                raw = get_redis().hgetall(key) or {}
+                if not isinstance(raw, dict):
+                    continue
+                for k, v in raw.items():
+                    field = k.decode() if isinstance(k, bytes) else k
+                    if field == "alerts_rejected":
+                        rejected += int(v)
+                    if field == "alerts_passed_total":
+                        passed += int(v)
+        except Exception:  # noqa: BLE001
+            pass
+        total_gate = rejected + passed
+        rejection_rate = round(rejected / total_gate, 4) if total_gate else 0.0
+        return {
+            **summary,
+            "gate_rejection_rate": rejection_rate,
+            "poll_interval_ms": _DASHBOARD_POLL_INTERVAL_MS,
+        }
+
+    return _cached_json("dashboard:api:kpis", _build)
+
+
+@router.get("/circuit-breaker")
+@limiter.limit(_RATE_LIMIT)
+def api_circuit_breaker(request: Request) -> dict[str, Any]:
+    """Current Redis circuit breaker state for WATCH decay."""
+    try:
+        from validate_and_filter import is_redis_circuit_open
+
+        open_state = is_redis_circuit_open()
+        return {"redis_circuit_open": open_state, "status": "degraded" if open_state else "ok"}
+    except ImportError:
+        return {"redis_circuit_open": False, "status": "unknown"}
 
 
 app.include_router(router)

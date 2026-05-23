@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("redis", reason="redis not installed")
 
+import notifier as _notifier_mod
 import notifier_and_logger as _nl_mod
 from models import PlaybookAlert
 from notifier_and_logger import (
@@ -31,9 +32,11 @@ from notifier_and_logger import (
 @pytest.fixture(autouse=True)
 def _reset_circuit_breaker():
     """Reset Discord circuit breaker between tests."""
-    _nl_mod._discord_consecutive_failures = 0
+    _notifier_mod._discord_consecutive_failures = 0
+    _notifier_mod._discord_cb_open_since = 0.0
     yield
-    _nl_mod._discord_consecutive_failures = 0
+    _notifier_mod._discord_consecutive_failures = 0
+    _notifier_mod._discord_cb_open_since = 0.0
 
 
 # ── compute_rr ──────────────────────────────────────────────────
@@ -214,8 +217,8 @@ class TestFormatEmbed:
 class TestSendDiscordEmbed:
     """Tests for Discord embed delivery (webhook + bot fallback)."""
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_webhook_success(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=204)
@@ -224,10 +227,10 @@ class TestSendDiscordEmbed:
         assert send_discord_embed({"embeds": []}) is True
         mock_client.post.assert_called_once()
 
-    @patch("notifier_and_logger._discord_webhook", return_value=None)
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok123")
-    @patch("notifier_and_logger._discord_alert_channel_id", return_value="chan456")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value=None)
+    @patch("notifier._discord_bot_token", return_value="tok123")
+    @patch("notifier._discord_alert_channel_id", return_value="chan456")
+    @patch("notifier._get_discord_client")
     def test_bot_fallback(
         self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock, _wh: MagicMock
     ) -> None:
@@ -241,13 +244,13 @@ class TestSendDiscordEmbed:
             "Authorization", ""
         )
 
-    @patch("notifier_and_logger._discord_webhook", return_value=None)
-    @patch("notifier_and_logger._discord_bot_token", return_value=None)
+    @patch("notifier._discord_webhook", return_value=None)
+    @patch("notifier._discord_bot_token", return_value=None)
     def test_no_credentials(self, _bt: MagicMock, _wh: MagicMock) -> None:
         assert send_discord_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_http_status_error(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         mock_client = MagicMock()
         resp = MagicMock()
@@ -261,16 +264,16 @@ class TestSendDiscordEmbed:
         mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_request_error(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.side_effect = httpx.RequestError("timeout")
         mock_client_fn.return_value = mock_client
         assert send_discord_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_webhook_with_chart_uses_multipart(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=204)
@@ -282,10 +285,10 @@ class TestSendDiscordEmbed:
         assert "data" in call_kwargs.kwargs or "data" in (call_kwargs[1] if len(call_kwargs) > 1 else {})
         assert "files" in call_kwargs.kwargs or "files" in (call_kwargs[1] if len(call_kwargs) > 1 else {})
 
-    @patch("notifier_and_logger._discord_webhook", return_value=None)
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok123")
-    @patch("notifier_and_logger._discord_alert_channel_id", return_value="chan456")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value=None)
+    @patch("notifier._discord_bot_token", return_value="tok123")
+    @patch("notifier._discord_alert_channel_id", return_value="chan456")
+    @patch("notifier._get_discord_client")
     def test_bot_with_chart_uses_multipart(
         self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock, _wh: MagicMock
     ) -> None:
@@ -299,8 +302,8 @@ class TestSendDiscordEmbed:
         assert "data" in call_kwargs.kwargs
         assert "files" in call_kwargs.kwargs
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_webhook_without_chart_uses_json(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=204)
@@ -317,11 +320,16 @@ class TestSendDiscordEmbed:
 class TestSendDiscordEmbedRetry:
     """Tests for exponential backoff retry on transient Discord errors."""
 
+    @patch("notifier.random.uniform", return_value=0.0)
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_retry_on_429_then_success(
-        self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
+        self,
+        mock_client_fn: MagicMock,
+        _wh: MagicMock,
+        mock_sleep: MagicMock,
+        _jitter: MagicMock,
     ) -> None:
         """First call gets 429, second succeeds — should return True."""
         mock_client = MagicMock()
@@ -340,8 +348,8 @@ class TestSendDiscordEmbedRetry:
         mock_sleep.assert_called_once_with(1.0)
 
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_retry_on_502_then_success(
         self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
     ) -> None:
@@ -361,8 +369,8 @@ class TestSendDiscordEmbedRetry:
         mock_sleep.assert_called_once_with(1.0)
 
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_exhausts_retries_on_persistent_429(
         self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
     ) -> None:
@@ -382,8 +390,8 @@ class TestSendDiscordEmbedRetry:
         assert mock_sleep.call_count == 2
 
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_no_retry_on_4xx_non_429(
         self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
     ) -> None:
@@ -402,8 +410,8 @@ class TestSendDiscordEmbedRetry:
         mock_sleep.assert_not_called()
 
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_retry_on_request_error_then_success(
         self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock
     ) -> None:
@@ -417,8 +425,8 @@ class TestSendDiscordEmbedRetry:
         mock_sleep.assert_called_once_with(1.0)
 
     @patch("notifier_and_logger.time.sleep")
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_backoff_doubling(self, mock_client_fn: MagicMock, _wh: MagicMock, mock_sleep: MagicMock) -> None:
         """Verify exponential backoff delays: 1s, 2s."""
         mock_client = MagicMock()
@@ -441,14 +449,14 @@ class TestSendDiscordEmbedRetry:
 class TestSendOpsMessage:
     """Tests for ops channel messaging."""
 
-    @patch("notifier_and_logger._discord_bot_token", return_value=None)
+    @patch("notifier._discord_bot_token", return_value=None)
     def test_no_config_skips(self, _bt: MagicMock) -> None:
         # Should not raise
         send_ops_message("test")
 
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok")
-    @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_bot_token", return_value="tok")
+    @patch("notifier._discord_ops_channel_id", return_value="ops123")
+    @patch("notifier._get_discord_client")
     def test_sends_plain_text(self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=200)
@@ -467,7 +475,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_valid_json_sends_and_logs(
         self,
@@ -485,7 +493,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=False)
     def test_discord_failure_still_logs(
         self,
@@ -511,7 +519,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert", side_effect=__import__("psycopg2").Error("DB down"))
+    @patch("alert_logger.insert_alert", side_effect=__import__("psycopg2").Error("DB down"))
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_db_error_skips_discord_send(
         self,
@@ -529,7 +537,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_multiple_alerts(
         self,
@@ -546,7 +554,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(b"\x89PNG chart", 2.35, None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_chart_bytes_passed_to_send(
         self,
@@ -563,7 +571,7 @@ class TestNotify:
 
     @patch("notifier_and_logger.generate_chart", return_value=(None, None))
     @patch("notifier_and_logger._is_duplicate_alert", return_value=False)
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_no_image_field_when_chart_fails(
         self,
@@ -580,7 +588,7 @@ class TestNotify:
         embed_arg = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("embed_payload")
         assert "image" not in embed_arg["embeds"][0]
 
-    @patch("notifier_and_logger.insert_alert")
+    @patch("alert_logger.insert_alert")
     @patch("notifier_and_logger.send_discord_embed", return_value=True)
     def test_non_dict_item_skipped(self, _send: MagicMock, _insert: MagicMock) -> None:
         alerts_json = json.dumps(["not-a-dict", 42])
@@ -617,13 +625,13 @@ class TestScoreBar:
 class TestSendOpsEmbed:
     """Tests for rich embed delivery to ops channel."""
 
-    @patch("notifier_and_logger._discord_bot_token", return_value=None)
+    @patch("notifier._discord_bot_token", return_value=None)
     def test_no_config_returns_false(self, _bt: MagicMock) -> None:
         assert send_ops_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok")
-    @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_bot_token", return_value="tok")
+    @patch("notifier._discord_ops_channel_id", return_value="ops123")
+    @patch("notifier._get_discord_client")
     def test_sends_embed_payload(self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock) -> None:
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=200)
@@ -634,9 +642,9 @@ class TestSendOpsEmbed:
         call_kwargs = mock_client.post.call_args
         assert call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {})) == payload
 
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok")
-    @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_bot_token", return_value="tok")
+    @patch("notifier._discord_ops_channel_id", return_value="ops123")
+    @patch("notifier._get_discord_client")
     def test_http_error_returns_false(
         self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock
     ) -> None:
@@ -650,9 +658,9 @@ class TestSendOpsEmbed:
         mock_client_fn.return_value = mock_client
         assert send_ops_embed({"embeds": []}) is False
 
-    @patch("notifier_and_logger._discord_bot_token", return_value="tok")
-    @patch("notifier_and_logger._discord_ops_channel_id", return_value="ops123")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_bot_token", return_value="tok")
+    @patch("notifier._discord_ops_channel_id", return_value="ops123")
+    @patch("notifier._get_discord_client")
     def test_request_error_returns_false(
         self, mock_client_fn: MagicMock, _ch: MagicMock, _bt: MagicMock
     ) -> None:
@@ -870,7 +878,7 @@ class TestEmbedHistoricalStats:
     """format_embed includes a Track Record field."""
 
     @patch(
-        "notifier_and_logger._get_similar_alert_stats",
+        "discord_formatter.get_similar_alert_stats",
         return_value="\U0001f4ca Similar past alerts: 70% win rate (N=10)",
     )
     def test_track_record_field_added(self, _mock_stats: MagicMock) -> None:
@@ -892,7 +900,7 @@ class TestEmbedHistoricalStats:
         field_names = [f["name"] for f in result["embeds"][0]["fields"]]
         assert any("Track Record" in n for n in field_names)
 
-    @patch("notifier_and_logger._get_similar_alert_stats", return_value="")
+    @patch("discord_formatter.get_similar_alert_stats", return_value="")
     def test_no_track_record_when_empty(self, _mock_stats: MagicMock) -> None:
         alert = PlaybookAlert(
             symbol="NVDA",
@@ -919,31 +927,24 @@ class TestEmbedHistoricalStats:
 class TestDiscordCircuitBreaker:
     """Discord circuit breaker fast-fails when consecutive failures exceed threshold."""
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_circuit_breaker_opens_after_threshold(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
-        import notifier_and_logger as nl
-
-        # Reset state — simulate CB that just opened
-        nl._discord_consecutive_failures = nl._DISCORD_CB_THRESHOLD
-        nl._discord_cb_open_since = time.monotonic()
+        _notifier_mod._discord_consecutive_failures = _notifier_mod._DISCORD_CB_THRESHOLD
+        _notifier_mod._discord_cb_open_since = time.monotonic()
 
         result = send_discord_embed({"embeds": []})
         assert result is False
         mock_client_fn.return_value.post.assert_not_called()
 
-        # Reset for other tests
-        nl._discord_consecutive_failures = 0
-        nl._discord_cb_open_since = 0.0
+        _notifier_mod._discord_consecutive_failures = 0
+        _notifier_mod._discord_cb_open_since = 0.0
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_circuit_breaker_resets_after_cooldown(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
-        import notifier_and_logger as nl
-
-        # Simulate CB that opened long ago (past the cooldown window)
-        nl._discord_consecutive_failures = nl._DISCORD_CB_THRESHOLD
-        nl._discord_cb_open_since = time.monotonic() - nl._DISCORD_CB_RESET_SECS - 1.0
+        _notifier_mod._discord_consecutive_failures = _notifier_mod._DISCORD_CB_THRESHOLD
+        _notifier_mod._discord_cb_open_since = time.monotonic() - _notifier_mod._DISCORD_CB_RESET_SECS - 1.0
 
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=204)
@@ -952,17 +953,14 @@ class TestDiscordCircuitBreaker:
 
         result = send_discord_embed({"embeds": []})
         assert result is True
-        assert nl._discord_consecutive_failures == 0
+        assert _notifier_mod._discord_consecutive_failures == 0
 
-        # Reset for other tests
-        nl._discord_cb_open_since = 0.0
+        _notifier_mod._discord_cb_open_since = 0.0
 
-    @patch("notifier_and_logger._discord_webhook", return_value="https://hooks.example.com/wh")
-    @patch("notifier_and_logger._get_discord_client")
+    @patch("notifier._discord_webhook", return_value="https://hooks.example.com/wh")
+    @patch("notifier._get_discord_client")
     def test_success_resets_circuit_breaker(self, mock_client_fn: MagicMock, _wh: MagicMock) -> None:
-        import notifier_and_logger as nl
-
-        nl._discord_consecutive_failures = 1
+        _notifier_mod._discord_consecutive_failures = 1
         mock_client = MagicMock()
         mock_client.post.return_value = MagicMock(status_code=204)
         mock_client.post.return_value.raise_for_status = MagicMock()
@@ -970,4 +968,4 @@ class TestDiscordCircuitBreaker:
 
         result = send_discord_embed({"embeds": []})
         assert result is True
-        assert nl._discord_consecutive_failures == 0
+        assert _notifier_mod._discord_consecutive_failures == 0
