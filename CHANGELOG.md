@@ -11,6 +11,30 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+### Deferred
+- `pg_partman` monthly partitioning for `alerts` — design notes in `schema.sql` (lines 176–199); use `scripts/purge_old_data.py` until enabled.
+- `prompt_manager.py` decomposition — complexity hotspot; no functional defect.
+- Mypy cleanup sprint — pre-existing errors outside touched modules; do not regress files in `pyproject.toml` `[tool.mypy] files`.
+
+## [1.2.0] - 2026-05-23
+
+### Added
+- P0: SpamShield collector path via `parallel_tool_calls` (no inline `mcp_call` in workflow code);
+  `resilience/mcp_error_handler.py` and `on_mcp_error` dispatch in `pipeline_runner.py`.
+- P1: `workflows/orchestrator-base.yaml` with thin 15m/1h wrappers; `schemas/workflow.schema.json`
+  and CI validation; `scripts/purge_old_data.py` and `scripts/purge_langfuse_datasets.py`;
+  Langfuse dataset redaction/capture flags; `gate_config.py` as gate-threshold SSOT.
+- P2: Optional extended-hours confidence penalty; `classify_regime` in `gate_config`; EOD cron
+  stagger (state-summary 16:10 ET, EOD 16:20 ET); `COMPLIANCE.md`; PR security checklist.
+- P3: `docs/architecture.md`, `docs/spec-v1.3.md` copy; Dependabot pip groups; expanded ruff CI scope.
+- CI: branch-level workflow triggers (replaces path allowlist); validate `docker-compose.prod.yml`
+  and `docker-compose.test.yml`; coverage includes `redis_client.py`, `constants.py`, `metrics.py`;
+  Helm lint for `deployment/helm/*` charts.
+
+### Changed
+- Orchestrator 15m/1h YAML reduced to parameterized wrappers over `orchestrator-base.yaml`.
+- `FOLLOW_UPS.md` retained in-repo (GitHub Issues disabled on this repository).
+
 ## [1.1.0] - 2026-05-23
 
 ### Added

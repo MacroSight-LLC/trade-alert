@@ -1,5 +1,8 @@
 name: trade-alert tests
 
+# Branch-level triggers (not path allowlists) so new modules/scripts/gates never
+# silently skip CI. Previously, files outside an explicit paths: list did not run
+# this workflow (e.g. redis_client.py, constants.py, scripts/new_tool.py).
 on:
   push:
     branches: [main]
@@ -43,7 +46,7 @@ jobs:
 
       - name: No mcp_call in workflow code blocks
         run: |
-          python -c "
+          uv run python -c "
           import pathlib, sys, yaml
           errors = []
           for p in pathlib.Path('workflows').glob('*.yaml'):
@@ -60,7 +63,7 @@ jobs:
           "
 
       - name: Circular import check
-        run: python -c "import validate_and_filter; import gates.watch; import gates.regime; print('OK')"
+        run: uv run python -c "import validate_and_filter; import gates.watch; import gates.regime; print('OK')"
 
       - name: Type-check with mypy
         run: uv run mypy --config-file pyproject.toml
@@ -75,7 +78,7 @@ jobs:
           uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=85 \
             --ignore=tests/cuga_upstream/ \
-            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,pipeline_runner.py,workflow_sandbox.py,workflow_template.py,llm_client.py,llm_response_parser.py,gate_telemetry.py,gate_config.py,normalizers/*,gates/*,resilience/*,redis_client.py,constants.py,metrics.py,log_config.py,langfuse_datasets.py,eod_summary.py"
+            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,vault_env_loader.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,pipeline_runner.py,workflow_sandbox.py,workflow_template.py,llm_client.py,llm_response_parser.py,gate_telemetry.py,gate_config.py,normalizers/*,gates/*,resilience/*,redis_client.py,constants.py,metrics.py,log_config.py,langfuse_datasets.py,eod_summary.py"
 
   integration-tests:
     needs: [unit-tests]
@@ -141,7 +144,17 @@ jobs:
         run: docker compose config --quiet
       - name: Validate compose config (prod)
         run: |
-          env $(cat .env.example | grep -v '^#' | grep '=' | sed 's/=.*/=placeholder/' | xargs) \
+          env $(grep -v '^#' .env.example | grep '=' | sed 's/=.*/=ci-compose-placeholder/' | xargs) \
             docker compose -f docker-compose.prod.yml config --quiet
       - name: Validate compose config (test)
         run: docker compose -f docker-compose.test.yml config --quiet
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Lint deployment Helm charts
+        run: |
+          for chart_dir in deployment/helm/cuga deployment/helm/postgres-pgvector deployment/helm/vault; do
+            echo "==> helm lint ${chart_dir}"
+            helm lint "${chart_dir}"
+          done

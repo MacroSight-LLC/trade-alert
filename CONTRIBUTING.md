@@ -126,7 +126,7 @@ Why this matters:
 
 trade-alert uses two CI workflow families:
 
-- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs; path-filtered to trade-alert source files; runs unit + integration tests + docker build.
+- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs and pushes to `main`. Uses **branch-level triggers** (not a `paths:` allowlist), so new root modules (`redis_client.py`, `constants.py`, `scripts/*.py`, normalizers, gates) always run CI. Runs ruff, mypy, jsonschema on workflows, unit + integration tests, and docker/compose validation (`docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.test.yml`).
 - [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — runs on every push to `main`; lint → test → build GHCR images; deploy + smoke **only when** repo variable `HETZNER_PROVISIONED=true` (Hetzner not provisioned yet — see [`RELEASING.md`](RELEASING.md)).
 - [`.github/workflows/tests.yml`](.github/workflows/tests.yml) / [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream suite; uses Python 3.12 and Playwright; do not modify for trade-alert changes.
 
@@ -134,7 +134,15 @@ When opening a trade-alert PR, `trade-alert-tests.yml` must be green. The CUGA w
 
 **Branch protection:** `deploy.yml` is independent of the path-filtered PR gate. Direct pushes to `main` skip `trade-alert-tests.yml`. Require PR checks (at minimum `trade-alert-tests.yml`) via branch protection before merging to `main`.
 
-Ruff lint/format targets are centralized in [`.github/ruff-targets.txt`](.github/ruff-targets.txt) and used by both workflows.
+Ruff lint/format runs on the full repo via `uv run ruff check .` (see `ruff.toml` excludes for `src/` and examples). [`.github/ruff-targets.txt`](.github/ruff-targets.txt) is deprecated for CI.
+
+**Dashboard:** `dashboard_api.py` is covered by [`tests/unit/test_dashboard_api.py`](tests/unit/test_dashboard_api.py). `dashboard.html` is a single root-level static asset (no build step).
+
+**Supply chain:** [`.whitesource`](.whitesource) configures Mend/WhiteSource when the GitHub app integration is enabled on the org repo; it is not invoked from this workflow file.
+
+**Cursor tooling:** [`.cra/`](.cra/) holds Cursor rules metadata only (`.fileignore`); no prompts or secrets are tracked there.
+
+**Follow-ups:** Use [`FOLLOW_UPS.md`](./FOLLOW_UPS.md) for tech-debt items. GitHub Issues are disabled on this repo; do not delete open FU-* entries until issues are enabled org-wide.
 
 Release process: see [`RELEASING.md`](RELEASING.md).
 
