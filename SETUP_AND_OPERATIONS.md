@@ -717,9 +717,28 @@ Every push to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/dep
 
 1. Lint and unit-test the commit (locked `uv` deps, `pgvector/pgvector:pg16` Postgres).
 2. Build and push four images to GHCR tagged with the commit SHA: `cuga`, `mcp`, `timesfm`, `dashboard`.
-3. SSH to the VPS, `git checkout` the exact SHA, `docker login ghcr.io`, pull pre-built images, and `docker compose up --no-build`.
+3. **If** repository variable `HETZNER_PROVISIONED=true`: SSH to the VPS, `git checkout` the exact SHA, `docker login ghcr.io`, pull pre-built images, and `docker compose up --no-build`, then run post-deploy smoke checks.
 
-Required GitHub Actions secrets: `HETZNER_HOST`, `HETZNER_SSH_KEY`, `GHCR_READ_TOKEN` (PAT with `read:packages`). See [`RELEASING.md`](RELEASING.md) for the full release/deploy matrix.
+**Hetzner is not provisioned yet.** Deploy and smoke are gated off by default (`HETZNER_PROVISIONED` unset or not `true`). Lint, test, and GHCR build still run so images stay current. See [`RELEASING.md`](RELEASING.md) § Hetzner deploy target (planned).
+
+### Hetzner provisioning checklist
+
+Complete before setting `HETZNER_PROVISIONED=true`:
+
+- [ ] **Server** — Hetzner VPS created (Ubuntu LTS recommended); firewall allows SSH from GitHub Actions egress (or use a self-hosted runner later).
+- [ ] **Deploy user** — `deploy` user with sudo-less Docker access; SSH key pair generated for CI.
+- [ ] **Docker** — Docker Engine + Compose plugin installed (`scripts/bootstrap_vps.sh` or equivalent).
+- [ ] **Repository clone** — `~/trade-alert` on the VPS, `git remote` pointing at `MacroSight-LLC/trade-alert`.
+- [ ] **Secrets file** — `.env.secrets` populated on the host (see `.env.secrets.example`); Vault initialized (`scripts/vault-init.sh`).
+- [ ] **GHCR login on VPS** — verify manually: `echo "$TOKEN" | docker login ghcr.io -u USER --password-stdin` then `docker pull ghcr.io/MacroSight-LLC/trade-alert/cuga:latest`.
+- [ ] **GitHub Actions secrets** — set in repo Settings → Secrets and variables → Actions:
+  - `HETZNER_HOST` — VPS IP or hostname
+  - `HETZNER_SSH_KEY` — private key for `deploy` user
+  - `GHCR_READ_TOKEN` — fine-grained PAT, **Packages: Read** on `MacroSight-LLC/trade-alert`
+- [ ] **Enable CI deploy** — `gh variable set HETZNER_PROVISIONED --body true --repo MacroSight-LLC/trade-alert`
+- [ ] **First deploy** — push to `main` or re-run **Deploy trade-alert** workflow; confirm smoke passes (MCP ports 8001–8012).
+
+Required GitHub Actions secrets and variables: see [`RELEASING.md`](RELEASING.md).
 
 Image overrides in [`docker-compose.prod.yml`](docker-compose.prod.yml) (defaults point at GHCR `latest`; CI sets SHA tags):
 

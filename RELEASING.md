@@ -6,7 +6,37 @@ This document describes how version numbers, GitHub releases, and production dep
 
 The canonical version lives in [`pyproject.toml`](pyproject.toml) (`version = "X.Y.Z"`). [`CHANGELOG.md`](CHANGELOG.md) records user-facing changes per release using [Keep a Changelog](https://keepachangelog.com/) format.
 
-Production deploys are **not** tag-gated: every push to `main` triggers [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which deploys the exact commit SHA to the VPS.
+Production deploys are **not** tag-gated: every push to `main` triggers [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which lints, tests, and builds GHCR images. **SSH deploy and smoke only run when the Hetzner VPS is provisioned** (see below).
+
+## Hetzner deploy target (planned)
+
+The production deploy path targets a **Hetzner VPS**, but **no server is provisioned yet**. Until it is:
+
+- **lint**, **test**, and **build** (GHCR push) jobs run on every push to `main`.
+- **deploy** and **smoke** are **skipped** when repository variable `HETZNER_PROVISIONED` is not `true` (default: unset or `false`).
+- A **deploy-preflight** job emits a workflow warning instead of failing the pipeline.
+
+When the server is ready, complete the checklist in [`SETUP_AND_OPERATIONS.md`](SETUP_AND_OPERATIONS.md) § Hetzner provisioning checklist, set the secrets below, then enable deploy:
+
+```bash
+gh variable set HETZNER_PROVISIONED --body true --repo MacroSight-LLC/trade-alert
+```
+
+### Required GitHub Actions secrets (before first deploy)
+
+| Secret | Purpose |
+| ------ | ------- |
+| `HETZNER_HOST` | VPS IP address or hostname |
+| `HETZNER_SSH_KEY` | Private key for the `deploy` user on the VPS |
+| `GHCR_READ_TOKEN` | Fine-grained PAT with **Packages: Read** on `MacroSight-LLC/trade-alert` (used on the VPS for `docker login ghcr.io`) |
+
+### Required repository variable
+
+| Variable | Value | Purpose |
+| -------- | ----- | ------- |
+| `HETZNER_PROVISIONED` | `true` when ready; omit or `false` until then | Gates `deploy` and `smoke` jobs in `deploy.yml` |
+
+Without these configured, deploy/smoke would fail at SSH or `docker login` (401). The gate prevents alert fatigue while Hetzner is not in use.
 
 ## Release workflows
 
@@ -35,7 +65,7 @@ Use **Release Tag** workflow dispatch and enter the version (e.g. `0.2.11`) if y
 
 | Event | Result |
 | ----- | ------ |
-| Push to `main` | CI builds GHCR images tagged with commit SHA, deploys that SHA to production |
+| Push to `main` | CI lints, tests, builds GHCR images; deploys to VPS **only if** `HETZNER_PROVISIONED=true` |
 | Git tag `vX.Y.Z` | GitHub Release + optional PyPI publish; **does not** change deploy behavior |
 
 Image tags in GHCR:
@@ -47,15 +77,7 @@ Image tags in GHCR:
 
 ## Production deploy prerequisites
 
-The deploy job in `deploy.yml` requires these GitHub Actions secrets:
-
-| Secret | Purpose |
-| ------ | ------- |
-| `HETZNER_HOST` | VPS hostname |
-| `HETZNER_SSH_KEY` | SSH private key for `deploy` user |
-| `GHCR_READ_TOKEN` | PAT or fine-grained token with `read:packages` for pulling GHCR images on the VPS |
-
-The VPS `deploy` user must have Docker installed and read access to the organization's GHCR packages.
+When `HETZNER_PROVISIONED=true`, the deploy job requires the secrets listed in [§ Hetzner deploy target (planned)](#hetzner-deploy-target-planned). The VPS `deploy` user must have Docker installed and read access to the organization's GHCR packages.
 
 ## Local / manual deploy
 

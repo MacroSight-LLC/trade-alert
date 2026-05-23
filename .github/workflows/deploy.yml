@@ -160,9 +160,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Job 4: Deploy to Hetzner VPS ────────────────────────────────
+  # ── Job 4: Deploy preflight (skipped when Hetzner not ready) ────
+  deploy-preflight:
+    needs: build
+    runs-on: ubuntu-latest
+    if: vars.HETZNER_PROVISIONED != 'true'
+    steps:
+      - name: Deploy skipped — Hetzner not provisioned
+        run: |
+          echo "::warning::HETZNER_PROVISIONED is not 'true' — deploy and smoke jobs were skipped."
+          echo "Lint, test, and GHCR image build completed successfully."
+          echo "To enable deploy: complete SETUP_AND_OPERATIONS.md § Hetzner provisioning checklist,"
+          echo "set repository secrets, then set repository variable HETZNER_PROVISIONED=true."
+          echo "See RELEASING.md § Hetzner deploy target (planned)."
+
+  # ── Job 5: Deploy to Hetzner VPS ────────────────────────────────
   deploy:
     needs: build
+    if: vars.HETZNER_PROVISIONED == 'true'
     runs-on: ubuntu-latest
     environment: production
     env:
@@ -229,9 +244,10 @@ jobs:
 
             docker image prune -f
 
-  # ── Job 5: Post-deploy smoke test ───────────────────────────────
+  # ── Job 6: Post-deploy smoke test ───────────────────────────────
   smoke:
     needs: deploy
+    if: vars.HETZNER_PROVISIONED == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Wait for services to stabilise
