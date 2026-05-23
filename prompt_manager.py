@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from constants import get_market_hours_status  # noqa: F811 — re-exported
+from gate_config import GATE_PROMPT_DEFAULTS, prompt_gate_vars
 from langfuse_client import get_langfuse_client, register_langfuse_failure
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ QUALITY RULES — follow these strictly:
    - entry.level must be a realistic current or near-term fill price
    - entry.stop must represent a logical invalidation point (support/resistance break)
    - entry.target must be technically justified (next resistance/support level)
-   - Minimum reward:risk ratio of 3:1 for LONG/SHORT (target-entry > 3x entry-stop)
+   - Minimum reward:risk ratio of {{rr_gate}}:1 for LONG/SHORT (target-entry > {{rr_gate}}x entry-stop)
    - Stop distance must be proportional to timeframe volatility
 8. THESIS QUALITY: thesis must explain the specific causal chain — not vague buzzwords.
    Bad: "Strong signals across multiple sources suggest upside."
@@ -161,20 +162,21 @@ Gate requirements (ALL must pass — enforce strictly):
 - edge_probability >= {{ep_gate}}
 - sources_agree >= {{sa_gate}}
 - average signal confidence >= {{conf_gate}}
-- reward:risk >= 3:1
+- reward:risk >= {{rr_gate}}:1
 - thesis must be specific and causal (not generic)
 
-Output format — a JSON array (may be empty []):
-[
-  {
-    "symbol": "AAPL",
+Output format — return ONLY a JSON array (may be empty []).
 
 CRITICAL OUTPUT RULES:
-- Return ONLY raw JSON (the array above).
+- Return ONLY raw JSON (the array).
 - Do NOT wrap output in markdown/code fences.
 - Do NOT add any commentary, prefixes, or suffixes.
 - If no LONG/SHORT qualifies, you MUST still check for the required WATCH fallback before returning [].
 - Return exactly [] ONLY when no LONG/SHORT qualifies AND no symbol satisfies the WATCH fallback rules.
+
+Example alert object:
+{
+    "symbol": "AAPL",
     "direction": "LONG",
     "edge_probability": 0.78,
     "confidence": 0.80,
@@ -186,12 +188,11 @@ CRITICAL OUTPUT RULES:
     "unusual_activity": ["IV spike 2.1x avg", "options sweep $190c 0DTE 500 contracts", "earnings in 2d (BMO) — elevated implied move", "SI 8.0% / DTC 4.2 — moderate squeeze potential", "TimesFM forecast +2.1% (high confidence) — confirms breakout direction"],
     "macro_regime": "Risk-on. VIX 14.2, curve +18bps. No headwinds.",
     "sources_agree": 7
-  }
-]
+}
 
 CRITICAL CHECKS before outputting each alert:
 1. Count DISTINCT signal types — sources_agree must match your actual count
-2. Verify entry.target - entry.level > 3.0 * abs(entry.level - entry.stop)
+2. Verify entry.target - entry.level >= {{rr_gate}} * abs(entry.level - entry.stop)
 3. Verify thesis is specific (mentions actual signal values, not just "strong signals")
 4. If any required field would be vague or uncertain, do NOT include that alert
 
@@ -264,11 +265,8 @@ _EXTRA_RULES: dict[str, str] = {
     ),
 }
 
-# Per-timeframe gate defaults
-_GATE_DEFAULTS: dict[str, dict[str, str]] = {
-    "15m": {"ep_gate": "0.70", "sa_gate": "4", "conf_gate": "0.75"},
-    "1h": {"ep_gate": "0.75", "sa_gate": "4", "conf_gate": "0.75"},
-}
+# Per-timeframe gate defaults — sourced from gate_config SSOT
+_GATE_DEFAULTS: dict[str, dict[str, str]] = GATE_PROMPT_DEFAULTS
 
 
 def format_winrate_context() -> str:
@@ -640,7 +638,7 @@ def get_decision_prompts(
         "snapshot_age_newest": "0",
         "market_hours_status": get_market_hours_status(),
         "recent_alerts_context": get_recent_alerts_context(),
-        **_GATE_DEFAULTS.get(timeframe, _GATE_DEFAULTS["15m"]),
+        **prompt_gate_vars(timeframe),
         **variables,
     }
 

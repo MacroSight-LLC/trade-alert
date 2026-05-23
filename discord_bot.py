@@ -28,6 +28,7 @@ from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -42,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 OPS_CHANNEL_ID: str = os.getenv("DISCORD_OPS_CHANNEL_ID", "")
+ALLOWED_USER_IDS: frozenset[str] = frozenset(
+    uid.strip() for uid in os.getenv("DISCORD_ALLOWED_USER_IDS", "").split(",") if uid.strip()
+)
+OPS_ROLE_ID: str = os.getenv("DISCORD_OPS_ROLE_ID", "").strip()
 API_BASE = "https://discord.com/api/v10"
 POLL_INTERVAL: float = float(os.getenv("DISCORD_BOT_POLL_INTERVAL", "3.0"))
 
@@ -271,13 +276,58 @@ def _get_status() -> str:
     return "\n".join(lines)
 
 
-def _handle_command(content: str, channel_id: str) -> None:
+def _user_has_ops_role(user_id: str, guild_id: str | None) -> bool:
+    """Check guild member roles when DISCORD_OPS_ROLE_ID is configured."""
+    if not OPS_ROLE_ID:
+        return True
+    if not guild_id:
+        return False
+    try:
+        resp = _get_client().get(
+            f"{API_BASE}/guilds/{guild_id}/members/{user_id}",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        roles = resp.json().get("roles") or []
+        return OPS_ROLE_ID in {str(r) for r in roles}
+    except httpx.HTTPError as exc:
+        logger.warning("Role check failed for user %s: %s", user_id, exc)
+        return False
+
+
+def _author_is_authorized(author: dict[str, Any], guild_id: str | None = None) -> bool:
+    """Return True when the Discord user may invoke bot commands."""
+    if author.get("bot"):
+        return False
+    user_id = str(author.get("id", ""))
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        return False
+    if not _user_has_ops_role(user_id, guild_id):
+        return False
+    return True
+
+
+def _handle_command(
+    content: str,
+    channel_id: str,
+    author: dict[str, Any] | None = None,
+    guild_id: str | None = None,
+) -> None:
     """Process a bot command and send response to Discord.
 
     Args:
         content: Raw message text.
         channel_id: Channel where command was received.
+        author: Discord message author dict (for authorization).
     """
+    if author is not None and not _author_is_authorized(author, guild_id):
+        logger.warning(
+            "Rejected unauthorized command from user %s",
+            author.get("username", "?"),
+        )
+        _send_message(channel_id, "⛔ You are not authorized to run bot commands.")
+        return
+
     parts = content.strip().lower().split()
     cmd = parts[0] if parts else ""
 
@@ -581,7 +631,7 @@ def _poll_messages() -> None:
                 content = msg.get("content", "").strip()
                 if content.startswith("!"):
                     logger.info("Command from %s: %s", author.get("username", "?"), content)
-                    _handle_command(content, OPS_CHANNEL_ID)
+                    _handle_command(content, OPS_CHANNEL_ID, author, msg.get("guild_id"))
 
         except httpx.HTTPError as exc:
             logger.warning("Poll error: %s", exc)

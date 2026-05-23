@@ -34,7 +34,6 @@ steps:
   - name: compute-risk-flag
     type: code
     code: |
-      import os
 
       vix_result       = steps["fetch-macro-data"][0]
       yc_result        = steps["fetch-macro-data"][1]
@@ -44,8 +43,8 @@ steps:
       yield_curve_slope    = yc_result.get("spread_bps") or yc_result.get("value", 0.0)
       fed_funds_rate       = ffr_result.get("rate") or ffr_result.get("value", 5.0)
 
-      vix_threshold   = float(os.environ.get("VIX_RISK_THRESHOLD", "25.0"))
-      curve_threshold = float(os.environ.get("CURVE_RISK_THRESHOLD", "-25.0"))
+      vix_threshold   = float(env_get("VIX_RISK_THRESHOLD", "25.0"))
+      curve_threshold = float(env_get("CURVE_RISK_THRESHOLD", "-25.0"))
       risk_on = (vix_level < vix_threshold) and (yield_curve_slope > curve_threshold)
 
       result = {
@@ -62,14 +61,12 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
       from normalizers.macro_normalizer import normalize
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      r = get_redis()
       macro_data = steps["compute-risk-flag"]
 
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
 
       # Write macro:regime for merger.get_macro_regime()
       r.setex("macro:regime", snapshot_ttl, json.dumps(macro_data))

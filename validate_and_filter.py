@@ -21,7 +21,6 @@ import json
 import logging
 import math
 import os
-import re
 import time
 from datetime import UTC, datetime
 from enum import Enum
@@ -31,7 +30,6 @@ from zoneinfo import ZoneInfo
 from constants import MACRO_STALE_SECONDS as _MACRO_STALE_SECONDS
 from constants import get_market_hours_status
 from metrics import (
-    ALERTS_PER_CYCLE,
     GATE_REJECTIONS,
     REDIS_CIRCUIT_OPEN,
     WATCH_DECAY_SKIPPED,
@@ -39,10 +37,18 @@ from metrics import (
 from models import PlaybookAlert
 from redis_client import get_redis
 
+from gate_config import (
+    EXTENDED_HOURS_ALERTS_ENABLED,
+    EXTENDED_HOURS_CONFIDENCE_PENALTY,
+    GATE_CONF,
+    GATE_EP,
+    GATE_RR,
+    GATE_SA,
+    classify_regime,
+)
 from gates.dedup import _dedup_key, _reset_dedup_keys, _try_dedup_set
 from gates.regime import (
     EP_CEILING,
-    _classify_regime,
     _dynamic_gates,
     _load_ep_ceiling,
     _signal_surface,
@@ -72,7 +78,14 @@ from gates.watch import (
     _watch_is_improving,
     _watch_max_for_regime,
 )
+from gate_telemetry import (
+    log_decision_gate_summary,
+    record_langfuse_gate_scores,
+    record_prometheus_gate_metrics,
+)
+from llm_response_parser import parse_llm_alerts
 
+_classify_regime = classify_regime  # backward-compatible alias for tests
 
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
@@ -111,27 +124,17 @@ class GateRejection(str, Enum):
 # Valid alert timeframes
 _VALID_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1D"}
 
-
-# Per-timeframe gate thresholds (SSOT §10.2 / §10.3)
-# Configurable via env vars: GATE_EP_15M, GATE_EP_1H, GATE_SA, GATE_CONF
-_GATE_EP: dict[str, float] = {
-    "15m": float(os.environ.get("GATE_EP_15M", "0.70")),
-    "1h": float(os.environ.get("GATE_EP_1H", "0.75")),
-}
-# SA gate = minimum number of independent signal families aligned to direction.
-# 7 families exist (trend, volume, sentiment, flow, events, macro, positioning);
-# requiring 4 ensures meaningful multi-family conviction.
-_GATE_SA: int = int(os.environ.get("GATE_SA", "4"))
-_GATE_CONF: float = float(os.environ.get("GATE_CONF", "0.75"))
+# Re-export gate thresholds from gate_config SSOT (backward compatible names).
+_GATE_EP: dict[str, float] = GATE_EP
+_GATE_SA: int = GATE_SA
+_GATE_CONF: float = GATE_CONF
+_GATE_RR: dict[str, float] = GATE_RR
 _HIGH_CONFIDENCE_MIN: float = float(os.environ.get("HIGH_CONFIDENCE_MIN", "0.85"))
 _HIGH_CONFIDENCE_MIN_SA: int = int(os.environ.get("HIGH_CONFIDENCE_MIN_SA", "5"))
 
 # Per-timeframe R:R minimums (reward must be >= N × risk to be actionable).
 # 15m setups are shorter-lived so 2:1 is sufficient; 1h setups warrant 2.5:1.
-_GATE_RR: dict[str, float] = {
-    "15m": float(os.environ.get("GATE_RR_15M", "2.0")),
-    "1h": float(os.environ.get("GATE_RR_1H", "2.5")),
-}
+# Values loaded from gate_config.GATE_RR above.
 
 
 # Deterministic sources_agree from server-side family alignment.
@@ -397,110 +400,13 @@ def validate_and_filter(
         _redis_circuit_warned_this_cycle = True
 
     # ── Parse LLM JSON ───────────────────────────────────────────
-    # Some providers return fenced markdown (```json ... ```) or wrap
-    # JSON in explanatory text. Extract the array payload defensively.
-    def _extract_json_array_text(payload: Any) -> str:
-        if isinstance(payload, str):
-            text = payload.strip()
-        elif isinstance(payload, list):
-            return json.dumps(payload)
-        elif isinstance(payload, dict):
-            content = payload.get("content")
-            if isinstance(content, str):
-                text = content.strip()
-            else:
-                return json.dumps(payload)
-        else:
-            text = str(payload or "").strip()
-
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-
-        if not text.startswith("["):
-            start = text.find("[")
-            end = text.rfind("]")
-            if start != -1 and end > start:
-                text = text[start : end + 1]
-
-        return text
-
-    parse_used_repair = False
-
-    def _json_loads_with_repairs(text: str) -> Any:
-        """Parse JSON with light deterministic repairs for common LLM artifacts."""
-        nonlocal parse_used_repair
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-        # Repair trailing commas before ] or }.
-        repaired = re.sub(r",(\s*[\]}])", r"\1", text)
-        parse_used_repair = True
-        return json.loads(repaired)
-
-    # ── Detect API-level errors before attempting JSON parse ─────
-    # When the pipeline runner exhausts all retries, step_results["ensemble-decide"]
-    # is set to None. Also, litellm wraps provider errors as strings like:
-    # "litellm.InternalServerError: AnthropicError - {...overloaded_error...}"
-    # Both cases are infrastructure failures, not prompt compliance issues.
-    if llm_response is None or llm_response == "":
-        logger.error("LLM response is None/empty — all retries exhausted (API overload or timeout)")
-        if add_score_fn and trace_id:
-            add_score_fn(trace_id, "llm_api_error", 1.0, comment="LLM returned None — all retries exhausted")
-        return [], "[]"
-
-    _llm_resp_str = str(llm_response)
-    _API_ERROR_MARKERS = (
-        "InternalServerError",
-        "overloaded_error",
-        "RateLimitError",
-        "ServiceUnavailableError",
-        "APIConnectionError",
-        "APIStatusError",
-        "AnthropicError",
+    raw, _parse_used_repair = parse_llm_alerts(
+        llm_response,
+        add_score_fn=add_score_fn,
+        trace_id=trace_id,
     )
-    if any(m in _llm_resp_str for m in _API_ERROR_MARKERS):
-        logger.error("LLM API error detected (not a prompt compliance issue): %s", _llm_resp_str[:300])
-        if add_score_fn and trace_id:
-            add_score_fn(
-                trace_id, "llm_api_error", 1.0, comment="LLM backend error — not a JSON compliance failure"
-            )
+    if raw is None:
         return [], "[]"
-
-    try:
-        llm_json_text = _extract_json_array_text(llm_response)
-        raw = _json_loads_with_repairs(llm_json_text)
-        # Accept common wrapped shapes produced by LLMs, e.g.
-        # {"alerts": [...]} or {"result": [...]}.
-        if isinstance(raw, dict):
-            for key in ("alerts", "result", "results", "data"):
-                candidate = raw.get(key)
-                if isinstance(candidate, list):
-                    raw = candidate
-                    break
-        if not isinstance(raw, list):
-            raise ValueError(f"Expected list, got {type(raw).__name__}")
-    except Exception as e:
-        logger.error("Decision engine JSON parse error: %s", e)
-        logger.error("Raw response: %s", str(llm_response)[:500])
-        if add_score_fn and trace_id:
-            add_score_fn(trace_id, "llm_json_valid", 0.0, comment="JSON parse failed")
-        return [], "[]"
-
-    if add_score_fn and trace_id:
-        add_score_fn(trace_id, "llm_json_valid", 1.0, comment="valid JSON array")
-        add_score_fn(
-            trace_id,
-            "llm_json_repaired",
-            1.0 if parse_used_repair else 0.0,
-            comment="1 if lightweight parser repair was required",
-        )
 
     # ── Parse snapshots once ──────────────────────────────────────
     parsed_snaps = _parse_snapshots(snapshots_json)
@@ -530,7 +436,7 @@ def validate_and_filter(
         vix = 35.0
 
     bulls, bears, trend_strength = _signal_surface(parsed_snaps)
-    regime = _classify_regime(vix, risk_off, bulls, bears, trend_strength)
+    regime = classify_regime(vix, risk_off, bulls, bears, trend_strength)
     ep_gate, sa_gate, conf_gate = _dynamic_gates(
         base_ep_gate,
         base_sa_gate,
@@ -730,6 +636,18 @@ def validate_and_filter(
                         drift_gate * 100.0,
                     )
                     _add_reason(GateRejection.ENTRY_MARKET_DRIFT)
+
+        # ── Extended-hours confidence penalty (optional) ─────────
+        if directional and EXTENDED_HOURS_ALERTS_ENABLED and market_session in {"pre", "after"}:
+            before = alert.confidence
+            alert.confidence = max(0.0, alert.confidence + EXTENDED_HOURS_CONFIDENCE_PENALTY)
+            logger.info(
+                "Extended-hours penalty: %s session=%s conf %.2f -> %.2f",
+                alert.symbol,
+                market_session,
+                before,
+                alert.confidence,
+            )
 
         # ── Market-session server-side gate ─────────────────────
         if directional and market_session == "closed" and _MARKET_HOURS_GATES_ENABLED:
@@ -1111,86 +1029,30 @@ def validate_and_filter(
     pre_dist = _candidate_distribution(candidates)
     post_dist = _candidate_distribution(alerts)
 
-    logger.info(
-        "Decision-%s gate summary: llm_candidates=%d parsed_candidates=%d passed_total=%d "
-        "passed_directional=%d passed_watch=%d rejected_total=%d rejected_directional=%d rejected_watch=%d "
-        "regime=%s market_session=%s trend_strength=%.2f breadth=%d/%d "
-        "ep_gate=%.2f(base=%.2f) sa_gate=%d(base=%d) conf_gate=%.2f(base=%.2f)",
-        timeframe,
-        len(raw),
-        len(candidates),
-        len(alerts),
-        len(directional_alerts),
-        len(watch_alerts),
-        len(rejections),
-        len(directional_rejections),
-        len(watch_rejections),
-        regime,
-        market_session,
-        trend_strength,
-        bulls,
-        bears,
-        ep_gate,
-        base_ep_gate,
-        sa_gate,
-        base_sa_gate,
-        conf_gate,
-        base_conf_gate,
+    log_decision_gate_summary(
+        timeframe=timeframe,
+        raw_count=len(raw),
+        candidates_count=len(candidates),
+        alerts=alerts,
+        directional_alerts=directional_alerts,
+        watch_alerts=watch_alerts,
+        rejections=rejections,
+        directional_rejections=directional_rejections,
+        watch_rejections=watch_rejections,
+        regime=regime,
+        market_session=market_session,
+        trend_strength=trend_strength,
+        bulls=bulls,
+        bears=bears,
+        ep_gate=ep_gate,
+        base_ep_gate=base_ep_gate,
+        sa_gate=sa_gate,
+        base_sa_gate=base_sa_gate,
+        conf_gate=conf_gate,
+        base_conf_gate=base_conf_gate,
+        pre_dist=pre_dist,
+        post_dist=post_dist,
     )
-    logger.info(
-        "Decision-%s candidate quality pre-gates: median_ep=%.2f median_conf=%.2f median_rr=%.2f median_sa=%.1f",
-        timeframe,
-        pre_dist["median_ep"],
-        pre_dist["median_conf"],
-        pre_dist["median_rr"],
-        pre_dist["median_sa"],
-    )
-    logger.info(
-        "Decision-%s candidate quality post-gates: median_ep=%.2f median_conf=%.2f median_rr=%.2f median_sa=%.1f",
-        timeframe,
-        post_dist["median_ep"],
-        post_dist["median_conf"],
-        post_dist["median_rr"],
-        post_dist["median_sa"],
-    )
-    logger.info("Decision-%s: %d alerts passed gates", timeframe, len(alerts))
-
-    # ── Log sample rejections per gate for debugging ──────────────
-    gate_samples: dict[str, list[str]] = {}
-    for sym, gate in rejections:
-        gate_samples.setdefault(gate.value, []).append(sym)
-    for gate_name, symbols in gate_samples.items():
-        sample = symbols[:3]  # cap at 3 examples per gate
-        logger.info(
-            "Gate %s rejected %d alerts (sample: %s)",
-            gate_name,
-            len(symbols),
-            ", ".join(sample),
-        )
-    if gate_samples:
-        logger.info(
-            "Decision-%s rejection counts: %s",
-            timeframe,
-            ", ".join(f"{gate_name}={len(symbols)}" for gate_name, symbols in sorted(gate_samples.items())),
-        )
-
-    if len(alerts) == 0:
-        if len(raw) == 0:
-            no_alert_reason = "llm_zero_candidates"
-        elif len(candidates) == 0:
-            no_alert_reason = "all_candidates_invalid"
-        elif gate_samples:
-            top_gate = sorted(gate_samples.items(), key=lambda kv: (-len(kv[1]), kv[0]))[0]
-            no_alert_reason = f"gate_filtered:{top_gate[0]}"
-        else:
-            no_alert_reason = "no_actionable_candidates"
-        logger.info(
-            "Decision-%s no-alert summary: reason=%s parsed_candidates=%d llm_candidates=%d",
-            timeframe,
-            no_alert_reason,
-            len(candidates),
-            len(raw),
-        )
 
     watch_kept = sum(1 for a in alerts if a.direction == "WATCH")
     _record_session_gate_metrics(
@@ -1203,92 +1065,21 @@ def validate_and_filter(
         dedup_suppressed_count,
     )
 
-    # ── Structured gate telemetry ─────────────────────────────────
     if add_score_fn and trace_id:
-        total = max(len(raw), 1)
-        pass_rate = len(alerts) / total
-        rejection_rate = len(rejections) / total
-        add_score_fn(
-            trace_id,
-            "alert_pass_rate",
-            pass_rate,
-            comment=f"{len(alerts)}/{len(raw)} passed gates",
+        record_langfuse_gate_scores(
+            add_score_fn=add_score_fn,
+            trace_id=trace_id,
+            raw_count=len(raw),
+            alerts=alerts,
+            rejections=rejections,
+            pre_dist=pre_dist,
+            post_dist=post_dist,
         )
-        add_score_fn(
-            trace_id,
-            "alerts_fired",
-            float(len(alerts)),
-            comment=f"{len(alerts)} alerts",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_ep_pre",
-            pre_dist["median_ep"],
-            comment="median edge_probability before gates",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_conf_pre",
-            pre_dist["median_conf"],
-            comment="median confidence before gates",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_rr_pre",
-            pre_dist["median_rr"],
-            comment="median R:R before gates",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_ep_post",
-            post_dist["median_ep"],
-            comment="median edge_probability after gates",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_conf_post",
-            post_dist["median_conf"],
-            comment="median confidence after gates",
-        )
-        add_score_fn(
-            trace_id,
-            "candidate_median_rr_post",
-            post_dist["median_rr"],
-            comment="median R:R after gates",
-        )
-        add_score_fn(
-            trace_id,
-            "gate_rejection_rate",
-            rejection_rate,
-            comment=f"{len(rejections)}/{len(raw)} rejected",
-        )
-        if rejection_rate > 0.9 and len(raw) >= 3:
-            logger.warning(
-                "Gate rejection rate %.0f%% (%d/%d) exceeds 90%% threshold — "
-                "LLM output quality may have degraded",
-                rejection_rate * 100,
-                len(rejections),
-                len(raw),
-            )
-        # Per-gate rejection counts for observability
-        gate_counts: dict[str, int] = {}
-        for _sym, gate in rejections:
-            gate_counts[gate.value] = gate_counts.get(gate.value, 0) + 1
-        for gate_name, count in gate_counts.items():
-            add_score_fn(
-                trace_id,
-                f"gate_reject_{gate_name}",
-                float(count),
-                comment=f"{count} alerts rejected by {gate_name}",
-            )
 
-    # Prometheus gate counters (always emitted, independent of Langfuse).
-    _gate_counts: dict[str, int] = {}
-    for _sym, _gate in rejections:
-        _gate_counts[_gate.value] = _gate_counts.get(_gate.value, 0) + 1
-    for _gate_name, _count in _gate_counts.items():
-        GATE_REJECTIONS.labels(gate=_gate_name).inc(_count)
-
-    ALERTS_PER_CYCLE.labels(timeframe=timeframe).observe(len(alerts))
+    record_prometheus_gate_metrics(
+        timeframe=timeframe,
+        alerts=alerts,
+        rejections=rejections,
+    )
     alerts_json = json.dumps([a.model_dump() for a in alerts])
     return alerts, alerts_json

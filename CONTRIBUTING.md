@@ -242,7 +242,9 @@ stay in `validate_and_filter.py`.
 New helpers added to `gates/` must be re-exported from `validate_and_filter.py` if any
 test patches them via `vf._helper` or imports them from `validate_and_filter`.
 
-Workflow code blocks import via a sandbox allowlist in `pipeline_runner.py`
+Workflow code blocks import via a sandbox allowlist in `workflow_sandbox.py`
+(executed by `pipeline_runner.py`). Inline `mcp_call()` is **blocked** in `code:` steps —
+use `type: tool_call` or `parallel_tool_calls` instead.
 (`_IMPORT_ALLOWLIST`). When adding a new project module callable from workflow
 `code:` steps, add its dotted path to that set (including `gates.*` submodules).
 
@@ -261,7 +263,13 @@ to the directory layout in `CUGA-Trading-Alert-System-SPEC-v1.3.md` §6 in the
 same PR. The SSOT is the single source of truth for what lives in the repo, so a
 new module that is missing from §6 will fail review.
 
-`SSOT.md` at the repo root is a symlink to `CUGA-Trading-Alert-System-SPEC-v1.3.md`.
+`SSOT.md` at the repo root is a symlink to `docs/spec-v1.3.md`.
+
+## Workflow authoring
+
+- Validate against `schemas/workflow.schema.json` (`uv run check-jsonschema --schemafile schemas/workflow.schema.json workflows/*.yaml`).
+- Never call `mcp_call()` inside `code:` blocks — use `tool_call` / `parallel_tool_calls`.
+- Orchestrator changes go in `workflows/orchestrator-base.yaml`; keep `orchestrator-15m.yaml` / `orchestrator-1h.yaml` wrappers in sync (`scripts/check_orchestrator_parity.py`).
 Application Python modules live at the repo root by design; `src/cuga/` is the
 upstream CUGA library and must not be edited. CUGA runtime workflows live in
 `workflows/`; GitHub Actions CI configs live in `.github/workflows/`.

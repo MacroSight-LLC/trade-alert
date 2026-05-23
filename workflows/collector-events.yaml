@@ -24,10 +24,8 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      r = get_redis()
       equities_raw = r.get("universe:equities")
       equities = json.loads(equities_raw) if equities_raw else ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"]
       result = {"equities": equities}
@@ -92,9 +90,7 @@ steps:
     type: code
     code: |
       import logging
-      import os
       from datetime import datetime, timezone, timedelta
-      import redis
 
       from normalizers.events_normalizer import normalize as normalize_events
       from normalizers.si_normalizer import normalize as normalize_si
@@ -102,8 +98,8 @@ steps:
       from normalizers.market_normalizer import normalize as normalize_market
 
       logger = logging.getLogger(__name__)
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      r = get_redis()
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
 
       equities = (steps.get("read-universes") or {}).get("equities", [])
       requested_earnings = equities[:30]

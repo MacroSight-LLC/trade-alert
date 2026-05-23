@@ -212,8 +212,6 @@ class TestParallelToolCalls:
         mock_client_ctx: MagicMock,
         mock_gather: MagicMock,
     ) -> None:
-        import asyncio
-
         async def _fake_gather(*tasks: object, return_exceptions: bool = False) -> list[object]:
             assert return_exceptions is True
             assert len(tasks) == 2
@@ -256,9 +254,9 @@ class TestParallelWorkflows:
         mock_pool.submit.side_effect = [mock_future_a, mock_future_b]
         mock_executor_cls.return_value = mock_pool
 
-        from concurrent.futures import as_completed
-
-        with patch("pipeline_runner.concurrent.futures.as_completed", return_value=[mock_future_a, mock_future_b]):
+        with patch(
+            "pipeline_runner.concurrent.futures.as_completed", return_value=[mock_future_a, mock_future_b]
+        ):
             result = _exec_parallel_workflows(
                 {"workflows": ["a.yaml", "b.yaml"]},
                 workflows_dir,
@@ -299,7 +297,10 @@ steps:
         assert results["step-two"] == 3
         assert results["step-three"] == 9
 
-    @patch("pipeline_runner._execute_step", side_effect=[RuntimeError("boom"), {"recovered": True}])
+    @patch(
+        "pipeline_runner._execute_step",
+        side_effect=[RuntimeError("boom"), {"recovered": True}],
+    )
     def test_abort_on_failure_stops_subsequent_steps(self, _mock_exec: MagicMock, tmp_path) -> None:
         wf_dir = tmp_path / "workflows"
         wf_dir.mkdir()
@@ -351,6 +352,58 @@ steps:
         assert results["next-step"] == {"ok": True}
 
 
+class TestMcpErrorHandling:
+    @patch("pipeline_runner.mcp_call")
+    def test_tool_call_skip_strategy(self, mock_mcp: MagicMock, tmp_path) -> None:
+        mock_mcp.return_value = {"error": "timeout"}
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        wf_file = wf_dir / "mcp-skip.yaml"
+        wf_file.write_text(
+            """
+name: mcp-skip-test
+error_handling:
+  on_mcp_error:
+    rot-mcp:
+      strategy: skip
+steps:
+  - name: call-rot
+    type: tool_call
+    tool: rot-mcp
+    method: trending_tickers
+    params: {}
+""".strip()
+        )
+        results = run_workflow(wf_file)
+        assert results["call-rot"] == {}
+
+    def test_parallel_tool_calls_renders_dynamic_calls(self, tmp_path) -> None:
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        wf_file = wf_dir / "dynamic-calls.yaml"
+        wf_file.write_text(
+            """
+name: dynamic-calls-test
+steps:
+  - name: build-calls
+    type: code
+    code: |
+      result = {"calls": [{"tool": "spamshield-mcp", "method": "classify_text", "params": {"text": "hi"}}]}
+  - name: run-calls
+    type: parallel_tool_calls
+    calls: "{{ steps['build-calls']['calls'] }}"
+""".strip()
+        )
+        with patch(
+            "pipeline_runner._mcp_call_async",
+            new_callable=AsyncMock,
+            return_value={"is_spam": False},
+        ) as mock_mcp:
+            results = run_workflow(wf_file)
+        assert mock_mcp.called
+        assert results["run-calls"] == [{"is_spam": False}]
+
+
 # ── _exec_code_step import allowlist ────────────────────────────
 
 
@@ -361,16 +414,22 @@ class TestExecCodeStepImportAllowlist:
         "import_stmt",
         [
             "import gates.regime",
-            "import gates.session",
-            "import notifier",
-            "import alert_logger",
-            "import discord_formatter",
+            "import decision_helpers",
+            "import json",
         ],
     )
     def test_allowed_project_imports(self, import_stmt: str) -> None:
         code = f"{import_stmt}\nresult = True"
         assert _exec_code_step(code, {}, {}) is True
 
-    def test_blocked_import_raises(self) -> None:
+    def test_blocked_os_import_raises(self) -> None:
         with pytest.raises(ImportError, match="not allowed"):
-            _exec_code_step("import subprocess\nresult = True", {}, {})
+            _exec_code_step("import os\nresult = True", {}, {})
+
+    def test_blocked_getattr_escape(self) -> None:
+        with pytest.raises((ImportError, NameError, AttributeError, RuntimeError)):
+            _exec_code_step(
+                "g = getattr\nresult = g((), '__class__')",
+                {},
+                {},
+            )

@@ -567,13 +567,16 @@ curl http://localhost:9090/api/v1/targets
 # Exposed metrics (scraped from dashboard :8080/metrics):
 #   pipeline_run_total          — counter of pipeline executions by timeframe
 #   pipeline_run_active         — gauge of currently running pipelines
+#   pipeline_runs_total         — counter of pipeline workflow executions
 #   mcp_call_duration_seconds   — histogram of MCP call latency by endpoint
-#   circuit_breaker_trip_total  — counter of MCP circuit breaker trips
-#   gate_rejection_total        — counter of validation gate rejections by gate name
+#   mcp_circuit_breaker_trips_total — counter of MCP circuit breaker trips
+#   gate_rejections_total       — counter of validation gate rejections by gate name
 #   alerts_per_cycle            — histogram of alerts fired per pipeline run
-#   discord_send_total          — counter of Discord sends (success/fail)
-#   db_insert_total             — counter of alert DB inserts
+#   discord_sends_total         — counter of Discord sends (success/fail)
+#   db_inserts_total            — counter of alert DB inserts
 #   chart_gen_duration_seconds  — histogram of candlestick chart generation time
+#   trade_alert_redis_circuit_open — gauge: 1 when Redis circuit breaker is open (WATCH decay disabled)
+#   trade_alert_watch_decay_skipped_total — counter of WATCH alerts that bypassed decay during Redis outage
 ```
 
 ### View Logs
@@ -1024,6 +1027,28 @@ docker compose -f docker-compose.prod.yml restart tradingview-mcp
 sleep 10
 curl http://localhost:8001/health
 ```
+
+---
+
+## Data retention
+
+| Dataset | Default retention | Mechanism |
+| ------- | ------------------- | --------- |
+| Postgres `alerts` | **180 days** (`DATA_RETENTION_DAYS`) | Weekly `scripts/purge_old_data.py` (Sunday 03:00 ET, see `crontab`) |
+| Langfuse datasets | **90 days** (`LANGFUSE_DATASET_RETENTION_DAYS`) | Weekly `scripts/purge_langfuse_datasets.py` (Sunday 02:00 ET) |
+| Redis snapshots | 20 min TTL (1200s) | Collector/orchestrator flush |
+
+- `idx_alerts_created_at` exists in `schema.sql` — no migration needed for purge.
+- `pg_partman` monthly partitioning is **deferred** (see `schema.sql` comments).
+- Set `PURGE_VACUUM_ENABLED=true` to run `VACUUM ANALYZE alerts` after purge.
+- Set `LANGFUSE_DATASET_CAPTURE_ENABLED=0` to disable decision-run dataset capture.
+
+### EOD Discord stagger (Mon–Fri ET)
+
+| Time | Job |
+| ---- | --- |
+| **16:10** | `state-summary.yaml` — regime, gates, WATCH queue |
+| **16:20** | `eod_summary.py` — pipeline stats and alert recap |
 
 ---
 

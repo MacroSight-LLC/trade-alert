@@ -21,6 +21,13 @@ Closes #
 - [ ] I have updated the documentation accordingly
 - [ ] I have added docstrings to new functions/classes
 
+## Security review
+- [ ] No secrets in code, YAML, or committed env files
+- [ ] Workflow `code:` steps respect `workflow_sandbox.py` (no `mcp_call`, `os`, `redis`, `httpx`)
+- [ ] Execution bridge changes tested with dry-run / paper mode
+- [ ] `detect-secrets` baseline updated if new false positives were audited
+- [ ] `ruff check .` and mypy paths for touched modules are clean
+
 ### Checklist
 - [ ] My code follows the code style of this project
 - [ ] I have performed a self-review of my own code

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -72,7 +72,7 @@ class TestStopTightening:
 
     def test_long_in_profit_tightened_stop_triggers_loss(self) -> None:
         """When stop is tightened above current price, outcome should be LOSS."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = {
             "direction": "LONG",
             "entry_level": 100.0,
@@ -86,7 +86,7 @@ class TestStopTightening:
 
     def test_short_in_profit_tightened_stop_triggers_loss(self) -> None:
         """When SHORT stop is tightened below current price, outcome should be LOSS."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = {
             "direction": "SHORT",
             "entry_level": 100.0,
@@ -107,7 +107,7 @@ class TestStopTightening:
 
     def test_evaluate_outcome_still_open(self) -> None:
         """Alert that hasn't hit stop or target should return None (still open)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = {
             "direction": "LONG",
             "entry_level": 100.0,
@@ -120,7 +120,7 @@ class TestStopTightening:
 
     def test_evaluate_outcome_win(self) -> None:
         """LONG alert hitting target should return WIN."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = {
             "direction": "LONG",
             "entry_level": 100.0,

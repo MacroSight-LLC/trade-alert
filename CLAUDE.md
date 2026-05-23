@@ -4,7 +4,7 @@ This is the `/trade-alert` project: a production trading alert engine built on `
 
 ## SSOT
 The full architecture, schemas, and implementation rules are in:
-**`CUGA-Trading-Alert-System-SPEC-v1.3.md`** at the repo root.
+**`docs/spec-v1.3.md`** (symlinked as `SSOT.md` and root `CUGA-Trading-Alert-System-SPEC-v1.3.md`).
 
 ## Rules
 - Always read and follow `CUGA-Trading-Alert-System-SPEC-v1.3.md` before generating or editing any code.

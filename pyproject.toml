@@ -108,6 +108,7 @@ test_llm = "scripts.commands:test_llm"
 
 [dependency-groups]
 dev = [
+    "check-jsonschema>=0.28.0",
     "pytz>=2025.1",
     "ruff>=0.9.4",
     "tabulate",
@@ -150,6 +151,13 @@ files = [
     "prompt_manager.py",
     "pipeline_tracing.py",
     "pipeline_runner.py",
+    "workflow_sandbox.py",
+    "workflow_template.py",
+    "llm_client.py",
+    "llm_response_parser.py",
+    "gate_telemetry.py",
+    "gate_config.py",
+    "resilience/",
     "trace_analyzer.py",
     "vault_env_loader.py",
     "dashboard_api.py",

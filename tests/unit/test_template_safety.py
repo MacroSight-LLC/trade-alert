@@ -76,11 +76,11 @@ class TestInjectionBlocked:
     """Attempts to exploit the template engine must raise ValueError."""
 
     def test_dunder_class_access(self) -> None:
-        with pytest.raises(ValueError, match="Dunder attribute"):
+        with pytest.raises(ValueError, match="Dunder attribute|Function call not allowed"):
             _safe_eval("().__class__.__bases__[0].__subclasses__()", {"steps": {}})
 
     def test_dunder_import(self) -> None:
-        with pytest.raises(ValueError, match="Dunder attribute"):
+        with pytest.raises(ValueError, match="Dunder attribute|Function call not allowed"):
             _safe_eval("''.__class__.__mro__[1].__subclasses__()", {"steps": {}})
 
     def test_import_builtin(self) -> None:

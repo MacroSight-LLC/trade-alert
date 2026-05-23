@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +23,7 @@ def long_alert() -> dict:
         "entry_level": 185.0,
         "stop_level": 182.0,
         "target_level": 192.0,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "fired_at": datetime.now(UTC) - timedelta(hours=1),
     }
 
 
@@ -34,7 +34,7 @@ def short_alert() -> dict:
         "entry_level": 185.0,
         "stop_level": 188.0,
         "target_level": 178.0,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "fired_at": datetime.now(UTC) - timedelta(hours=1),
     }
 
 
@@ -78,15 +78,15 @@ class TestEvaluateOutcome:
     # ── Expiry ──
 
     def test_expired_long(self, long_alert: dict) -> None:
-        long_alert["fired_at"] = datetime.now(timezone.utc) - timedelta(hours=5)
+        long_alert["fired_at"] = datetime.now(UTC) - timedelta(hours=5)
         assert evaluate_outcome(long_alert, 186.0) == "EXPIRED"
 
     def test_expired_short(self, short_alert: dict) -> None:
-        short_alert["fired_at"] = datetime.now(timezone.utc) - timedelta(hours=5)
+        short_alert["fired_at"] = datetime.now(UTC) - timedelta(hours=5)
         assert evaluate_outcome(short_alert, 184.0) == "EXPIRED"
 
     def test_not_expired_within_window(self, long_alert: dict) -> None:
-        long_alert["fired_at"] = datetime.now(timezone.utc) - timedelta(hours=3)
+        long_alert["fired_at"] = datetime.now(UTC) - timedelta(hours=3)
         assert evaluate_outcome(long_alert, 186.0) is None
 
     # ── Edge cases ──
@@ -96,7 +96,7 @@ class TestEvaluateOutcome:
             "entry_level": 100,
             "stop_level": 95,
             "target_level": 110,
-            "fired_at": datetime.now(timezone.utc),
+            "fired_at": datetime.now(UTC),
         }
         assert evaluate_outcome(bad, 100.0) is None
 
@@ -106,7 +106,7 @@ class TestEvaluateOutcome:
             "entry_level": 100,
             "stop_level": 95,
             "target_level": 110,
-            "fired_at": datetime.now(timezone.utc),
+            "fired_at": datetime.now(UTC),
         }
         assert evaluate_outcome(bad, 100.0) is None
 
@@ -129,7 +129,7 @@ class TestMapDbRow:
         row = {
             "id": 1,
             "entry": {"level": 100.0, "stop": 95.0, "target": 110.0},
-            "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "created_at": datetime(2024, 1, 1, tzinfo=UTC),
         }
         mapped = _map_db_row(row)
         assert mapped["entry_level"] == 100.0
@@ -141,7 +141,7 @@ class TestMapDbRow:
         row = {
             "id": 2,
             "entry": json.dumps({"level": 50.0, "stop": 48.0, "target": 55.0}),
-            "created_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+            "created_at": datetime(2024, 6, 1, tzinfo=UTC),
         }
         mapped = _map_db_row(row)
         assert mapped["entry_level"] == 50.0
@@ -226,7 +226,7 @@ class TestRunTrackerCycle:
                 "symbol": "AAPL",
                 "direction": "LONG",
                 "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-                "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
+                "created_at": datetime.now(UTC) - timedelta(hours=1),
                 "outcome": None,
             },
         ]
@@ -269,7 +269,7 @@ class TestRunTrackerCycle:
                 "symbol": "SPY",
                 "direction": "WATCH",
                 "entry": {"level": 500.0, "stop": 490.0, "target": 510.0},
-                "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
+                "created_at": datetime.now(UTC) - timedelta(hours=1),
                 "outcome": None,
             },
         ]
@@ -298,7 +298,7 @@ class TestRunTrackerCycle:
                 "symbol": "AAPL",
                 "direction": "LONG",
                 "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-                "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
+                "created_at": datetime.now(UTC) - timedelta(hours=1),
                 "outcome": None,
             },
         ]
@@ -322,7 +322,7 @@ class TestRunTrackerCycle:
                 "symbol": "AAPL",
                 "direction": "LONG",
                 "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-                "created_at": datetime.now(timezone.utc) - timedelta(hours=5),
+                "created_at": datetime.now(UTC) - timedelta(hours=5),
                 "outcome": None,
             },
         ]

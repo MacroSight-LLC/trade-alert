@@ -4,23 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from unittest.mock import MagicMock, patch
-from zoneinfo import ZoneInfo
-
-import pytest
 
 from eod_summary import _ET, _build_eod_embed
 
 _TODAY = "2026-05-22"
 
 
-def _session_hash(**kwargs: bytes) -> dict[bytes, bytes]:
-    base: dict[bytes, bytes] = {
-        b"decision_runs": b"3",
-        b"llm_candidates": b"10",
-        b"alerts_passed_total": b"2",
-        b"alerts_rejected": b"5",
-        b"gate_dir_ep_threshold": b"3",
-        b"gate_dir_conf_threshold": b"2",
+def _session_hash(**kwargs: str) -> dict[str, str]:
+    base: dict[str, str] = {
+        "decision_runs": "3",
+        "llm_candidates": "10",
+        "alerts_passed_total": "2",
+        "alerts_rejected": "5",
+        "gate_dir_ep_threshold": "3",
+        "gate_dir_conf_threshold": "2",
     }
     base.update(kwargs)
     return base
@@ -37,6 +34,7 @@ class TestBuildEodEmbed:
         mock_datetime: MagicMock,
     ) -> None:
         mock_datetime.now.return_value = datetime(2026, 5, 22, 16, 0, tzinfo=_ET)
+        mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
         mock_redis = MagicMock()
         mock_redis.hgetall.return_value = _session_hash()
         mock_get_redis.return_value = mock_redis
@@ -72,12 +70,13 @@ class TestBuildEodEmbed:
         mock_datetime: MagicMock,
     ) -> None:
         mock_datetime.now.return_value = datetime(2026, 5, 22, 16, 0, tzinfo=_ET)
+        mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
         mock_redis = MagicMock()
         mock_redis.hgetall.return_value = {
-            b"decision_runs": b"0",
-            b"llm_candidates": b"0",
-            b"alerts_passed_total": b"0",
-            b"alerts_rejected": b"0",
+            "decision_runs": "0",
+            "llm_candidates": "0",
+            "alerts_passed_total": "0",
+            "alerts_rejected": "0",
         }
         mock_get_redis.return_value = mock_redis
         mock_get_recent.return_value = []
@@ -99,6 +98,7 @@ class TestBuildEodEmbed:
         mock_datetime: MagicMock,
     ) -> None:
         mock_datetime.now.return_value = datetime(2026, 5, 22, 20, 15, tzinfo=_ET)
+        mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
         mock_redis = MagicMock()
         mock_redis.hgetall.return_value = _session_hash()
         mock_get_redis.return_value = mock_redis

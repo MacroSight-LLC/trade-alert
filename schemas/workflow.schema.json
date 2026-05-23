@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trade-alert.local/schemas/workflow.schema.json",
+  "title": "trade-alert workflow",
+  "type": "object",
+  "required": ["name", "steps"],
+  "additionalProperties": true,
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "schedule": { "type": "string" },
+    "llm_model": { "type": "string" },
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "endpoint"],
+        "properties": {
+          "name": { "type": "string" },
+          "endpoint": { "type": "string" }
+        }
+      }
+    },
+    "error_handling": {
+      "type": "object",
+      "properties": {
+        "abort_on_failure": { "type": "boolean" },
+        "retry": { "type": "object" },
+        "on_mcp_error": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "enum": [
+            "code",
+            "tool_call",
+            "parallel_tool_calls",
+            "llm",
+            "workflow",
+            "parallel",
+            "conditional"
+          ]
+        },
+        "run_on": { "enum": ["failure"] },
+        "code": { "type": "string" },
+        "tool": { "type": "string" },
+        "method": { "type": "string" },
+        "params": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+        "calls": { "type": "array" },
+        "workflow": { "type": "string" },
+        "workflows": { "type": "array", "items": { "type": "string" } },
+        "inputs": { "type": "object" },
+        "prompt": { "type": "string" },
+        "condition": { "type": "string" },
+        "if_true": { "$ref": "#/$defs/stepBranch" },
+        "if_false": { "$ref": "#/$defs/stepBranch" },
+        "abort_on_failure": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "code" } }, "required": ["type"] },
+          "then": { "required": ["code"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "tool_call" } }, "required": ["type"] },
+          "then": { "required": ["tool", "method"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "parallel_tool_calls" } }, "required": ["type"] },
+          "then": { "required": ["calls"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "llm" } }, "required": ["type"] },
+          "then": { "required": ["prompt"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "workflow" } }, "required": ["type"] },
+          "then": { "required": ["workflow"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "parallel" } }, "required": ["type"] },
+          "then": { "required": ["workflows"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "conditional" } }, "required": ["type"] },
+          "then": { "required": ["condition", "if_true"] }
+        }
+      ]
+    },
+    "stepBranch": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "code": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -63,6 +63,7 @@ class TestYAMLFallback:
         assert "edge_probability >= 0.70" in user
         assert "sources_agree >= 4" in user
         assert "confidence >= 0.75" in user
+        assert "reward:risk >= 2.0:1" in user
 
     @patch("prompt_manager.get_langfuse_client", return_value=None)
     def test_1h_gate_defaults(self, _mock: MagicMock) -> None:
@@ -164,6 +165,7 @@ class TestLangfuseFirst:
         call_kwargs = sys_prompt.compile.call_args[1]
         assert call_kwargs["timeframe"] == "15m"
         assert call_kwargs["ep_gate"] == "0.70"
+        assert call_kwargs["rr_gate"] == "2.0"
 
     @patch("prompt_manager.get_langfuse_client")
     def test_langfuse_user_prefixed_with_market_reference_context(self, mock_client: MagicMock) -> None:

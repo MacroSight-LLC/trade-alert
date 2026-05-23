@@ -6,7 +6,7 @@ model validation, query parameter handling, and edge cases.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +34,7 @@ class TestSerialize:
         assert _serialize(date(2026, 3, 12)) == "2026-03-12"
 
     def test_datetime_to_iso(self) -> None:
-        dt = datetime(2026, 3, 12, 10, 30, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 3, 12, 10, 30, 0, tzinfo=UTC)
         assert "2026-03-12" in _serialize(dt)
 
     def test_passthrough(self) -> None:
@@ -245,8 +245,8 @@ class TestAlertsEndpoint:
                 "timeframe": "15m",
                 "thesis": "BB squeeze.",
                 "entry": {"level": 185.0, "stop": 182.0, "target": 192.0},
-                "created_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
-                "updated_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
+                "created_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 3, 12, 10, 0, 0, tzinfo=UTC),
                 "outcome": "WIN",
                 "outcome_pnl": Decimal("0.0378"),
                 "timeframe_rationale": "15m trend.",

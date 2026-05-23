@@ -4,10 +4,23 @@ This repo is a production trading alert engine built on `cuga-agent`.
 
 ## SSOT
 All architecture, schemas, file names, and implementation rules are defined in:
-**`CUGA-Trading-Alert-System-SPEC-v1.3.md`** at the repo root.
+**`docs/spec-v1.3.md`** (symlinked as `SSOT.md` at repo root).
+
+## Workflow authoring
+- Workflow `code:` steps run in **`workflow_sandbox.py`** — blocked: `mcp_call`, `os`, `redis`, `httpx`, dunder names.
+- Use `type: tool_call` or `parallel_tool_calls` for MCP — never inline `mcp_call()` in `code:` blocks.
+- Redis snapshot TTL is **1200s** (20 min) per SSOT §8.
+- Example tool step:
+  ```yaml
+  - name: fetch-vix
+    type: tool_call
+    tool: fred-mcp
+    method: vix_level
+    params: {}
+  ```
 
 ## Rules
-- Always read `CUGA-Trading-Alert-System-SPEC-v1.3.md` before generating or editing any code.
+- Always read `docs/spec-v1.3.md` before generating or editing any code.
 - Do not deviate from its architecture, file names, schemas, or workflows.
 - Do not modify anything under `src/cuga/` — it is a library dependency.
 - Generate only the file explicitly requested. Do not auto-refactor other files.

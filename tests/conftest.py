@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -29,7 +29,7 @@ def sample_snapshot(sample_signal: Signal) -> Snapshot:
     return Snapshot(
         symbol="AAPL",
         timeframe="15m",
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         signals=[sample_signal],
     )
 
@@ -63,7 +63,7 @@ def long_alert_row() -> dict:
         "entry_level": 185.0,
         "stop_level": 182.0,
         "target_level": 192.0,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "fired_at": datetime.now(UTC) - timedelta(hours=1),
         "outcome": None,
     }
 
@@ -78,7 +78,7 @@ def short_alert_row() -> dict:
         "entry_level": 250.0,
         "stop_level": 255.0,
         "target_level": 240.0,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "fired_at": datetime.now(UTC) - timedelta(hours=1),
         "outcome": None,
     }
 
@@ -88,5 +88,5 @@ def expired_alert_row(long_alert_row: dict) -> dict:
     """A LONG alert whose window has already elapsed."""
     return {
         **long_alert_row,
-        "fired_at": datetime.now(timezone.utc) - timedelta(hours=5),
+        "fired_at": datetime.now(UTC) - timedelta(hours=5),
     }

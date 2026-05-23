@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -81,8 +81,6 @@ class TestEnforceEmbedLimits:
         assert len(_truncate_field(text, max_len=1000)) == 1000
 
 
-
-
 # ── compute_rr ──────────────────────────────────────────────────
 
 
@@ -110,8 +108,6 @@ class TestComputeRR:
 
     def test_empty_dict_returns_na(self) -> None:
         assert compute_rr({}) == "N/A"
-
-
 
 
 # ── format_embed ────────────────────────────────────────────────
@@ -242,21 +238,19 @@ class TestFormatEmbed:
         assert "MODERATE" in result["embeds"][0]["title"]
 
     def test_current_price_marked_unavailable_when_stale(self, mock_alert: PlaybookAlert) -> None:
-        stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=80)).isoformat()
+        stale_ts = (datetime.now(UTC) - timedelta(minutes=80)).isoformat()
         result = format_embed(mock_alert, current_price=874.0, current_price_ts=stale_ts)
         fields = result["embeds"][0]["fields"]
         cp_field = next(f for f in fields if f["name"] == "📍 Current Price")
         assert "stale market data" in cp_field["value"]
 
     def test_current_price_shown_when_fresh(self, mock_alert: PlaybookAlert) -> None:
-        fresh_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        fresh_ts = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
         result = format_embed(mock_alert, current_price=878.5, current_price_ts=fresh_ts)
         fields = result["embeds"][0]["fields"]
         cp_field = next(f for f in fields if f["name"] == "📍 Current Price")
         assert "$878.50" in cp_field["value"]
         assert "As of:" in cp_field["value"]
-
-
 
 
 # ── _score_bar ──────────────────────────────────────────────────
@@ -281,8 +275,6 @@ class TestScoreBar:
         assert bar == "▓▓░░ 50%"
 
 
-
-
 # ── _truncate_field ─────────────────────────────────────────────
 
 
@@ -304,8 +296,6 @@ class TestTruncateField:
 
     def test_empty_string(self) -> None:
         assert _truncate_field("") == ""
-
-
 
 
 # ── _quality_color ──────────────────────────────────────────────
@@ -366,8 +356,6 @@ class TestQualityColor:
         )
         # 0.70 * 0.80 = 0.56 → red range (< 0.65)
         assert _quality_color(alert) == 15158332  # red
-
-
 
 
 # ── Embed historical stats field ────────────────────────────────

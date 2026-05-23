@@ -18,10 +18,8 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      r = get_redis()
 
       equities_raw = r.get("universe:equities")
 
@@ -47,12 +45,10 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
       from normalizers import normalize_forecast
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      r = get_redis()
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
 
       raw_forecasts = steps.get("fetch-forecasts", {})
 

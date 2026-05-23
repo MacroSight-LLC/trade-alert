@@ -10,6 +10,13 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-app-hardening: &app-hardening
+  read_only: true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp
+
 x-runtime-envfile: &runtime-envfile
   - path: .env
     required: false
@@ -160,6 +167,7 @@ services:
   # Activate with: docker compose --profile mcp up -d
 
   tradingview-mcp:
+    <<: *app-hardening
     build:
       context: .
       dockerfile: docker/Dockerfile.mcp
@@ -173,7 +181,7 @@ services:
       - "${MCP_BIND:-127.0.0.1}:8001:8001"
     environment: &mcp-env
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+      VAULT_TOKEN: ${VAULT_TOKEN:?VAULT_TOKEN must be set for production MCP services}
     env_file: &mcp-envfile
       - path: .env
         required: false
@@ -194,6 +202,7 @@ services:
     restart: unless-stopped
 
   polygon-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -221,6 +230,7 @@ services:
     restart: unless-stopped
 
   discord-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -248,6 +258,7 @@ services:
     restart: unless-stopped
 
   finnhub-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -275,6 +286,7 @@ services:
     restart: unless-stopped
 
   rot-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -302,6 +314,7 @@ services:
     restart: unless-stopped
 
   trading-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -329,6 +342,7 @@ services:
     restart: unless-stopped
 
   fred-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -356,6 +370,7 @@ services:
     restart: unless-stopped
 
   spamshield-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -383,6 +398,7 @@ services:
     restart: unless-stopped
 
   edgar-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -410,6 +426,7 @@ services:
     restart: unless-stopped
 
   yfinance-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -437,6 +454,7 @@ services:
     restart: unless-stopped
 
   alpaca-mcp:
+    <<: *app-hardening
     image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
@@ -465,6 +483,7 @@ services:
 
   # TimesFM MCP — time-series forecasting (dedicated image: torch + timesfm)
   timesfm-mcp:
+    <<: *app-hardening
     build:
       context: .
       dockerfile: docker/Dockerfile.timesfm
@@ -499,6 +518,7 @@ services:
   # --- Application ---
 
   cuga:
+    <<: *app-hardening
     image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: &cuga-build
       context: .
@@ -552,6 +572,17 @@ services:
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
       - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./gates:/app/gates
+      - ./resilience:/app/resilience
+      - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./gate_config.py:/app/gate_config.py
+      - ./workflow_template.py:/app/workflow_template.py
+      - ./llm_client.py:/app/llm_client.py
+      - ./llm_response_parser.py:/app/llm_response_parser.py
+      - ./gate_telemetry.py:/app/gate_telemetry.py
+      - ./execution_mapper.py:/app/execution_mapper.py
+      - ./execution_trigger.py:/app/execution_trigger.py
+      - ./execution_webhook.py:/app/execution_webhook.py
       - ./decision_helpers.py:/app/decision_helpers.py
       - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
@@ -567,6 +598,7 @@ services:
         required: false
     environment:
       VAULT_ADDR: http://vault:8200
+      VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_HOST: http://langfuse:3000
@@ -582,6 +614,7 @@ services:
           cpus: "2.0"
 
   cron:
+    <<: *app-hardening
     image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
@@ -613,6 +646,17 @@ services:
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
       - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./gates:/app/gates
+      - ./resilience:/app/resilience
+      - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./gate_config.py:/app/gate_config.py
+      - ./workflow_template.py:/app/workflow_template.py
+      - ./llm_client.py:/app/llm_client.py
+      - ./llm_response_parser.py:/app/llm_response_parser.py
+      - ./gate_telemetry.py:/app/gate_telemetry.py
+      - ./execution_mapper.py:/app/execution_mapper.py
+      - ./execution_trigger.py:/app/execution_trigger.py
+      - ./execution_webhook.py:/app/execution_webhook.py
       - ./decision_helpers.py:/app/decision_helpers.py
       - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
@@ -630,6 +674,7 @@ services:
     env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
+      VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_HOST: http://langfuse:3000
@@ -648,6 +693,7 @@ services:
   # --- Discord Bot (manual trigger) ---
 
   discord-bot:
+    <<: *app-hardening
     image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
@@ -689,6 +735,17 @@ services:
       - ./chart_gen.py:/app/chart_gen.py
       - ./langfuse_datasets.py:/app/langfuse_datasets.py
       - ./validate_and_filter.py:/app/validate_and_filter.py
+      - ./gates:/app/gates
+      - ./resilience:/app/resilience
+      - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./gate_config.py:/app/gate_config.py
+      - ./workflow_template.py:/app/workflow_template.py
+      - ./llm_client.py:/app/llm_client.py
+      - ./llm_response_parser.py:/app/llm_response_parser.py
+      - ./gate_telemetry.py:/app/gate_telemetry.py
+      - ./execution_mapper.py:/app/execution_mapper.py
+      - ./execution_trigger.py:/app/execution_trigger.py
+      - ./execution_webhook.py:/app/execution_webhook.py
       - ./decision_helpers.py:/app/decision_helpers.py
       - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
@@ -697,6 +754,7 @@ services:
     env_file: *app-envfile
     environment:
       VAULT_ADDR: http://vault:8200
+      VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_HOST: http://langfuse:3000
@@ -714,6 +772,7 @@ services:
   # --- Dashboard (Phase 9) ---
 
   dashboard:
+    <<: *app-hardening
     image: ${DASHBOARD_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/dashboard:latest}
     build:
       context: .
@@ -731,8 +790,10 @@ services:
         required: false
     environment:
       VAULT_ADDR: http://vault:8200
+      DASHBOARD_REQUIRE_AUTH: ${DASHBOARD_REQUIRE_AUTH:-true}
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:?DASHBOARD_API_KEY must be set for production dashboard}
     ports:
-      - "${DASHBOARD_BIND:-0.0.0.0}:8080:8080"
+      - "${DASHBOARD_BIND:-127.0.0.1}:8080:8080"
     volumes:
       - ./dashboard_api.py:/app/dashboard_api.py
       - ./dashboard.html:/app/dashboard.html

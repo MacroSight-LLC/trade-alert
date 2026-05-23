@@ -4,7 +4,7 @@ Reads today's session stats from Redis and alert history from Postgres,
 then sends a structured embed summarising the full trading day: runs,
 candidates, alerts fired, gate rejection breakdown, and alert list.
 
-Scheduled via crontab: 15 20 * * 1-5 (4:15 PM ET = 20:15 UTC).
+Scheduled via crontab: 15 16 * * 1-5 (4:15 PM ET, TZ=America/New_York).
 SSOT §13 — observability.
 """
 
@@ -12,17 +12,39 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
 from log_config import configure_logging
-from notifier_and_logger import send_ops_embed
+from notifier_and_logger import send_ops_embed, send_ops_message
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
+
+
+def _session_int(session: dict[str, Any], key: str) -> int:
+    raw = session.get(key, 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _alert_created_et_date(created_at: Any) -> datetime.date | None:
+    if created_at is None:
+        return None
+    if isinstance(created_at, str):
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    elif isinstance(created_at, datetime):
+        created = created_at
+    else:
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return created.astimezone(_ET).date()
 
 
 def _build_eod_embed() -> dict[str, Any]:
@@ -31,6 +53,7 @@ def _build_eod_embed() -> dict[str, Any]:
 
     r = get_redis()
     today = datetime.now(tz=_ET).date().isoformat()
+    today_et = datetime.now(tz=_ET).date()
 
     total_runs = 0
     total_candidates = 0
@@ -39,24 +62,26 @@ def _build_eod_embed() -> dict[str, Any]:
     gate_totals: dict[str, int] = {}
 
     for tf in ["15m", "1h"]:
-        session = cast(dict[bytes, bytes], r.hgetall(f"session:stats:{today}:{tf}") or {})
-        total_runs += int(session.get(b"decision_runs", b"0"))
-        total_candidates += int(session.get(b"llm_candidates", b"0"))
-        total_fired += int(session.get(b"alerts_passed_total", b"0"))
-        total_rejected += int(session.get(b"alerts_rejected", b"0"))
-        for k, v in session.items():
-            key = k.decode()
-            if key.startswith("gate_dir_"):
-                gate = key.replace("gate_dir_", "")
-                gate_totals[gate] = gate_totals.get(gate, 0) + int(v)
+        session = r.hgetall(f"session:stats:{today}:{tf}") or {}
+        total_runs += _session_int(session, "decision_runs")
+        total_candidates += _session_int(session, "llm_candidates")
+        total_fired += _session_int(session, "alerts_passed_total")
+        total_rejected += _session_int(session, "alerts_rejected")
+        for key, value in session.items():
+            key_str = key.decode() if isinstance(key, bytes) else str(key)
+            if key_str.startswith("gate_dir_"):
+                gate = key_str.replace("gate_dir_", "")
+                try:
+                    gate_totals[gate] = gate_totals.get(gate, 0) + int(value)
+                except (TypeError, ValueError):
+                    pass
 
     top_gates = sorted(gate_totals.items(), key=lambda x: x[1], reverse=True)[:5]
     gate_str = "\n".join(f"`{g}`: {c}" for g, c in top_gates) if top_gates else "none"
 
-    # Today's fired alerts from Postgres
     try:
         all_alerts = get_recent_alerts(limit=50)
-        today_alerts = [a for a in all_alerts if str(a.get("created_at", "")).startswith(today)]
+        today_alerts = [a for a in all_alerts if _alert_created_et_date(a.get("created_at")) == today_et]
     except Exception as exc:
         logger.warning("EOD: could not fetch today's alerts — %s", exc)
         today_alerts = []
@@ -108,6 +133,7 @@ def main() -> None:
         logger.info("EOD summary: sent successfully")
     except Exception as exc:
         logger.error("EOD summary failed: %s", exc)
+        send_ops_message(f"❌ EOD summary failed: {exc}")
 
 
 if __name__ == "__main__":

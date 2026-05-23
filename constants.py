@@ -190,9 +190,7 @@ TRADE_EXECUTE_ENABLED: bool = os.environ.get("TRADE_EXECUTE_ENABLED", "false").l
 TRADE_EXECUTE_WEBHOOK_URL: str = os.environ.get("TRADE_EXECUTE_WEBHOOK_URL", "")
 """Target URL for trade-execute inbound webhook endpoint."""
 
-TRADE_EXECUTE_TIMEOUT_SECONDS: float = float(
-    os.environ.get("TRADE_EXECUTE_TIMEOUT_SECONDS", "10.0")
-)
+TRADE_EXECUTE_TIMEOUT_SECONDS: float = float(os.environ.get("TRADE_EXECUTE_TIMEOUT_SECONDS", "10.0"))
 """HTTP timeout (read) for outbound delivery requests. Default 10s."""
 
 TRADE_EXECUTE_MAX_RETRIES: int = int(os.environ.get("TRADE_EXECUTE_MAX_RETRIES", "3"))
@@ -215,9 +213,7 @@ TRADE_EXECUTE_DRY_RUN: bool = os.environ.get("TRADE_EXECUTE_DRY_RUN", "false").l
 )
 """Log the exact payload that would be sent without making HTTP requests. Default: false."""
 
-TRADE_EXECUTE_EXPIRY_SECONDS: int = int(
-    os.environ.get("TRADE_EXECUTE_EXPIRY_SECONDS", "900")
-)
+TRADE_EXECUTE_EXPIRY_SECONDS: int = int(os.environ.get("TRADE_EXECUTE_EXPIRY_SECONDS", "900"))
 """Seconds until an ExecutionTriggerV1 expires. Default 900s (matches dedup window)."""
 # TRADE_EXECUTE_WEBHOOK_SECRET is a secret — stored in Vault (secret/trade-alert)
 # and loaded into os.environ by vault_env_loader.py at runtime.

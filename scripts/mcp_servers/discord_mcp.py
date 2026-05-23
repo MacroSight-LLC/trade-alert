@@ -3,6 +3,7 @@
 Tools: send_rich_embed
 Requires: DISCORD_WEBHOOK or (DISCORD_BOT_TOKEN + DISCORD_ALERT_CHANNEL_ID).
 """
+
 from __future__ import annotations
 
 import logging

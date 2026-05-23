@@ -17,8 +17,7 @@ steps:
   - name: check-api-keys
     type: code
     code: |
-      import os
-      polygon_key = os.environ.get("POLYGON_API_KEY", "")
+      polygon_key = env_get("POLYGON_API_KEY", "")
       has_polygon = bool(polygon_key and polygon_key != "your_polygon_api_key_here")
       result = {"has_polygon": has_polygon}
 
@@ -28,10 +27,8 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      r = get_redis()
 
       equities_raw = r.get("universe:equities")
 
@@ -64,12 +61,10 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
       from normalizers.flow_normalizer import normalize
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      r = get_redis()
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
 
       aggs_results = steps["fetch-flow-signals"]
 

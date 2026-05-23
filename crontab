@@ -17,12 +17,18 @@ TZ=America/New_York
 # ── Outcome tracker — extended hours for position resolution ─────────────────
 */15 9-18 * * 1-5 flock -n /tmp/outcome-tracker.lock -c 'cd /app && python pipeline_runner.py workflows/outcome-tracker.yaml >> /app/logs/cron.log 2>&1'
 
-# ── State summaries — pre-open (9:15 ET) and post-close (16:15 ET) ──────────
+# ── State summaries — pre-open (9:15 ET) and post-close (16:10 ET) ──────────
 15 9 * * 1-5 cd /app && python pipeline_runner.py workflows/state-summary.yaml >> /app/logs/cron.log 2>&1
-15 16 * * 1-5 cd /app && python pipeline_runner.py workflows/state-summary.yaml >> /app/logs/cron.log 2>&1
+10 16 * * 1-5 cd /app && python pipeline_runner.py workflows/state-summary.yaml >> /app/logs/cron.log 2>&1
 
-# ── EOD summary — 4:15 PM ET (20:15 UTC) Mon-Fri ─────────────────────────────
-15 20 * * 1-5 cd /app && python eod_summary.py >> /app/logs/cron.log 2>&1
+# ── EOD summary — 4:20 PM ET Mon-Fri (staggered after state-summary) ─────────
+20 16 * * 1-5 cd /app && python eod_summary.py >> /app/logs/cron.log 2>&1
+
+# ── Data retention — Sunday 03:00 ET ─────────────────────────────────────────
+0 3 * * 0 cd /app && python scripts/purge_old_data.py >> /app/logs/cron.log 2>&1
+
+# ── Langfuse dataset purge — Sunday 02:00 ET ─────────────────────────────────
+0 2 * * 0 cd /app && python scripts/purge_langfuse_datasets.py >> /app/logs/cron.log 2>&1
 
 # ── Healthcheck — every 15 min, 24/7 ────────────────────────────────────────────
 */15 * * * * cd /app && python healthcheck.py >> /app/logs/health.log 2>&1

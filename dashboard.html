@@ -283,8 +283,22 @@
 
 <script>
 const API = window.location.origin + '/api';
-const POLL_MS = 30000;
+const API_KEY_STORAGE = 'trade_alert_dashboard_api_key';
+let POLL_MS = 30000;
 let gateChartInstance = null;
+
+function getApiKey() {
+    return localStorage.getItem(API_KEY_STORAGE) || '';
+}
+
+function ensureApiKey() {
+    let key = getApiKey();
+    if (!key) {
+        key = window.prompt('Enter dashboard API key (X-API-Key):', '') || '';
+        if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    }
+    return key;
+}
 
 document.getElementById('theme-toggle')?.addEventListener('click', () => {
     document.body.classList.toggle('light');
@@ -311,7 +325,14 @@ function shortTime(iso) {
 }
 
 async function fetchJSON(url) {
-    const resp = await fetch(url);
+    const headers = {};
+    const apiKey = ensureApiKey();
+    if (apiKey) headers['X-API-Key'] = apiKey;
+    const resp = await fetch(url, { headers });
+    if (resp.status === 401) {
+        localStorage.removeItem(API_KEY_STORAGE);
+        throw new Error('Invalid API key — enter key again on next refresh');
+    }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return resp.json();
 }
@@ -353,6 +374,9 @@ async function loadKPIs() {
                 <div class="sub">${health.redis_latency_ms != null ? health.redis_latency_ms + 'ms' : ''}</div>
             </div>
         `;
+        if (kpis.poll_interval_ms && Number(kpis.poll_interval_ms) > 0) {
+            POLL_MS = Number(kpis.poll_interval_ms);
+        }
     } catch (err) {
         document.getElementById('kpi-grid').innerHTML =
             '<div class="error-msg">Failed to load KPIs: ' + err.message + '</div>';

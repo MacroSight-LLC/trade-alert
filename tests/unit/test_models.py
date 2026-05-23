@@ -325,9 +325,7 @@ class TestPlaybookAlert:
             (0.95, 0.50),  # well above floor
         ],
     )
-    def test_edge_vs_confidence_accepts(
-        self, alert_data: dict, ep: float, conf: float
-    ) -> None:
+    def test_edge_vs_confidence_accepts(self, alert_data: dict, ep: float, conf: float) -> None:
         """ep/conf combos at or above the proportional floor must pass."""
         alert_data["edge_probability"] = ep
         alert_data["confidence"] = conf

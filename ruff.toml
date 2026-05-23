@@ -27,6 +27,13 @@ exclude = [
     "site-packages",
     "venv",
     "src/",               # CUGA library — do not lint
+    "docs/examples/",
+    "tests/system/",
+    "tests/integration/",
+    "tests/cuga_upstream/",
+    "src/system_tests/",
+    "src/frontend_workspaces/",
+    "deployment/",
 ]
 
 # Same as Black.

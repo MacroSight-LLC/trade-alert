@@ -53,16 +53,14 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+      r = get_redis()
 
-      fallback_equities_str = os.environ.get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
+      fallback_equities_str = env_get("FALLBACK_EQUITIES", "AAPL,MSFT,NVDA,TSLA,SPY,QQQ,AMD,META,AMZN,GOOGL")
       fallback_equities = [s.strip() for s in fallback_equities_str.split(",")]
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
-      min_close = float(os.environ.get("UNIVERSE_POLYGON_MIN_CLOSE", "5.0"))
-      min_dollar_volume = float(os.environ.get("UNIVERSE_POLYGON_MIN_DOLLAR_VOLUME", "10000000"))
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
+      min_close = float(env_get("UNIVERSE_POLYGON_MIN_CLOSE", "5.0"))
+      min_dollar_volume = float(env_get("UNIVERSE_POLYGON_MIN_DOLLAR_VOLUME", "10000000"))
 
       equity_symbols = set()
       ordered_symbols = []
@@ -135,12 +133,10 @@ steps:
     type: code
     code: |
       import json
-      import os
-      import redis
       from normalizers.market_normalizer import normalize
 
-      r = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-      snapshot_ttl = int(os.environ.get("REDIS_SNAPSHOT_TTL", "1200"))
+      r = get_redis()
+      snapshot_ttl = int(env_get("REDIS_SNAPSHOT_TTL", "1200"))
 
       raw_results = {}
 

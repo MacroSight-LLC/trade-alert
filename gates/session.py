@@ -105,7 +105,9 @@ def _apply_market_session_gate_overlays(
     if not vf._MARKET_HOURS_GATES_ENABLED:
         return ep_gate, sa_gate, conf_gate, session_bucket
 
-    if timeframe == "15m" and session_bucket in {"pre", "after"}:
+    from gate_config import EXTENDED_HOURS_ALERTS_ENABLED
+
+    if timeframe == "15m" and session_bucket in {"pre", "after"} and not EXTENDED_HOURS_ALERTS_ENABLED:
         return (
             min(ep_gate + vf._SESSION_PREPOST_EP_BUMP, 0.95),
             sa_gate + vf._SESSION_PREPOST_SA_BUMP,

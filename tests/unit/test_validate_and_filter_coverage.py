@@ -54,8 +54,7 @@ class _RRZeroEntry:
 
     def __getitem__(self, key: str) -> float:
         in_rr = any(
-            f.name == "_rr" and f.filename.endswith("rr_volume.py")
-            for f in traceback.extract_stack()
+            f.name == "_rr" and f.filename.endswith("rr_volume.py") for f in traceback.extract_stack()
         )
         if in_rr and key == "stop":
             return self._data["level"]
@@ -645,6 +644,9 @@ class TestWatchPathCoverage:
         import validate_and_filter as vf
 
         monkeypatch.setattr(vf, "_WATCH_MAX_TRENDING", 1)
+        import gate_config
+
+        monkeypatch.setattr(gate_config, "WATCH_MAX_TRENDING", 1)
         mock = MagicMock()
         mock.hgetall.return_value = {}
         mock.hget.return_value = b"0"

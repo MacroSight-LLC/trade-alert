@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -65,7 +65,7 @@ async def _get(path: str, params: dict[str, Any] | None = None) -> dict:
 
 def _market_open_today() -> str:
     """Return today's market open as ISO 8601 (approx 9:30 ET = 14:30 UTC)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     open_time = now.replace(hour=14, minute=30, second=0, microsecond=0)
     if now < open_time:
         open_time -= timedelta(days=1)

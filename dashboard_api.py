@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -90,6 +91,12 @@ def _cached_json(key: str, builder: Any) -> dict[str, Any]:
 # ── Authentication ───────────────────────────────────────────────────────
 
 DASHBOARD_API_KEY: str | None = os.getenv("DASHBOARD_API_KEY")
+DASHBOARD_REQUIRE_AUTH: bool = os.getenv("DASHBOARD_REQUIRE_AUTH", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -97,17 +104,20 @@ async def _require_api_key(
     request: Request,
     api_key: str | None = Depends(_api_key_header),
 ) -> None:
-    """Reject requests when DASHBOARD_API_KEY is set and the header is missing/wrong."""
+    """Reject requests when auth is required and the header is missing/wrong."""
+    if DASHBOARD_REQUIRE_AUTH and not DASHBOARD_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DASHBOARD_API_KEY must be set when DASHBOARD_REQUIRE_AUTH=true",
+        )
     if DASHBOARD_API_KEY is None:
         return  # auth disabled — allow (dev mode)
-    if not api_key or api_key != DASHBOARD_API_KEY:
+    if not api_key or not secrets.compare_digest(api_key, DASHBOARD_API_KEY):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
         )
 
-
-logger = logging.getLogger(__name__)
 
 # ── Pydantic response models ────────────────────────────────────────────
 

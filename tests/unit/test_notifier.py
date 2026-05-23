@@ -22,8 +22,6 @@ def _reset_circuit_breaker():
     _notifier_mod._discord_cb_open_since = 0.0
 
 
-
-
 # ── send_discord_embed ──────────────────────────────────────────
 
 
@@ -125,8 +123,6 @@ class TestSendDiscordEmbed:
         assert send_discord_embed({"embeds": []}) is True
         call_kwargs = mock_client.post.call_args
         assert "json" in call_kwargs.kwargs
-
-
 
 
 # ── Discord retry logic ─────────────────────────────────────────
@@ -258,8 +254,6 @@ class TestSendDiscordEmbedRetry:
         assert delays == [1.0, 2.0]
 
 
-
-
 # ── send_ops_message ────────────────────────────────────────────
 
 
@@ -282,8 +276,6 @@ class TestSendOpsMessage:
         send_ops_message("health OK")
         call_kwargs = mock_client.post.call_args
         assert call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))["content"] == "health OK"
-
-
 
 
 # ── send_ops_embed ──────────────────────────────────────────────
@@ -335,8 +327,6 @@ class TestSendOpsEmbed:
         mock_client.post.side_effect = httpx.RequestError("timeout")
         mock_client_fn.return_value = mock_client
         assert send_ops_embed({"embeds": []}) is False
-
-
 
 
 # ── Circuit breaker ─────────────────────────────────────────────

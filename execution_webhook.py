@@ -175,6 +175,13 @@ def _deliver_webhook(
         return False
 
     secret = os.environ.get("TRADE_EXECUTE_WEBHOOK_SECRET", "")
+    if not secret:
+        logger.error(
+            "TRADE_EXECUTE_ENABLED=true but TRADE_EXECUTE_WEBHOOK_SECRET is not set — refusing unsigned delivery"
+        )
+        GATE_REJECTIONS.labels(gate="execution_webhook_failed").inc()
+        return False
+
     url = TRADE_EXECUTE_WEBHOOK_URL
     last_error: str | None = None
     last_status: int | None = None

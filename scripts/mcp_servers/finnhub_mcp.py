@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -154,8 +154,8 @@ async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
 
 async def _fetch_company_news(symbol: str) -> list[dict[str, str]]:
     """Fetch recent company news articles for a single symbol (free tier)."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    week_ago = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
 
     data = await _get("/company-news", {"symbol": symbol, "from": week_ago, "to": today})
     return [
@@ -243,8 +243,8 @@ async def earnings_calendar(params: dict[str, Any]) -> dict:
     days_ahead = max(1, min(int(params.get("days_ahead", 7)), 90))
     wanted = {s.upper() for s in symbols}
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    to_date = (datetime.now(timezone.utc) + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    to_date = (datetime.now(UTC) + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
     results: list[dict] = []
     try:

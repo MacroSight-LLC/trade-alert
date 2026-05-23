@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Re-use helpers from main test module
+from tests.unit.test_validate_and_filter import (  # noqa: PLC2701
+    _alert,
+    _recent_ts,
+    _run,
+    _snap,
+)
 from validate_and_filter import (
-    GateRejection,
     _classify_regime,
     _dedup_key,
     _dynamic_gates,
@@ -22,18 +27,8 @@ from validate_and_filter import (
     _reset_watch_cycles,
     _signal_directional_score,
     _try_dedup_set,
-    _watch_is_improving,
     is_redis_circuit_open,
     validate_and_filter,
-)
-
-# Re-use helpers from main test module
-from tests.unit.test_validate_and_filter import (  # noqa: PLC2701
-    _alert,
-    _bear_snap,
-    _recent_ts,
-    _run,
-    _snap,
 )
 
 
@@ -226,7 +221,9 @@ class TestJsonParseRobustness:
         a = _alert()
         results, _ = validate_and_filter(
             json.dumps([a]),
-            json.dumps([_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]),
+            json.dumps(
+                [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+            ),
             {"risk_on": True},
             14.0,
             "15m",
@@ -235,7 +232,6 @@ class TestJsonParseRobustness:
 
     def test_fenced_markdown(self) -> None:
         a = _alert()
-        fenced = f"```json\n{json.dumps([a])}\n```"
         results, _ = _run([a], vix=14.0)
         assert isinstance(results, list)
 
@@ -244,7 +240,9 @@ class TestJsonParseRobustness:
         wrapped = json.dumps({"alerts": [a]})
         results, _ = validate_and_filter(
             wrapped,
-            json.dumps([_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]),
+            json.dumps(
+                [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+            ),
             {"risk_on": True},
             14.0,
             "15m",
@@ -261,7 +259,9 @@ class TestJsonParseRobustness:
 
         validate_and_filter(
             raw,
-            json.dumps([_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]),
+            json.dumps(
+                [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
+            ),
             {"risk_on": True},
             14.0,
             "15m",
@@ -277,7 +277,9 @@ class TestJsonParseRobustness:
         assert out == "[]"
 
     def test_api_error_internal_server(self) -> None:
-        results, _ = validate_and_filter("litellm.InternalServerError: boom", "[]", {"risk_on": True}, 14.0, "15m")
+        results, _ = validate_and_filter(
+            "litellm.InternalServerError: boom", "[]", {"risk_on": True}, 14.0, "15m"
+        )
         assert results == []
 
     def test_api_error_overloaded(self) -> None:
@@ -608,8 +610,6 @@ class TestWatchCap:
 
 class TestDedupHelpers:
     def test_reset_dedup_keys(self) -> None:
-        from validate_and_filter import _reset_dedup_keys
-
         mock = MagicMock()
         with patch("validate_and_filter.get_redis", return_value=mock):
             with patch("validate_and_filter._check_redis_circuit", return_value=False):

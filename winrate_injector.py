@@ -17,6 +17,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MIN_WINRATE_SAMPLES: int = int(os.environ.get("MIN_WINRATE_SAMPLES", "10"))
+WINRATE_MAX_BUCKETS: int = int(os.environ.get("WINRATE_MAX_BUCKETS", "20"))
+WINRATE_STALENESS_DAYS: int = int(os.environ.get("WINRATE_STALENESS_DAYS", "7"))
 
 
 def get_winrate_context(
@@ -54,6 +56,7 @@ def get_winrate_context(
         return result
 
     conn = None
+    max_updated = None
     try:
         conn = get_conn()
         with conn.cursor() as cur:
@@ -70,6 +73,11 @@ def get_winrate_context(
                 (timeframe, lookback_days),
             )
             rows = cur.fetchall()
+            cur.execute(
+                "SELECT MAX(updated_at) FROM alerts WHERE timeframe = %s AND outcome IN ('WIN', 'LOSS')",
+                (timeframe,),
+            )
+            max_updated = cur.fetchone()[0]
     except Exception as exc:
         logger.warning("winrate_injector: DB query failed — %s", exc)
         return result
@@ -94,17 +102,46 @@ def get_winrate_context(
     min_sample = MIN_WINRATE_SAMPLES
     buckets: dict[str, float] = {}
     bucket_counts: dict[str, int] = {}
+    ranked: list[tuple[str, int]] = []
     for key, count in bucket_total.items():
         if count >= min_sample:
             wins = bucket_wins.get(key, 0)
             buckets[key] = round(wins / count, 2) if count > 0 else 0.0
             bucket_counts[key] = count
+            ranked.append((key, count))
+
+    if len(buckets) > WINRATE_MAX_BUCKETS:
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        keep = {k for k, _ in ranked[:WINRATE_MAX_BUCKETS]}
+        buckets = {k: v for k, v in buckets.items() if k in keep}
+        bucket_counts = {k: v for k, v in bucket_counts.items() if k in keep}
+        logger.warning(
+            "winrate_injector: truncated to %d buckets (had %d)",
+            WINRATE_MAX_BUCKETS,
+            len(ranked),
+        )
+
+    stale_warning = False
+    if max_updated is not None:
+        from datetime import UTC, datetime, timedelta
+
+        if isinstance(max_updated, datetime):
+            if max_updated.tzinfo is None:
+                max_updated = max_updated.replace(tzinfo=UTC)
+            stale_warning = max_updated < datetime.now(tz=UTC) - timedelta(days=WINRATE_STALENESS_DAYS)
+            if stale_warning:
+                logger.warning(
+                    "winrate_injector: data stale (last update %s, threshold %dd)",
+                    max_updated.isoformat(),
+                    WINRATE_STALENESS_DAYS,
+                )
 
     return {
         "buckets": buckets,
         "bucket_counts": bucket_counts,
         "total_resolved": total_resolved,
         "calibration_warning": total_resolved < 30,
+        "stale_warning": stale_warning,
     }
 
 

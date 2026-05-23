@@ -7,6 +7,8 @@ import logging
 import os
 from typing import Any
 
+from gate_config import classify_regime as _classify_regime  # noqa: F401 — re-export
+
 logger = logging.getLogger(__name__)
 
 # ── EP ceiling lookup table ──────────────────────────────────────
@@ -108,23 +110,6 @@ def _signal_surface(snaps: list[dict[str, Any]]) -> tuple[int, int, float]:
                 strengths.append(min(abs(sc) / 3.0, 1.0))
     trend_strength = sum(strengths) / len(strengths) if strengths else 0.0
     return bulls, bears, trend_strength
-
-
-def _classify_regime(vix: float, risk_off: bool, bulls: int, bears: int, trend_strength: float) -> str:
-    """Classify market regime for dynamic gate overlays (SSOT §10.2 regime classification)."""
-    total = bulls + bears
-    bull_ratio = (bulls / total) if total else 0.5
-    if vix > 30:
-        return "extreme"
-    if risk_off and vix >= 25:
-        return "risk_off_high_vix"
-    if trend_strength < 0.35 or (0.45 <= bull_ratio <= 0.55):
-        return "choppy"
-    if bull_ratio > 0.55 and not risk_off:
-        return "trending_up"
-    if bull_ratio < 0.45 and risk_off:
-        return "trending_down"
-    return "neutral"
 
 
 def _dynamic_gates(

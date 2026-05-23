@@ -9,9 +9,9 @@ TODO: migrate callers to notifier.notify() directly, then remove this shim
 from __future__ import annotations
 
 import concurrent.futures
-import hashlib
 import json
 import logging
+import os
 
 import httpx
 import redis
@@ -25,7 +25,7 @@ from alert_logger import (
     persist_alert,
 )
 from chart_gen import generate_chart
-from constants import DEDUP_WINDOW_SECONDS, TRADE_EXECUTE_ENABLED
+from constants import TRADE_EXECUTE_ENABLED
 from db import is_execution_dispatched, mark_execution_dispatched
 from discord_formatter import (
     _format_watch_embed,
@@ -51,7 +51,8 @@ from redis_client import get_redis
 configure_logging()
 logger = logging.getLogger(__name__)
 
-MAX_ALERTS_PER_CYCLE: int = int(__import__("os").getenv("MAX_ALERTS_PER_CYCLE", "5"))
+MAX_ALERTS_PER_CYCLE: int = int(os.getenv("MAX_ALERTS_PER_CYCLE", "5"))
+_NOTIFY_DEDUP_TTL: int = int(os.getenv("ALERT_DEDUP_TTL_SECONDS", "300"))
 
 # Re-export for tests that patch historical stats lookup on this module.
 _get_similar_alert_stats = get_similar_alert_stats
@@ -67,18 +68,13 @@ __all__ = [
     "_is_duplicate_alert",
     "_quality_color",
     "_score_bar",
-    "_thesis_similarity",
     "_truncate_field",
 ]
 
 
-def _thesis_similarity(a: str, b: str) -> float:
-    """Jaccard similarity of thesis word sets."""
-    words_a = set(a.lower().split())
-    words_b = set(b.lower().split())
-    if not words_a or not words_b:
-        return 0.0
-    return len(words_a & words_b) / len(words_a | words_b)
+def _notify_sent_key(symbol: str, direction: str, timeframe: str) -> str:
+    """Redis key aligned with gate dedup path segments (SSOT §gates/dedup)."""
+    return f"notified:alert:{timeframe}:{direction}:{symbol}"
 
 
 def _is_duplicate_alert(
@@ -87,33 +83,15 @@ def _is_duplicate_alert(
     timeframe: str,
     thesis: str = "",
 ) -> bool:
-    """Check Redis for a recent alert with the same symbol/direction/timeframe."""
-    thesis_hash = hashlib.md5(thesis[:120].encode()).hexdigest()[:8] if thesis else "no_thesis"
-    dedup_key = f"alert:dedup:{symbol}:{direction}:{timeframe}:{thesis_hash}"
-    thesis_key = f"alert:thesis:{symbol}:{direction}:{timeframe}"
+    """Return True if this symbol/direction/timeframe was already notified recently."""
+    _ = thesis  # thesis dedup is enforced at gate level only
+    notify_key = _notify_sent_key(symbol, direction, timeframe)
     try:
         r = get_redis()
-        was_set = r.set(dedup_key, "1", nx=True, ex=DEDUP_WINDOW_SECONDS)
+        was_set = r.set(notify_key, "1", nx=True, ex=_NOTIFY_DEDUP_TTL)
         if was_set:
-            if thesis:
-                r.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
             return False
-
-        if thesis:
-            stored_thesis = r.get(thesis_key) or ""
-            if stored_thesis and _thesis_similarity(thesis, stored_thesis) < 0.5:
-                logger.info(
-                    "Dedup: allowing new thesis for %s %s %s (different content)",
-                    symbol,
-                    direction,
-                    timeframe,
-                )
-                pipe = r.pipeline()
-                pipe.set(dedup_key, "1", ex=DEDUP_WINDOW_SECONDS)
-                pipe.set(thesis_key, thesis, ex=DEDUP_WINDOW_SECONDS)
-                pipe.execute()
-                return False
-        logger.info("Dedup: suppressing duplicate alert %s %s %s", symbol, direction, timeframe)
+        logger.info("Dedup: suppressing duplicate notify %s %s %s", symbol, direction, timeframe)
         return True
     except redis.RedisError as exc:
         logger.warning("Dedup check failed (allowing alert through): %s", exc)

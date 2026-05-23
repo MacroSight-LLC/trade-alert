@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from statistics import mean, stdev
 from typing import Any
 
@@ -113,7 +113,7 @@ async def _fetch_bars(symbol: str, timeframe: str) -> list[float] | None:
         logger.warning("Alpaca credentials not set — TradingView MCP returning empty")
         return None
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     if timeframe == "1h":
         start = (now_utc - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
         limit = 30

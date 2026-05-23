@@ -24,6 +24,23 @@ on:
       - "winrate_injector.py"
       - "decision_helpers.py"
       - "pipeline_runner.py"
+      - "workflow_sandbox.py"
+      - "workflow_template.py"
+      - "llm_client.py"
+      - "llm_response_parser.py"
+      - "gate_telemetry.py"
+      - "gate_config.py"
+      - "resilience/**"
+      - "workflows/**"
+      - "schemas/**"
+      - "scripts/purge_old_data.py"
+      - "scripts/purge_langfuse_datasets.py"
+      - "scripts/check_orchestrator_parity.py"
+      - "langfuse_datasets.py"
+      - "COMPLIANCE.md"
+      - "docs/**"
+      - "crontab"
+      - "ruff.toml"
       - "eod_summary.py"
       - "execution_mapper.py"
       - "execution_trigger.py"
@@ -58,6 +75,23 @@ on:
       - "winrate_injector.py"
       - "decision_helpers.py"
       - "pipeline_runner.py"
+      - "workflow_sandbox.py"
+      - "workflow_template.py"
+      - "llm_client.py"
+      - "llm_response_parser.py"
+      - "gate_telemetry.py"
+      - "gate_config.py"
+      - "resilience/**"
+      - "workflows/**"
+      - "schemas/**"
+      - "scripts/purge_old_data.py"
+      - "scripts/purge_langfuse_datasets.py"
+      - "scripts/check_orchestrator_parity.py"
+      - "langfuse_datasets.py"
+      - "COMPLIANCE.md"
+      - "docs/**"
+      - "crontab"
+      - "ruff.toml"
       - "eod_summary.py"
       - "execution_mapper.py"
       - "execution_trigger.py"
@@ -94,10 +128,37 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Lint with ruff
-        run: xargs uv run ruff check < .github/ruff-targets.txt
+        run: uv run ruff check .
 
       - name: Format check with ruff
-        run: xargs uv run ruff format --check < .github/ruff-targets.txt
+        run: uv run ruff format --check .
+
+      - name: Validate workflow YAML schema
+        run: uv run check-jsonschema --schemafile schemas/workflow.schema.json workflows/*.yaml
+
+      - name: Orchestrator wrapper parity
+        run: uv run python scripts/check_orchestrator_parity.py
+
+      - name: No mcp_call in workflow code blocks
+        run: |
+          python -c "
+          import pathlib, sys, yaml
+          errors = []
+          for p in pathlib.Path('workflows').glob('*.yaml'):
+              wf = yaml.safe_load(p.read_text())
+              for step in wf.get('steps', []):
+                  for field in ['code', 'if_true', 'if_false']:
+                      val = step.get(field)
+                      block = val.get('code','') if isinstance(val, dict) else (val or '')
+                      if 'mcp_call(' in block:
+                          errors.append(f'{p.name}::{step.get(\"name\")}::{field}')
+          if errors:
+              print('FAIL:', errors); sys.exit(1)
+          print('OK')
+          "
+
+      - name: Circular import check
+        run: python -c "import validate_and_filter; import gates.watch; import gates.regime; print('OK')"
 
       - name: Type-check with mypy
         run: uv run mypy --config-file pyproject.toml
@@ -110,9 +171,9 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit/ \
-            -v --tb=short --cov=. --cov-report=term-missing \
+            -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=85 \
             --ignore=tests/cuga_upstream/ \
-            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,normalizers/*"
+            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,pipeline_runner.py,workflow_sandbox.py,workflow_template.py,llm_client.py,llm_response_parser.py,gate_telemetry.py,gate_config.py,normalizers/*,gates/*,resilience/*"
 
   integration-tests:
     needs: [unit-tests]

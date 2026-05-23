@@ -6,7 +6,9 @@
 
 ## Documentation
 - **Quick-start overview:** this file (`README.md`)
-- **Full spec & architecture (SSOT):** [`CUGA-Trading-Alert-System-SPEC-v1.3.md`](./CUGA-Trading-Alert-System-SPEC-v1.3.md) — `SSOT.md` is a symlink to this file
+- **Architecture overview:** [`docs/architecture.md`](./docs/architecture.md)
+- **Full spec (SSOT):** [`docs/spec-v1.3.md`](./docs/spec-v1.3.md) — root `SSOT.md` symlink
+- **Compliance:** [`COMPLIANCE.md`](./COMPLIANCE.md) — data providers and regulatory posture (not legal advice)
 - **Setup & operations:** [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md)
 - **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 - **CUGA upstream docs:** [`README.cuga.md`](./README.cuga.md)

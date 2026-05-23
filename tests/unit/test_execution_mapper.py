@@ -264,17 +264,13 @@ def test_parse_vix_from_macro_missing_returns_zero():
 
 
 def test_execution_payload_invalid_long_ordering_raises(sample_alert: PlaybookAlert):
-    bad = sample_alert.model_copy(
-        update={"entry": {"level": 875.0, "stop": 900.0, "target": 880.0}}
-    )
+    bad = sample_alert.model_copy(update={"entry": {"level": 875.0, "stop": 900.0, "target": 880.0}})
     with pytest.raises(ValidationError):
         map_to_execution_payload(bad, alert_id="1", idempotency_key="k")
 
 
 def test_execution_payload_invalid_short_ordering_raises(short_alert: PlaybookAlert):
-    bad = short_alert.model_copy(
-        update={"entry": {"level": 250.0, "stop": 240.0, "target": 235.0}}
-    )
+    bad = short_alert.model_copy(update={"entry": {"level": 250.0, "stop": 240.0, "target": 235.0}})
     with pytest.raises(ValidationError):
         map_to_execution_payload(bad, alert_id="1", idempotency_key="k")
 

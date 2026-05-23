@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -65,8 +65,8 @@ async def insider_filings(params: dict[str, Any]) -> dict:
         symbols = [s.strip() for s in symbols.split(",")]
     days_back = int(params.get("days_back", 7))
 
-    start_dt = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start_dt = (datetime.now(UTC) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    end_dt = datetime.now(UTC).strftime("%Y-%m-%d")
 
     results: list[dict] = []
     for sym in symbols[:20]:
@@ -125,8 +125,8 @@ async def recent_filings(params: dict[str, Any]) -> dict:
     days_back = int(params.get("days_back", 7))
     forms = params.get("forms", "8-K,10-K,10-Q")
 
-    start_dt = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start_dt = (datetime.now(UTC) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    end_dt = datetime.now(UTC).strftime("%Y-%m-%d")
 
     results: list[dict] = []
     for sym in symbols[:20]:

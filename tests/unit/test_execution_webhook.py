@@ -13,6 +13,11 @@ from execution_mapper import ExecutionPayload
 from execution_trigger import EntryV1, ExecutionTriggerV1
 
 
+@pytest.fixture(autouse=True)
+def _webhook_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADE_EXECUTE_WEBHOOK_SECRET", "test-secret-key")
+
+
 @pytest.fixture()
 def sample_payload() -> ExecutionPayload:
     return ExecutionPayload(
@@ -153,6 +158,22 @@ def test_deliver_dry_run_inserts_dry_run_audit_row(sample_trigger: ExecutionTrig
     assert result is True
     mock_db.insert_execution_delivery.assert_called_once()
     assert mock_db.insert_execution_delivery.call_args.kwargs["status"] == "dry_run"
+
+
+def test_deliver_refuses_when_webhook_secret_missing(sample_trigger: ExecutionTriggerV1, monkeypatch):
+    monkeypatch.delenv("TRADE_EXECUTE_WEBHOOK_SECRET", raising=False)
+    mock_client = MagicMock()
+    with (
+        patch("execution_webhook.TRADE_EXECUTE_ENABLED", True),
+        patch("execution_webhook.TRADE_EXECUTE_DRY_RUN", False),
+        patch("execution_webhook.TRADE_EXECUTE_WEBHOOK_URL", "http://trade-execute:8000/webhook"),
+        patch("execution_webhook._get_client", return_value=mock_client),
+    ):
+        from execution_webhook import deliver_execution_trigger
+
+        result = deliver_execution_trigger(sample_trigger)
+    assert result is False
+    mock_client.post.assert_not_called()
 
 
 # ── live delivery — success paths ─────────────────────────────────────────
@@ -424,4 +445,3 @@ def test_deliver_non_200_not_success(sample_trigger: ExecutionTriggerV1):
         from execution_webhook import deliver_execution_trigger
 
         assert deliver_execution_trigger(sample_trigger) is False
-

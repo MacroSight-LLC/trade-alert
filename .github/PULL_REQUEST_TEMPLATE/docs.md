@@ -28,6 +28,13 @@ Closes #
 - [ ] Links and references are working correctly
 - [ ] Code examples (if any) have been tested
 
+## Security review
+- [ ] No secrets in code, YAML, or committed env files
+- [ ] Workflow `code:` steps respect `workflow_sandbox.py` (no `mcp_call`, `os`, `redis`, `httpx`)
+- [ ] Execution bridge changes tested with dry-run / paper mode
+- [ ] `detect-secrets` baseline updated if new false positives were audited
+- [ ] `ruff check .` and mypy paths for touched modules are clean
+
 ### Checklist
 - [ ] My documentation follows the project's documentation style
 - [ ] I have performed a self-review of my changes

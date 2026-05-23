@@ -34,6 +34,13 @@ Closes #
 - [ ] Build process works correctly
 - [ ] All tests still pass
 
+## Security review
+- [ ] No secrets in code, YAML, or committed env files
+- [ ] Workflow `code:` steps respect `workflow_sandbox.py` (no `mcp_call`, `os`, `redis`, `httpx`)
+- [ ] Execution bridge changes tested with dry-run / paper mode
+- [ ] `detect-secrets` baseline updated if new false positives were audited
+- [ ] `ruff check .` and mypy paths for touched modules are clean
+
 ### Checklist
 - [ ] My changes follow the project's standards
 - [ ] I have performed a self-review of my changes

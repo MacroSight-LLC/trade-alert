@@ -6,10 +6,10 @@ import os
 
 
 def get_redis():
-    """Resolve Redis client via validate_and_filter for test patch compatibility."""
-    import validate_and_filter as vf
+    """Resolve Redis via validate_and_filter for test patch compatibility."""
+    from validate_and_filter import get_redis as _vf_get_redis
 
-    return vf.get_redis()
+    return _vf_get_redis()
 
 
 def _circuit():
@@ -27,13 +27,13 @@ _WATCH_DECAY_TTL_SECONDS: int = int(os.environ.get("WATCH_DECAY_TTL_SECONDS", st
 
 def _watch_max_for_regime(regime: str) -> int:
     """Return the maximum number of WATCH alerts to emit for a given regime."""
-    import validate_and_filter as vf
+    from gate_config import WATCH_MAX_NEUTRAL, WATCH_MAX_STRESSED, WATCH_MAX_TRENDING
 
     if regime in ("extreme", "risk_off_high_vix"):
-        return vf._WATCH_MAX_STRESSED
+        return WATCH_MAX_STRESSED
     if regime in ("choppy", "neutral"):
-        return vf._WATCH_MAX_NEUTRAL
-    return vf._WATCH_MAX_TRENDING
+        return WATCH_MAX_NEUTRAL
+    return WATCH_MAX_TRENDING
 
 
 def _watch_decay_key(symbol: str, timeframe: str) -> str:

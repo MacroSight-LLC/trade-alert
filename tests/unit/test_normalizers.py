@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 import pytest
 
 from normalizers import safe_float
@@ -439,9 +441,9 @@ class TestEventsNormalizer:
     """Tests for events_normalizer.normalize."""
 
     def test_earnings_tomorrow(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
         raw = {"AAPL": {"earnings_date": tomorrow, "hour": "bmo"}}
         result = events_normalize(raw, timeframe="15m")
         assert len(result) == 1
@@ -453,39 +455,39 @@ class TestEventsNormalizer:
         assert "[BMO]" in sig.reason
 
     def test_earnings_in_3_days(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        dt_obj = datetime.now(timezone.utc) + timedelta(days=3)
+        dt_obj = datetime.now(UTC) + timedelta(days=3)
         dt = dt_obj.strftime("%Y-%m-%d")
         raw = {"TSLA": {"earnings_date": dt}}
         result = events_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
         # Continuous interpolation: score depends on actual days_until
-        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        days_until = (earnings_dt - datetime.now(timezone.utc)).days
+        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=UTC)
+        days_until = (earnings_dt - datetime.now(UTC)).days
         t = days_until / 7.0
         assert sig.score == pytest.approx(2.5 - t * 2.0, abs=0.05)
         assert sig.confidence == pytest.approx(0.90 - t * 0.40, abs=0.05)
 
     def test_earnings_in_5_days(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        dt_obj = datetime.now(timezone.utc) + timedelta(days=5)
+        dt_obj = datetime.now(UTC) + timedelta(days=5)
         dt = dt_obj.strftime("%Y-%m-%d")
         raw = {"MSFT": {"earnings_date": dt}}
         result = events_normalize(raw, timeframe="15m")
         sig = result[0].signals[0]
         # Continuous interpolation: score depends on actual days_until
-        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        days_until = (earnings_dt - datetime.now(timezone.utc)).days
+        earnings_dt = datetime.strptime(dt, "%Y-%m-%d").replace(tzinfo=UTC)
+        days_until = (earnings_dt - datetime.now(UTC)).days
         t = days_until / 7.0
         assert sig.score == pytest.approx(2.5 - t * 2.0, abs=0.05)
         assert sig.confidence == pytest.approx(0.90 - t * 0.40, abs=0.05)
 
     def test_earnings_too_far(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        dt = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d")
+        dt = (datetime.now(UTC) + timedelta(days=10)).strftime("%Y-%m-%d")
         raw = {"GOOG": {"earnings_date": dt}}
         result = events_normalize(raw, timeframe="15m")
         assert len(result) == 0
@@ -523,9 +525,9 @@ class TestEventsNormalizer:
         assert len(result) == 0
 
     def test_eps_estimate_in_reason(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
         raw = {"AAPL": {"earnings_date": tomorrow, "eps_estimate": 1.52}}
         result = events_normalize(raw, timeframe="15m")
         assert "EPS est $1.52" in result[0].signals[0].reason

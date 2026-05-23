@@ -22,7 +22,7 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import uvicorn
@@ -88,7 +88,7 @@ def create_app(port: int) -> FastAPI:
                 "service": service_name,
                 "port": port,
                 "live": True,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 

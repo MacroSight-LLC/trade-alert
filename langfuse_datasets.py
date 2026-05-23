@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import os
+import re
+from datetime import UTC, datetime
 from typing import Any
 
 from langfuse_client import get_langfuse_client, register_langfuse_failure
@@ -29,6 +31,24 @@ logger = logging.getLogger(__name__)
 
 DATASET_NAME = "decision-runs"
 GOLDEN_DATASET_NAME = "decision-golden"
+LANGFUSE_DATASET_CAPTURE_ENABLED: bool = os.environ.get("LANGFUSE_DATASET_CAPTURE_ENABLED", "1") == "1"
+LANGFUSE_DATASET_RETENTION_DAYS: int = int(os.environ.get("LANGFUSE_DATASET_RETENTION_DAYS", "90"))
+
+_REDACT_KEYS = frozenset({"api_key", "token", "secret", "password", "authorization"})
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+
+
+def _redact_snapshot(data: Any) -> Any:
+    """Strip sensitive fields before Langfuse dataset capture."""
+    if isinstance(data, dict):
+        return {
+            k: "[REDACTED]" if k.lower() in _REDACT_KEYS else _redact_snapshot(v) for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_redact_snapshot(item) for item in data]
+    if isinstance(data, str):
+        return _EMAIL_RE.sub("[REDACTED]", data)
+    return data
 
 
 def _list_dataset_names(lf: Any) -> set[str] | None:
@@ -95,6 +115,9 @@ def capture_decision_run(
         trace_id: Langfuse trace ID for linking.
         prompt_version: Prompt version used for this run.
     """
+    if not LANGFUSE_DATASET_CAPTURE_ENABLED:
+        return
+
     lf = get_langfuse_client()
     if lf is None:
         return
@@ -102,7 +125,7 @@ def capture_decision_run(
     if not _ensure_dataset(lf, DATASET_NAME):
         return
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     item_id = f"{timeframe}-{now.strftime('%Y%m%dT%H%M%S')}"
 
     try:
@@ -115,13 +138,16 @@ def capture_decision_run(
             except (json.JSONDecodeError, TypeError):
                 parsed_alerts = []
 
-        input_data = {
-            "timeframe": timeframe,
-            "snapshots": json.loads(snapshots_json) if isinstance(snapshots_json, str) else snapshots_json,
-            "prompt_version": prompt_version,
-            "timestamp": now.isoformat(),
-            "llm_raw_response": llm_response,
-        }
+        raw_snapshots = json.loads(snapshots_json) if isinstance(snapshots_json, str) else snapshots_json
+        input_data = _redact_snapshot(
+            {
+                "timeframe": timeframe,
+                "snapshots": raw_snapshots,
+                "prompt_version": prompt_version,
+                "timestamp": now.isoformat(),
+                "llm_raw_response": llm_response,
+            }
+        )
 
         expected_output = {
             "alerts": parsed_alerts,
@@ -291,7 +317,7 @@ def auto_promote_to_golden(
     try:
         parsed_alerts = json.loads(alerts_json) if isinstance(alerts_json, str) else alerts_json
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         lf.create_dataset_item(
             dataset_name=GOLDEN_DATASET_NAME,
             input={

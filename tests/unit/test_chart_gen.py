@@ -140,8 +140,9 @@ class TestGenerateChart:
 
     @pytest.fixture(autouse=True)
     def _mock_quote_sources(self):
-        with patch("chart_gen._fetch_last_trade", return_value=(None, None)), patch(
-            "chart_gen._fetch_alpaca_last_close", return_value=(None, None)
+        with (
+            patch("chart_gen._fetch_last_trade", return_value=(None, None)),
+            patch("chart_gen._fetch_alpaca_last_close", return_value=(None, None)),
         ):
             yield
 
@@ -175,7 +176,9 @@ class TestGenerateChart:
         """Returns None when no candle data is available."""
         mock_fetch.return_value = pd.DataFrame()
 
-        result, atr, current_price, current_ts = generate_chart("FAKE", "1h", {"level": 50.0, "stop": 48.0, "target": 55.0})
+        result, atr, current_price, current_ts = generate_chart(
+            "FAKE", "1h", {"level": 50.0, "stop": 48.0, "target": 55.0}
+        )
         assert result is None
         assert atr is None
         assert current_price is None
@@ -232,7 +235,9 @@ class TestGenerateChart:
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            result, atr, _, _ = generate_chart("NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0})
+            result, atr, _, _ = generate_chart(
+                "NVDA", "15m", {"level": 110.0, "stop": 105.0, "target": 120.0}
+            )
         assert result is None
         assert atr is None
 
