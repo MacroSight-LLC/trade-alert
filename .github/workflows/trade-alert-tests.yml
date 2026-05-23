@@ -2,106 +2,8 @@ name: trade-alert tests
 
 on:
   push:
-    paths:
-      - "models.py"
-      - "merger.py"
-      - "db.py"
-      - "notifier_and_logger.py"
-      - "discord_formatter.py"
-      - "alert_logger.py"
-      - "notifier.py"
-      - "healthcheck.py"
-      - "outcome_tracker.py"
-      - "langfuse_client.py"
-      - "prompt_manager.py"
-      - "pipeline_tracing.py"
-      - "trace_analyzer.py"
-      - "vault_env_loader.py"
-      - "dashboard_api.py"
-      - "alert_quality.py"
-      - "validate_and_filter.py"
-      - "chart_gen.py"
-      - "winrate_injector.py"
-      - "decision_helpers.py"
-      - "pipeline_runner.py"
-      - "workflow_sandbox.py"
-      - "workflow_template.py"
-      - "llm_client.py"
-      - "llm_response_parser.py"
-      - "gate_telemetry.py"
-      - "gate_config.py"
-      - "resilience/**"
-      - "workflows/**"
-      - "schemas/**"
-      - "scripts/purge_old_data.py"
-      - "scripts/purge_langfuse_datasets.py"
-      - "scripts/check_orchestrator_parity.py"
-      - "langfuse_datasets.py"
-      - "COMPLIANCE.md"
-      - "docs/**"
-      - "crontab"
-      - "ruff.toml"
-      - "eod_summary.py"
-      - "execution_mapper.py"
-      - "execution_trigger.py"
-      - "execution_webhook.py"
-      - "gates/**"
-      - "discord_bot.py"
-      - "normalizers/**"
-      - "tests/unit/**"
-      - "tests/integration/**"
-      - "tests/conftest.py"
-      - ".github/workflows/trade-alert-tests.yml"
+    branches: [main]
   pull_request:
-    paths:
-      - "models.py"
-      - "merger.py"
-      - "db.py"
-      - "notifier_and_logger.py"
-      - "discord_formatter.py"
-      - "alert_logger.py"
-      - "notifier.py"
-      - "healthcheck.py"
-      - "outcome_tracker.py"
-      - "langfuse_client.py"
-      - "prompt_manager.py"
-      - "pipeline_tracing.py"
-      - "trace_analyzer.py"
-      - "vault_env_loader.py"
-      - "dashboard_api.py"
-      - "alert_quality.py"
-      - "validate_and_filter.py"
-      - "chart_gen.py"
-      - "winrate_injector.py"
-      - "decision_helpers.py"
-      - "pipeline_runner.py"
-      - "workflow_sandbox.py"
-      - "workflow_template.py"
-      - "llm_client.py"
-      - "llm_response_parser.py"
-      - "gate_telemetry.py"
-      - "gate_config.py"
-      - "resilience/**"
-      - "workflows/**"
-      - "schemas/**"
-      - "scripts/purge_old_data.py"
-      - "scripts/purge_langfuse_datasets.py"
-      - "scripts/check_orchestrator_parity.py"
-      - "langfuse_datasets.py"
-      - "COMPLIANCE.md"
-      - "docs/**"
-      - "crontab"
-      - "ruff.toml"
-      - "eod_summary.py"
-      - "execution_mapper.py"
-      - "execution_trigger.py"
-      - "execution_webhook.py"
-      - "gates/**"
-      - "discord_bot.py"
-      - "normalizers/**"
-      - "tests/unit/**"
-      - "tests/integration/**"
-      - "tests/conftest.py"
 
 jobs:
   unit-tests:
@@ -173,7 +75,7 @@ jobs:
           uv run pytest tests/unit/ \
             -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=85 \
             --ignore=tests/cuga_upstream/ \
-            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,pipeline_runner.py,workflow_sandbox.py,workflow_template.py,llm_client.py,llm_response_parser.py,gate_telemetry.py,gate_config.py,normalizers/*,gates/*,resilience/*"
+            --cov-include="models.py,merger.py,db.py,notifier_and_logger.py,discord_formatter.py,alert_logger.py,notifier.py,healthcheck.py,outcome_tracker.py,langfuse_client.py,prompt_manager.py,pipeline_tracing.py,trace_analyzer.py,dashboard_api.py,alert_quality.py,validate_and_filter.py,chart_gen.py,winrate_injector.py,decision_helpers.py,execution_mapper.py,execution_webhook.py,execution_trigger.py,pipeline_runner.py,workflow_sandbox.py,workflow_template.py,llm_client.py,llm_response_parser.py,gate_telemetry.py,gate_config.py,normalizers/*,gates/*,resilience/*,redis_client.py,constants.py,metrics.py,log_config.py,langfuse_datasets.py,eod_summary.py"
 
   integration-tests:
     needs: [unit-tests]
@@ -235,5 +137,11 @@ jobs:
         run: docker build -f docker/Dockerfile.mcp -t trade-alert-mcp:ci .
       - name: Build Dashboard image
         run: docker build -f docker/Dockerfile.dashboard -t trade-alert-dashboard:ci .
-      - name: Validate compose config
+      - name: Validate compose config (dev)
         run: docker compose config --quiet
+      - name: Validate compose config (prod)
+        run: |
+          env $(cat .env.example | grep -v '^#' | grep '=' | sed 's/=.*/=placeholder/' | xargs) \
+            docker compose -f docker-compose.prod.yml config --quiet
+      - name: Validate compose config (test)
+        run: docker compose -f docker-compose.test.yml config --quiet
