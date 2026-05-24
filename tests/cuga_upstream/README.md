@@ -8,3 +8,6 @@ flag in [`.github/workflows/trade-alert-tests.yml`](../../.github/workflows/trad
 and are kept here as a staging area until they are merged into the
 upstream [`cuga-agent`](https://github.com/cuga-project/cuga-agent) test
 tree, at which point this directory should be deleted from this repo.
+
+Includes former `tests/integration/` modules (`test_conversation_history.py`,
+`test_llm_config_publish.py`) relocated during the v1.2.0 stabilization sprint.

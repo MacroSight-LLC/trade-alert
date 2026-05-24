@@ -23,7 +23,7 @@ def _get_redis():
 
 
 if TYPE_CHECKING:
-    from validate_and_filter import GateRejection
+    from gates.types import GateRejection
 
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
