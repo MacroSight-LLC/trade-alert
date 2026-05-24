@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -265,3 +266,33 @@ class TestSignAwareDedup:
         trend_signals = [s for s in result[0].signals if s.type == "technical_trend"]
         assert len(trend_signals) == 1
         assert trend_signals[0].score == 2.5
+
+
+class TestSnapshotJsonSerialization:
+    """Python-layer guard for datetime Snapshot serialization (FU-002).
+
+    YAML-level ``model_dump(mode="json")`` in orchestrator-base.yaml is
+    verified exclusively by the FU-002 prod checkpoint.
+    """
+
+    def test_model_dump_mode_json_with_datetime_timestamp(self) -> None:
+        from datetime import UTC, datetime
+
+        snap = Snapshot(
+            symbol="AAPL",
+            timeframe="15m",
+            timestamp=datetime(2026, 3, 7, 0, 0, 0, tzinfo=UTC),
+            signals=[
+                Signal(
+                    source="tradingview",
+                    type="technical_trend",
+                    score=1.5,
+                    confidence=0.8,
+                    reason="test",
+                )
+            ],
+        )
+        payload = json.dumps([snap.model_dump(mode="json")], default=str)
+        parsed = json.loads(payload)
+        assert parsed[0]["symbol"] == "AAPL"
+        assert "2026-03-07" in parsed[0]["timestamp"]

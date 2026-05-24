@@ -248,6 +248,22 @@ class TestHelperCoverage:
         _record_redis_failure()
         assert vf._REDIS_FAILURE_COUNT == 1
 
+    def test_record_redis_failure_opens_circuit_and_sets_gauge(self) -> None:
+        import validate_and_filter as vf
+
+        vf._REDIS_FAILURE_COUNT = 0
+        vf._redis_circuit_open = False
+        vf._redis_last_failure_ts = 0.0
+        vf._REDIS_FAILURE_THRESHOLD = 2
+        with patch("validate_and_filter.REDIS_CIRCUIT_OPEN") as mock_gauge:
+            with patch("validate_and_filter.GATE_REJECTIONS") as mock_rejections:
+                mock_rejections.labels.return_value.inc = MagicMock()
+                _record_redis_failure()
+                _record_redis_failure()
+        assert vf._redis_circuit_open is True
+        mock_gauge.set.assert_called_with(1)
+        mock_rejections.labels.assert_called_with(gate="redis_circuit_open")
+
 
 class TestJsonAndLangfuseCoverage:
     def test_dict_content_wrapper(self) -> None:
