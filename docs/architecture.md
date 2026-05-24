@@ -68,3 +68,18 @@ Orchestrators delegate to `orchestrator-base.yaml` with timeframe inputs.
 9. WATCH policy and dedup  
 
 See `validate_and_filter.py` and SSOT §10.2–10.4.
+
+## Root vs subdirectories
+
+| Location | Purpose |
+| -------- | ------- |
+| **Root** (`*.py`) | Pipeline orchestration: merger, decision helpers, validate-and-filter entry point, notifier, healthcheck, prompt manager, MCP runners, dashboard API |
+| **`gates/`** | Server-side validation gate logic (regime, session, dedup, watch, candidate evaluation) |
+| **`normalizers/`** | Collector snapshot normalizers (one module per signal family) |
+| **`resilience/`** | Shared resilience patterns (MCP error handler, retries) |
+| **`workflows/`** | CUGA YAML orchestrators, collectors, and decision workflows |
+| **`scripts/`** | Ops scripts, MCP server framework, DB maintenance (`purge_old_data.py`, `enable_partitioning.sql`) |
+| **`deployment/`** | Hetzner deploy scripts, Helm charts, prod validation checklists |
+| **`tests/unit/`** | trade-alert unit tests (CUGA upstream tests live in `tests/cuga_upstream/`) |
+
+New modules: gate logic → `gates/`; normalizers → `normalizers/`; resilience → `resilience/`; workflow YAML → `workflows/`; orchestration Python → root until the module count for a new concern exceeds five (then add a subdirectory).
