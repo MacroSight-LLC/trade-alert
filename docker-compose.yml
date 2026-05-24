@@ -448,6 +448,7 @@ services:
         condition: service_healthy
     env_file:
       - path: .env
+        required: false
       - path: .env.secrets
         required: false
       - path: .env.vault
@@ -511,6 +512,7 @@ services:
         condition: service_healthy
     env_file:
       - path: .env
+        required: false
       - path: .env.secrets
         required: false
       - path: .env.vault
