@@ -14,6 +14,15 @@ commit that closed it.
 
 ## Open
 
+### FU-013 — CUGA tool_call_tracking e2e in CI
+
+**Status:** OPEN (2026-05-24)
+**Component:** `tests/integration/test_tool_call_tracking.py`
+**Action:** `TestE2EToolCallTracking` skipped in CI (requires live digital_sales + registry). Wire to compose test profile or remove skip when upstream stack is available in CI.
+**Acceptance:** E2E class runs green in `trade-alert-tests` integration job without `-m "not e2e"`.
+
+---
+
 ### FU-012 — Raise stability-tests pass threshold to 95%
 
 **Status:** OPEN (2026-05-23)
@@ -34,37 +43,33 @@ commit that closed it.
 
 ---
 
+## Resolved
+
 ### FU-006 — TimesFM MCP prod verification
 
-**Status:** PARTIAL (health OK; forecast snapshots still empty on first prod cycle)
-**Component:** `healthcheck.py`, forecast collector
-**Repo work:** `# FU-006` comment on TimesFM MCP entry; `test_timesfm_health_check_included` in `tests/unit/test_healthcheck.py` (MCP contract: HTTP 200 on port 8012) — commit `6be84a9`.
-**Prod (2026-05-24):** TimesFM `/health` 200 via orchestrator healthcheck; forecast collector returned 0 snapshots (TimesFM MCP reachable, no symbols forecasted this cycle).
-**Action:** Re-run during market hours or with a seeded universe; confirm non-null forecast field in Redis snapshot.
-**Acceptance:** Logged prod trace shows forecast populated; then remove `-m "not e2e"` from integration CI.
+**Resolved:** 2026-05-24 — `<commit SHA pending push>`
+**Note:** TimesFM `/health` returned 200 on Hetzner prod; 15m orchestrator produced **8 forecast snapshots** (Langfuse trace `3b8791f8-01e6-49d5-b9b9-9b2e3bbbc0eb`). Prod fixes: writable HF cache volume + `TIMESFM_HF_REPO=google/timesfm-1.0-200m-pytorch` (2.5 safetensors incompatible with pinned loader). e2e exclusion removed from integration CI.
 
 ---
 
-## Resolved
-
 ### FU-003 — Enable `VAULT_REQUIRED=true` for production deployments
 
-**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
-**Note:** `./deployment/verify-vault-required.sh` exits 0 with `VAULT_REQUIRED=true`; Vault health OK; no env-file fallback warnings. Shared loader: `deployment/load-prod-env.sh`.
+**Resolved:** 2026-05-24 — `80c5f91`
+**Note:** `verify-vault-required.sh` exit 0 on Hetzner prod (`37.27.184.125`). `VAULT_REQUIRED=true` confirmed in cuga container; Vault unsealed; no env-file fallback warnings. Loader: `deployment/load-prod-env.sh`.
 
 ---
 
 ### FU-002 — Sonnet 4 → 4.5 end-to-end output validation
 
-**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
-**Note:** Live 15m + 1h orchestrator runs; Langfuse traces confirm `claude-sonnet-4-5` (LiteLLM log + `validate-sonnet-4-5.sh` automated checks).
+**Resolved:** 2026-05-24 — `80c5f91`
+**Note:** Prod traces confirming `claude-sonnet-4-5` via LiteLLM + `validate-sonnet-4-5.sh`:
 
 | Timeframe | Langfuse trace ID | Model |
 | --------- | ----------------- | ----- |
 | 15m | `d9106d73-825d-4435-92b6-2ff598b4d61b` | claude-sonnet-4-5 |
 | 1h | `ea51b5d2-a8ed-41db-863a-016e7a7c5662` | claude-sonnet-4-5 |
 
-**Fixes required for live run:** `workflow_sandbox.py` `__import__` must return module not symbol; mount `prompt_fetcher.py` / `prompt_renderer.py` in `docker-compose.prod.yml`.
+Gate mix within baseline; 0 alerts fired (valid off-hours / no-signal cycle).
 
 ---
 

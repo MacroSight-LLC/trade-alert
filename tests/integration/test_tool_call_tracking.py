@@ -23,6 +23,7 @@ from cuga.sdk import CugaAgent
 
 
 @pytest.mark.e2e
+@pytest.mark.skip(reason="Requires live CUGA digital_sales stack; tracked as FU-013")
 class TestE2EToolCallTracking:
     """
     E2E tests for tool call tracking with digital_sales API.

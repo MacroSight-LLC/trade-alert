@@ -127,8 +127,7 @@ jobs:
           PGPASSWORD=trade_alert_test psql -h localhost -U trade_alert -d trade_alert_test -f schema.sql
 
       - name: Run integration tests
-        # TODO: remove -m "not e2e" after FU-006 resolved
-        run: timeout 120 uv run pytest tests/integration/ -v -m "not e2e" --tb=short
+        run: timeout 120 uv run pytest tests/integration/ -v --tb=short
 
   docker-build:
     needs: [unit-tests, integration-tests]

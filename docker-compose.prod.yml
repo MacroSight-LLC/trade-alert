@@ -484,6 +484,10 @@ services:
   # TimesFM MCP — time-series forecasting (dedicated image: torch + timesfm)
   timesfm-mcp:
     <<: *app-hardening
+    # HF model weights cache; tmpfs on /tmp only (read_only root from app-hardening).
+    tmpfs:
+      - /tmp
+      - /home/appuser/.cache/torch:rw,noexec,nosuid,size=512m,uid=999,gid=999
     build:
       context: .
       dockerfile: docker/Dockerfile.timesfm
@@ -497,8 +501,14 @@ services:
     command: ["8012"]
     ports:
       - "${MCP_BIND:-127.0.0.1}:8012:8012"
-    environment: *mcp-env
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:?VAULT_TOKEN must be set for production MCP services}
+      # 2.5 checkpoint is safetensors-only; pinned loader expects torch_model.ckpt (1.0 repo).
+      TIMESFM_HF_REPO: google/timesfm-1.0-200m-pytorch
     env_file: *mcp-envfile
+    volumes:
+      - timesfm-hf-cache:/home/appuser/.cache/huggingface
     healthcheck:
       test:
         [
@@ -924,6 +934,7 @@ volumes:
   langfuse-data:
   vault-data:
   pg-backups:
+  timesfm-hf-cache:
   prometheus-data:
   grafana-data:
 
