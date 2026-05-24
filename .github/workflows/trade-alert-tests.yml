@@ -146,6 +146,11 @@ jobs:
       - name: Validate compose config (prod)
         run: |
           env $(grep -v '^#' .env.example | grep '=' | sed 's/=.*/=ci-compose-placeholder/' | xargs) \
+            VAULT_TOKEN=ci-compose-placeholder \
+            LANGFUSE_DB_PASSWORD=ci-compose-placeholder \
+            SALT=ci-compose-placeholder \
+            DASHBOARD_API_KEY=ci-compose-placeholder \
+            GRAFANA_ADMIN_PASSWORD=ci-compose-placeholder \
             docker compose -f docker-compose.prod.yml config --quiet
       - name: Validate compose config (test)
         run: docker compose -f docker-compose.test.yml config --quiet
