@@ -47,7 +47,7 @@ commit that closed it.
 
 ### FU-006 — TimesFM MCP prod verification
 
-**Resolved:** 2026-05-24 — `<commit SHA pending push>`
+**Resolved:** 2026-05-24 — `5188bc3`
 **Note:** TimesFM `/health` returned 200 on Hetzner prod; 15m orchestrator produced **8 forecast snapshots** (Langfuse trace `3b8791f8-01e6-49d5-b9b9-9b2e3bbbc0eb`). Prod fixes: writable HF cache volume + `TIMESFM_HF_REPO=google/timesfm-1.0-200m-pytorch` (2.5 safetensors incompatible with pinned loader). e2e exclusion removed from integration CI.
 
 ---
