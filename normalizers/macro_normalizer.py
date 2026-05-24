@@ -156,7 +156,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     if not signals:
         return []
 
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(UTC)
     return [
         Snapshot(
             symbol="__GLOBAL_MACRO__",

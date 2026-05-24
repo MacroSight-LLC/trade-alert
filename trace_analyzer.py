@@ -515,7 +515,7 @@ def analyze_pipeline_trace(timeframe: str) -> TraceAnalysis:
         A ``TraceAnalysis`` summarising the findings.
     """
     session_id = f"orchestrator-{timeframe}"
-    now = datetime.now(tz=UTC).isoformat()
+    now = datetime.now(tz=UTC)
     prompt_version = get_prompt_version()
 
     trace = fetch_latest_trace(session_id)

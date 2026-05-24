@@ -93,6 +93,33 @@ class TestCheckMcps:
             assert port == expected[name], f"{name} port mismatch"
 
 
+class TestTimesfmHealthCheck:
+    """FU-006: TimesFM MCP included in healthcheck with standard MCP contract."""
+
+    def test_timesfm_health_check_included(self) -> None:
+        """timesfm-mcp is registered at port 8012 and passes/fails with HTTP health."""
+        timesfm_entries = [(n, u) for n, u in MCP_SERVICES if n == "timesfm-mcp"]
+        assert len(timesfm_entries) == 1
+        name, url = timesfm_entries[0]
+        assert name == "timesfm-mcp"
+        assert "8012" in url
+
+        mock_resp = MagicMock(status_code=200)
+        with patch.object(httpx, "get", return_value=mock_resp):
+            healthy, unhealthy = check_mcps()
+        assert "timesfm-mcp" in healthy
+        assert "timesfm-mcp" not in unhealthy
+
+        with patch.object(httpx, "get", side_effect=httpx.ConnectError("refused")):
+            healthy, unhealthy = check_mcps()
+        assert "timesfm-mcp" in unhealthy
+
+        mock_fail = MagicMock(status_code=503)
+        with patch.object(httpx, "get", return_value=mock_fail):
+            healthy, unhealthy = check_mcps()
+        assert "timesfm-mcp" in unhealthy
+
+
 class TestRunHealthcheck:
     """Tests for run_healthcheck() integration with MCP checks."""
 

@@ -11,8 +11,8 @@ SSOT §13 — observability.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import vault_env_loader  # noqa: F401 — loads Vault secrets into os.environ
@@ -33,7 +33,7 @@ def _session_int(session: dict[str, Any], key: str) -> int:
         return 0
 
 
-def _alert_created_et_date(created_at: Any) -> datetime.date | None:
+def _alert_created_et_date(created_at: Any) -> date | None:
     if created_at is None:
         return None
     if isinstance(created_at, str):
@@ -62,7 +62,7 @@ def _build_eod_embed() -> dict[str, Any]:
     gate_totals: dict[str, int] = {}
 
     for tf in ["15m", "1h"]:
-        session = r.hgetall(f"session:stats:{today}:{tf}") or {}
+        session = cast(dict[str, Any], r.hgetall(f"session:stats:{today}:{tf}") or {})
         total_runs += _session_int(session, "decision_runs")
         total_candidates += _session_int(session, "llm_candidates")
         total_fired += _session_int(session, "alerts_passed_total")

@@ -14,6 +14,7 @@ import time
 from datetime import UTC, datetime
 from datetime import time as dt_time
 from pathlib import Path
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -67,6 +68,7 @@ MCP_SERVICES: list[tuple[str, str]] = [
     ("fred-mcp", os.getenv("FRED_MCP_URL", "http://fred-mcp:8009") + "/health"),
     ("spamshield-mcp", os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010") + "/health"),
     ("alpaca-mcp", os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011") + "/health"),
+    # FU-006: TimesFM MCP health — prod verification pending forecast collector e2e
     ("timesfm-mcp", os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012") + "/health"),
 ]
 
@@ -166,13 +168,13 @@ def check_redis_snapshot_staleness() -> str | None:
 
     try:
         r = _get_redis()
-        keys = r.keys(f"{SNAPSHOT_KEY_PREFIX}*")
+        keys = cast(list[Any], r.keys(f"{SNAPSHOT_KEY_PREFIX}*"))
         if not keys:
             return (
                 "No snapshot keys found in Redis — collectors may have stopped "
                 "producing data. Check collector health and cron schedule."
             )
-        ttls = [r.ttl(k) for k in keys]
+        ttls = [cast(int, r.ttl(k)) for k in keys]
         # TTL returns -1 for no-expiry, -2 for missing key
         valid_ttls = [t for t in ttls if t > 0]
         if not valid_ttls:
@@ -255,7 +257,7 @@ def check_recent_alerts(timeframe: str) -> bool:
                     if consecutive == _WATCHDOG_ZERO_ALERT_THRESHOLD:
                         today = datetime.now(tz=_ET).date().isoformat()
                         session_key = f"session:stats:{today}:{timeframe}"
-                        session = r.hgetall(session_key) or {}
+                        session = cast(dict[Any, Any], r.hgetall(session_key) or {})
                         gate_parts = [
                             f"{k.decode().replace('gate_dir_', '')}: {v.decode()}"
                             for k, v in session.items()

@@ -36,7 +36,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots for symbols with notable short interest.
     """
     snapshots: list[Snapshot] = []
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(UTC)
 
     for symbol, data in raw_results.items():
         signals: list[Signal] = []
@@ -80,7 +80,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
                     source="yfinance",
                     type="short_interest",
                     score=raw_score,
-                    confidence=conf,
+                    confidence=conf if conf is not None else 0.0,
                     reason="; ".join(reason_parts),
                     raw=data,
                 )

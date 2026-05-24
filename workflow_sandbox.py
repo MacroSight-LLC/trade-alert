@@ -29,46 +29,48 @@ _RESERVED_NS_KEYS: frozenset[str] = frozenset(
 )
 
 # stdlib + project modules workflow code may import.
-_IMPORT_ALLOWLIST: frozenset[str] = {
-    "json",
-    "logging",
-    "re",
-    "time",
-    "datetime",
-    "math",
-    "hashlib",
-    "copy",
-    "collections",
-    "functools",
-    "itertools",
-    "pathlib",
-    "textwrap",
-    "uuid",
-    "zoneinfo",
-    "normalizers",
-    "normalizers.events_normalizer",
-    "normalizers.flow_normalizer",
-    "normalizers.forecast_normalizer",
-    "normalizers.macro_normalizer",
-    "normalizers.market_normalizer",
-    "normalizers.sentiment_normalizer",
-    "normalizers.si_normalizer",
-    "normalizers.ta_normalizer",
-    "decision_helpers",
-    "merger",
-    "models",
-    "validate_and_filter",
-    "notifier_and_logger",
-    "pipeline_tracing",
-    "langfuse_client",
-    "gates",
-    "gates.regime",
-    "gates.session",
-    "gates.dedup",
-    "gates.watch",
-    "gates.rr_volume",
-    "prompt_manager",
-}
+_IMPORT_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "json",
+        "logging",
+        "re",
+        "time",
+        "datetime",
+        "math",
+        "hashlib",
+        "copy",
+        "collections",
+        "functools",
+        "itertools",
+        "pathlib",
+        "textwrap",
+        "uuid",
+        "zoneinfo",
+        "normalizers",
+        "normalizers.events_normalizer",
+        "normalizers.flow_normalizer",
+        "normalizers.forecast_normalizer",
+        "normalizers.macro_normalizer",
+        "normalizers.market_normalizer",
+        "normalizers.sentiment_normalizer",
+        "normalizers.si_normalizer",
+        "normalizers.ta_normalizer",
+        "decision_helpers",
+        "merger",
+        "models",
+        "validate_and_filter",
+        "notifier_and_logger",
+        "pipeline_tracing",
+        "langfuse_client",
+        "gates",
+        "gates.regime",
+        "gates.session",
+        "gates.dedup",
+        "gates.watch",
+        "gates.rr_volume",
+        "prompt_manager",
+    }
+)
 
 # Per-module symbols allowed via ``from module import symbol``.
 _IMPORT_FROM_ALLOWLIST: dict[str, frozenset[str]] = {
@@ -190,7 +192,14 @@ class SandboxExecutor:
         env_get: Callable[[str, str | None], str | None] | None = None,
         get_redis: Callable[[], Any] | None = None,
     ) -> None:
-        self._env_get = env_get or (lambda key, default=None: os.getenv(key, default))
+        if env_get is not None:
+            self._env_get = env_get
+        else:
+
+            def _default_env_get(key: str, default: str | None = None) -> str | None:
+                return os.getenv(key, default)
+
+            self._env_get = _default_env_get
         self._get_redis = get_redis
 
     def execute(
