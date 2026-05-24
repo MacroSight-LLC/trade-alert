@@ -25,10 +25,10 @@ commit that closed it.
 
 ### FU-012 — Raise stability-tests pass threshold to 95%
 
-**Status:** OPEN (2026-05-23)
+**Status:** DEFERRED — 2026-05-24
 **Component:** `.github/workflows/stability-tests.yml`
-**Action:** Run `stability-tests.yml` via `workflow_dispatch` and record pass rate for Python 3.11, 3.12, 3.13, and Windows jobs. Raise threshold from 88% to 95% only when all four jobs report ≥95%.
-**Acceptance:** Baseline recorded; threshold updated or item remains open until upstream CUGA suite is ready.
+**Note:** `workflow_dispatch` baseline on main failed before pass-rate artifacts: `run_stability_tests.py` not found in repo (upstream CUGA harness missing). Threshold stays at **88%** until harness is restored and all four matrix jobs report ≥95%.
+**Action:** Restore or vendor `run_stability_tests.py`, re-run workflow_dispatch, then raise threshold if all jobs ≥95%.
 
 ---
 
