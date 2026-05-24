@@ -36,35 +36,37 @@ commit that closed it.
 
 ### FU-006 — TimesFM MCP prod verification
 
-**Status:** OPEN (repo CI complete; prod pending)
+**Status:** PARTIAL (health OK; forecast snapshots still empty on first prod cycle)
 **Component:** `healthcheck.py`, forecast collector
 **Repo work:** `# FU-006` comment on TimesFM MCP entry; `test_timesfm_health_check_included` in `tests/unit/test_healthcheck.py` (MCP contract: HTTP 200 on port 8012) — commit `6be84a9`.
-**Action:** On prod, confirm TimesFM `/health` returns 200 and a 15m cycle produces a non-null forecast field.
+**Prod (2026-05-24):** TimesFM `/health` 200 via orchestrator healthcheck; forecast collector returned 0 snapshots (TimesFM MCP reachable, no symbols forecasted this cycle).
+**Action:** Re-run during market hours or with a seeded universe; confirm non-null forecast field in Redis snapshot.
 **Acceptance:** Logged prod trace shows forecast populated; then remove `-m "not e2e"` from integration CI.
+
+---
+
+## Resolved
+
+### FU-003 — Enable `VAULT_REQUIRED=true` for production deployments
+
+**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
+**Note:** `./deployment/verify-vault-required.sh` exits 0 with `VAULT_REQUIRED=true`; Vault health OK; no env-file fallback warnings. Shared loader: `deployment/load-prod-env.sh`.
 
 ---
 
 ### FU-002 — Sonnet 4 → 4.5 end-to-end output validation
 
-**Status:** PENDING PROD VERIFICATION
-**Repo work:** `deployment/validate-sonnet-4-5.sh` present; Python-layer `model_dump(mode="json")` test in `tests/unit/test_merger.py` (commit `a22cd2e`). YAML-level fix guarded exclusively by prod checkpoint.
-**Action:** Re-run `./deployment/validate-sonnet-4-5.sh` on Hetzner prod; capture Langfuse trace IDs.
-**Acceptance:** ≥1 live trace confirms `claude-sonnet-4-5`; gate mix within baseline.
+**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
+**Note:** Live 15m + 1h orchestrator runs; Langfuse traces confirm `claude-sonnet-4-5` (LiteLLM log + `validate-sonnet-4-5.sh` automated checks).
 
-**Local dev validation (2026-05-23):** See prior trace IDs in git history.
+| Timeframe | Langfuse trace ID | Model |
+| --------- | ----------------- | ----- |
+| 15m | `d9106d73-825d-4435-92b6-2ff598b4d61b` | claude-sonnet-4-5 |
+| 1h | `ea51b5d2-a8ed-41db-863a-016e7a7c5662` | claude-sonnet-4-5 |
 
----
-
-### FU-003 — Enable `VAULT_REQUIRED=true` for production deployments
-
-**Status:** PENDING PROD VERIFICATION
-**Repo work:** `test_unreachable_raises_when_vault_required`; `.env.example` defaults `VAULT_REQUIRED=true`; `deployment/verify-vault-required.sh` confirmed present.
-**Action:** `VAULT_REQUIRED=true ./deployment/verify-vault-required.sh` on Hetzner prod.
-**Acceptance:** Script exits 0 with no env-file fallback warnings.
+**Fixes required for live run:** `workflow_sandbox.py` `__import__` must return module not symbol; mount `prompt_fetcher.py` / `prompt_renderer.py` in `docker-compose.prod.yml`.
 
 ---
-
-## Resolved
 
 ### FU-011 — outcome_tracker.py decomposition
 

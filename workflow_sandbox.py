@@ -69,11 +69,19 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset(
         "gates.watch",
         "gates.rr_volume",
         "prompt_manager",
+        "healthcheck",
+        "trace_analyzer",
+        "gate_config",
     }
 )
 
 # Per-module symbols allowed via ``from module import symbol``.
 _IMPORT_FROM_ALLOWLIST: dict[str, frozenset[str]] = {
+    "datetime": frozenset({"datetime", "timezone", "timedelta", "UTC"}),
+    "merger": frozenset({"merge", "get_macro_regime"}),
+    "normalizers": frozenset({"normalize_forecast"}),
+    "healthcheck": frozenset({"run_healthcheck"}),
+    "trace_analyzer": frozenset({"analyze_pipeline_trace"}),
     "decision_helpers": frozenset(
         {
             "merge_snapshots",
@@ -170,9 +178,9 @@ def _safe_import(
         if symbol not in allowed:
             msg = f"Import of {name}.{symbol} is not allowed in workflow code blocks"
             raise ImportError(msg)
-    if len(fromlist) == 1:
-        return getattr(module, fromlist[0])
-    return tuple(getattr(module, sym) for sym in fromlist)
+    # PEP 328: __import__ with a non-empty fromlist must return the target module,
+    # not the imported attributes (IMPORT_FROM handles symbol binding).
+    return module
 
 
 def _build_restricted_builtins() -> dict[str, Any]:

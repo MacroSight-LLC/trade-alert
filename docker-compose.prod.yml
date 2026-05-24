@@ -171,7 +171,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.mcp
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       vault:
         condition: service_healthy
@@ -203,7 +203,7 @@ services:
 
   polygon-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -231,7 +231,7 @@ services:
 
   discord-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -259,7 +259,7 @@ services:
 
   finnhub-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -287,7 +287,7 @@ services:
 
   rot-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -315,7 +315,7 @@ services:
 
   trading-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -343,7 +343,7 @@ services:
 
   fred-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -371,7 +371,7 @@ services:
 
   spamshield-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -399,7 +399,7 @@ services:
 
   edgar-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -427,7 +427,7 @@ services:
 
   yfinance-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -455,7 +455,7 @@ services:
 
   alpaca-mcp:
     <<: *app-hardening
-    image: ${MCP_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/mcp:latest}
+    image: ${MCP_IMAGE:-ghcr.io/macrosight-llc/trade-alert/mcp:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -487,7 +487,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.timesfm
-    image: ${TIMESFM_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/timesfm:latest}
+    image: ${TIMESFM_IMAGE:-ghcr.io/macrosight-llc/trade-alert/timesfm:latest}
     depends_on:
       tradingview-mcp:
         condition: service_started
@@ -519,7 +519,7 @@ services:
 
   cuga:
     <<: *app-hardening
-    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
+    image: ${CUGA_IMAGE:-ghcr.io/macrosight-llc/trade-alert/cuga:latest}
     build: &cuga-build
       context: .
       dockerfile: docker/Dockerfile.cuga
@@ -567,6 +567,8 @@ services:
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
+      - ./prompt_fetcher.py:/app/prompt_fetcher.py
+      - ./prompt_renderer.py:/app/prompt_renderer.py
       - ./pipeline_tracing.py:/app/pipeline_tracing.py
       - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./alert_quality.py:/app/alert_quality.py
@@ -598,6 +600,7 @@ services:
       - path: .env.vault
         required: false
     environment:
+      PYTHONPATH: /app
       VAULT_ADDR: http://vault:8200
       VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
@@ -616,7 +619,7 @@ services:
 
   cron:
     <<: *app-hardening
-    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
+    image: ${CUGA_IMAGE:-ghcr.io/macrosight-llc/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
       cuga:
@@ -642,6 +645,8 @@ services:
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
+      - ./prompt_fetcher.py:/app/prompt_fetcher.py
+      - ./prompt_renderer.py:/app/prompt_renderer.py
       - ./pipeline_tracing.py:/app/pipeline_tracing.py
       - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./alert_quality.py:/app/alert_quality.py
@@ -662,6 +667,7 @@ services:
       - ./decision_helpers.py:/app/decision_helpers.py
       - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./scripts:/app/scripts
       - ./logs:/app/logs
       - ./tests:/app/tests
       - ./crontab:/etc/crontabs/root
@@ -675,6 +681,7 @@ services:
       ]
     env_file: *app-envfile
     environment:
+      PYTHONPATH: /app
       VAULT_ADDR: http://vault:8200
       VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
@@ -696,7 +703,7 @@ services:
 
   discord-bot:
     <<: *app-hardening
-    image: ${CUGA_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/cuga:latest}
+    image: ${CUGA_IMAGE:-ghcr.io/macrosight-llc/trade-alert/cuga:latest}
     build: *cuga-build
     depends_on:
       vault:
@@ -732,6 +739,8 @@ services:
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
+      - ./prompt_fetcher.py:/app/prompt_fetcher.py
+      - ./prompt_renderer.py:/app/prompt_renderer.py
       - ./pipeline_tracing.py:/app/pipeline_tracing.py
       - ./pipeline_runner.py:/app/pipeline_runner.py
       - ./alert_quality.py:/app/alert_quality.py
@@ -752,10 +761,12 @@ services:
       - ./decision_helpers.py:/app/decision_helpers.py
       - ./winrate_injector.py:/app/winrate_injector.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
+      - ./scripts:/app/scripts
       - ./discord_bot.py:/app/discord_bot.py
       - ./logs:/app/logs
     env_file: *app-envfile
     environment:
+      PYTHONPATH: /app
       VAULT_ADDR: http://vault:8200
       VAULT_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
@@ -776,7 +787,7 @@ services:
 
   dashboard:
     <<: *app-hardening
-    image: ${DASHBOARD_IMAGE:-ghcr.io/MacroSight-LLC/trade-alert/dashboard:latest}
+    image: ${DASHBOARD_IMAGE:-ghcr.io/macrosight-llc/trade-alert/dashboard:latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard

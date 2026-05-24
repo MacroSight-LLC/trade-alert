@@ -196,6 +196,9 @@ fi
 # ── Phase 2: Start Vault ────────────────────────────────────
 
 section "[2/7] Starting Vault..."
+# shellcheck source=deployment/load-prod-env.sh
+source "$REPO_ROOT/deployment/load-prod-env.sh"
+ensure_vault_init_file "$REPO_ROOT"
 $DC up vault -d
 wait_vault_ready 60 || {
     echo "   Last 20 lines of vault logs:"

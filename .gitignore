@@ -97,3 +97,6 @@ htmlcov/
 # Extra secret-bearing patterns (in addition to .env.secrets / .secrets.*)
 *.secrets
 secrets/
+
+# Local Hetzner ops notes (SSH paths, IP — never commit private keys)
+deployment/hetzner-ops.local.md

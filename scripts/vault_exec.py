@@ -12,6 +12,10 @@ def main() -> None:
         print("usage: vault_exec.py <command> [args...]", file=sys.stderr)
         raise SystemExit(2)
 
+    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if app_root not in sys.path:
+        sys.path.insert(0, app_root)
+
     import vault_env_loader  # noqa: F401 — loads secrets on import
 
     cmd = sys.argv[1]
