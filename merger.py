@@ -13,6 +13,7 @@ import math
 import os
 from collections import defaultdict
 from datetime import UTC, datetime
+from typing import Any, Literal, cast
 
 import redis
 from pydantic import ValidationError
@@ -86,7 +87,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
 
     try:
         r = _get_redis()
-        raw_entries: list[str] = r.lrange(f"{SNAPSHOT_KEY_PREFIX}{timeframe}", 0, LRANGE_CAP - 1)
+        raw_entries = cast(list[str], r.lrange(f"{SNAPSHOT_KEY_PREFIX}{timeframe}", 0, LRANGE_CAP - 1))
         if len(raw_entries) >= LRANGE_CAP:
             logger.warning(
                 "Snapshot queue %s%s hit LRANGE cap (%d entries) — "
@@ -285,7 +286,7 @@ def merge(timeframe: str, limit: int | None = None) -> list[Snapshot]:
 
         merged_snap = Snapshot(
             symbol=symbol,
-            timeframe=tf,
+            timeframe=cast(Literal["5m", "15m", "1h", "4h", "1D"], tf),
             timestamp=group[0].timestamp,
             signals=deduped,
         )
@@ -307,10 +308,10 @@ def get_macro_regime() -> dict:
     """
     try:
         r = _get_redis()
-        raw: str | None = r.get(MACRO_REGIME_KEY)
+        raw = cast(str | None, r.get(MACRO_REGIME_KEY))
         if raw is None:
             return {"risk_on": True, "is_stale": True}
-        return json.loads(raw)
+        return cast(dict[Any, Any], json.loads(raw))
     except (redis.RedisError, json.JSONDecodeError) as exc:
         logger.warning("Failed to read %s — %s", MACRO_REGIME_KEY, exc)
         return {"risk_on": True, "is_stale": True}
@@ -327,7 +328,7 @@ if __name__ == "__main__":
             s = Snapshot(
                 symbol="AAPL",
                 timeframe="15m",
-                timestamp="2026-03-06T00:00:00Z",
+                timestamp=datetime.fromisoformat("2026-03-06T00:00:00+00:00"),
                 signals=[
                     Signal(
                         source=source,

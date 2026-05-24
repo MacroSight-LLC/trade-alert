@@ -1,3 +1,4 @@
+# Supersedes the removed `.github/workflows/tests.yml` (legacy CUGA upstream Playwright stub).
 name: trade-alert tests
 
 # Branch-level triggers (not path allowlists) so new modules/scripts/gates never
@@ -65,8 +66,7 @@ jobs:
       - name: Circular import check
         run: uv run python -c "import validate_and_filter; import gates.watch; import gates.regime; print('OK')"
 
-      - name: Type-check with mypy (FU-009 advisory)
-        continue-on-error: true
+      - name: Type-check with mypy (FU-009)
         run: uv run mypy --config-file pyproject.toml
 
       - name: Verify secrets baseline (IBM detect-secrets)
@@ -127,6 +127,7 @@ jobs:
           PGPASSWORD=trade_alert_test psql -h localhost -U trade_alert -d trade_alert_test -f schema.sql
 
       - name: Run integration tests
+        # TODO: remove -m "not e2e" after FU-006 resolved
         run: timeout 120 uv run pytest tests/integration/ -v -m "not e2e" --tb=short
 
   docker-build:
@@ -145,6 +146,11 @@ jobs:
       - name: Validate compose config (prod)
         run: |
           env $(grep -v '^#' .env.example | grep '=' | sed 's/=.*/=ci-compose-placeholder/' | xargs) \
+            VAULT_TOKEN=ci-compose-placeholder \
+            LANGFUSE_DB_PASSWORD=ci-compose-placeholder \
+            SALT=ci-compose-placeholder \
+            DASHBOARD_API_KEY=ci-compose-placeholder \
+            GRAFANA_ADMIN_PASSWORD=ci-compose-placeholder \
             docker compose -f docker-compose.prod.yml config --quiet
       - name: Validate compose config (test)
         run: docker compose -f docker-compose.test.yml config --quiet

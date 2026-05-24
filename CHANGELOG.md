@@ -11,29 +11,39 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
-### Deferred
-- `pg_partman` monthly partitioning for `alerts` — design notes in `schema.sql` (lines 176–199); use `scripts/purge_old_data.py` until enabled.
-- `prompt_manager.py` decomposition — complexity hotspot; no functional defect.
-- Mypy cleanup sprint — pre-existing errors outside touched modules; do not regress files in `pyproject.toml` `[tool.mypy] files`.
+Nothing yet — see [1.2.0] below.
 
 ## [1.2.0] - 2026-05-23
 
+Stabilization sprint: CI/CD hardening, module decomposition, test coverage, and ops prep.
+
 ### Added
-- P0: SpamShield collector path via `parallel_tool_calls` (no inline `mcp_call` in workflow code);
-  `resilience/mcp_error_handler.py` and `on_mcp_error` dispatch in `pipeline_runner.py`.
-- P1: `workflows/orchestrator-base.yaml` with thin 15m/1h wrappers; `schemas/workflow.schema.json`
-  and CI validation; `scripts/purge_old_data.py` and `scripts/purge_langfuse_datasets.py`;
-  Langfuse dataset redaction/capture flags; `gate_config.py` as gate-threshold SSOT.
-- P2: Optional extended-hours confidence penalty; `classify_regime` in `gate_config`; EOD cron
-  stagger (state-summary 16:10 ET, EOD 16:20 ET); `COMPLIANCE.md`; PR security checklist.
-- P3: `docs/architecture.md`, `docs/spec-v1.3.md` copy; Dependabot pip groups; expanded ruff CI scope.
-- CI: branch-level workflow triggers (replaces path allowlist); validate `docker-compose.prod.yml`
-  and `docker-compose.test.yml`; coverage includes `redis_client.py`, `constants.py`, `metrics.py`;
-  Helm lint for `deployment/helm/*` charts.
+- Deploy rollback sentinel (`/tmp/rollback_deploy_sha`) and smoke-failure rollback step in `deploy.yml`.
+- TimesFM health unit test (`test_timesfm_health_check_included`) and `# FU-006` comment in `healthcheck.py`.
+- Module decomposition: `prompt_fetcher.py`, `prompt_renderer.py`; `gates/types.py`, `gates/reconciliation.py`, `gates/redis_circuit.py`, `gates/candidate.py`; `outcome_queries.py`.
+- `scripts/enable_partitioning.sql` and `tests/unit/test_schema_partitioning.py` (FU-007 ops prep).
+- Unit tests: `test_gate_telemetry.py`, `test_gate_config.py`, `test_metrics.py`, `test_llm_client.py`, `test_llm_response_parser.py`.
+- Merger Python-layer `model_dump(mode="json")` regression test (FU-002).
+- `docs/architecture.md` root vs subdirectory map; `CONTRIBUTING.md` File Placement Guide.
+- FU-012 tracking for stability-tests 95% threshold (deferred pending workflow_dispatch baseline).
 
 ### Changed
-- Orchestrator 15m/1h YAML reduced to parameterized wrappers over `orchestrator-base.yaml`.
-- `FOLLOW_UPS.md` retained in-repo (GitHub Issues disabled on this repository).
+- Mypy is a merge gate in CI (FU-009); 41 annotation fixes across 20 files.
+- `validate_and_filter.py` orchestration-only (~20KB); `prompt_manager.py` thin orchestrator (~11KB).
+- Removed legacy `.github/workflows/tests.yml` (CUGA Playwright stub); `trade-alert-tests.yml` is authoritative.
+- Relocated CUGA integration tests (`test_conversation_history`, `test_llm_config_publish`) to `tests/cuga_upstream/`.
+- Integration CI: `# TODO: remove -m "not e2e" after FU-006 resolved` comment added.
+
+### Fixed
+- Normalizer timestamps use `datetime` objects (mypy-aligned; Pydantic coercion unchanged at runtime).
+- Session gate tests: re-export `EXTENDED_HOURS_ALERTS_ENABLED` from `validate_and_filter`.
+- Dashboard API integration tests: disable auth in fixture to avoid env pollution from Vault/CUGA imports.
+
+### Previously in [1.2.0] (pre-stabilization)
+- P0: SpamShield collector path via `parallel_tool_calls`; `resilience/mcp_error_handler.py`.
+- P1: `workflows/orchestrator-base.yaml`; workflow jsonschema CI; purge scripts; `gate_config.py` SSOT.
+- P2: Extended-hours confidence penalty; EOD cron stagger; `COMPLIANCE.md`.
+- P3: `docs/architecture.md`; Dependabot pip groups; expanded ruff CI; Helm lint.
 
 ## [1.1.0] - 2026-05-23
 

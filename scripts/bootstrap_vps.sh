@@ -128,7 +128,7 @@ _sshd_set PermitEmptyPasswords no
 
 # Validate config before restarting
 if sshd -t 2>/dev/null; then
-    systemctl restart sshd
+    systemctl restart ssh
     echo "    SSH hardened (password auth disabled, root login disabled)"
 else
     echo "    ERROR: sshd config validation failed — SSH not restarted"

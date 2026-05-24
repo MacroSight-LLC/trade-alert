@@ -176,6 +176,8 @@ def load_vault_secrets() -> int:
             _loaded = True
             return 0
 
+    return 0
+
 
 # ---------------------------------------------------------------------------
 # Auto-load on import

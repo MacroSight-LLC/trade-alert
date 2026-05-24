@@ -132,9 +132,11 @@ def safe_eval(expr: str, ns: dict[str, Any]) -> Any:
         if isinstance(node, ast.Tuple):
             return tuple(_eval(e, depth + 1) for e in node.elts)
         if isinstance(node, ast.Dict):
-            return {
-                _eval(k, depth + 1): _eval(v, depth + 1) for k, v in zip(node.keys, node.values, strict=False)
-            }  # type: ignore[arg-type,misc]
+            out: dict[Any, Any] = {}
+            for k_node, v_node in zip(node.keys, node.values, strict=False):
+                if k_node is not None:
+                    out[_eval(k_node, depth + 1)] = _eval(v_node, depth + 1)
+            return out
         raise ValueError(f"AST node {type(node).__name__} is not allowed")
 
     return _eval(tree)

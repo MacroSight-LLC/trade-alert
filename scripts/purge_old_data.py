@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Delete alerts older than DATA_RETENTION_DAYS (default 180)."""
+"""Delete alerts older than DATA_RETENTION_DAYS (default 180).
+
+# PARTITIONED TABLE NOTE: After pg_partman migration (scripts/enable_partitioning.sql),
+# DELETE on the parent ``alerts`` table still removes rows across all partitions.
+# For retention windows that align with whole months, prefer DROP PARTITION on
+# detached child tables instead of row-by-row DELETE for faster purges.
+"""
 
 from __future__ import annotations
 

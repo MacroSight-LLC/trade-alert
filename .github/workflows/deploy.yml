@@ -218,6 +218,14 @@ jobs:
             set -euo pipefail
             cd ~/trade-alert
 
+            # Persist last-known-good SHA before switching to new deploy (rollback sentinel)
+            if [ -f /tmp/last_good_deploy_sha ]; then
+              cp /tmp/last_good_deploy_sha /tmp/rollback_deploy_sha
+            else
+              git rev-parse HEAD > /tmp/rollback_deploy_sha
+            fi
+            echo "${DEPLOY_SHA}" > /tmp/last_good_deploy_sha
+
             git fetch origin
             git checkout "${DEPLOY_SHA}"
 
@@ -296,3 +304,25 @@ jobs:
               exit 1
             fi
             echo "Smoke test passed — all checks green"
+            echo "${{ github.sha }}" > /tmp/rollback_deploy_sha
+
+      - name: Rollback on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: deploy
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script_stop: false
+          script: |
+            set -euo pipefail
+            cd ~/trade-alert
+            if [ ! -f /tmp/rollback_deploy_sha ]; then
+              echo "No rollback SHA sentinel found — manual intervention required"
+              exit 1
+            fi
+            PREV_SHA=$(cat /tmp/rollback_deploy_sha)
+            git checkout "$PREV_SHA"
+            docker compose -f docker-compose.prod.yml pull cuga cron discord-bot dashboard timesfm-mcp tradingview-mcp || true
+            docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans
+            echo "Rolled back to $PREV_SHA"

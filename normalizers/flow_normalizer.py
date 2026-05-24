@@ -33,7 +33,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
         List of Snapshots, one per symbol with volume_spike signals.
     """
     snapshots: list[Snapshot] = []
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(UTC)
 
     for symbol, data in raw_results.items():
         signals: list[Signal] = []

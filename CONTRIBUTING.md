@@ -128,7 +128,7 @@ trade-alert uses two CI workflow families:
 
 - [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs and pushes to `main`. Uses **branch-level triggers** (not a `paths:` allowlist), so new root modules (`redis_client.py`, `constants.py`, `scripts/*.py`, normalizers, gates) always run CI. Runs ruff, mypy, jsonschema on workflows, unit + integration tests, and docker/compose validation (`docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.test.yml`).
 - [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — runs on every push to `main`; lint → test → build GHCR images; deploy + smoke **only when** repo variable `HETZNER_PROVISIONED=true` (Hetzner not provisioned yet — see [`RELEASING.md`](RELEASING.md)).
-- [`.github/workflows/tests.yml`](.github/workflows/tests.yml) / [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream suite; uses Python 3.12 and Playwright; do not modify for trade-alert changes.
+- [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream stability suite (separate from trade-alert gate); do not modify for trade-alert changes. The legacy `tests.yml` Playwright stub was removed; `trade-alert-tests.yml` is the authoritative trade-alert CI workflow.
 
 When opening a trade-alert PR, `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
 
@@ -145,6 +145,20 @@ Ruff lint/format runs on the full repo via `uv run ruff check .` (see `ruff.toml
 **Follow-ups:** Use [`FOLLOW_UPS.md`](./FOLLOW_UPS.md) for tech-debt items. GitHub Issues are disabled on this repo; do not delete open FU-* entries until issues are enabled org-wide.
 
 Release process: see [`RELEASING.md`](RELEASING.md).
+
+## File Placement Guide
+
+When adding new code, use existing directories rather than expanding the flat root layout:
+
+| New code type | Target directory |
+| ------------- | ---------------- |
+| Gate logic | `gates/` |
+| Collector normalizers | `normalizers/` |
+| Resilience patterns | `resilience/` |
+| Workflow YAML | `workflows/` |
+| Orchestration / pipeline Python | Root until a new concern exceeds ~5 modules, then create a subdirectory |
+
+See also [`docs/architecture.md`](docs/architecture.md) for the root vs subdirectory map.
 
 ### Pull Request Templates
 

@@ -49,6 +49,7 @@ COPY notifier_and_logger.py /app/notifier_and_logger.py
 COPY eod_summary.py /app/eod_summary.py
 COPY healthcheck.py /app/healthcheck.py
 COPY outcome_tracker.py /app/outcome_tracker.py
+COPY outcome_queries.py /app/outcome_queries.py
 COPY trace_analyzer.py /app/trace_analyzer.py
 COPY langfuse_client.py /app/langfuse_client.py
 COPY prompt_manager.py /app/prompt_manager.py

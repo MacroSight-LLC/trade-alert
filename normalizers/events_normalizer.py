@@ -38,7 +38,7 @@ def normalize(raw_results: dict[str, Any], *, timeframe: str) -> list[Snapshot]:
     """
     snapshots: list[Snapshot] = []
     now_dt = datetime.now(UTC)
-    now = now_dt.isoformat()
+    now = now_dt
 
     for symbol, data in raw_results.items():
         signals: list[Signal] = []

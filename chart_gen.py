@@ -170,8 +170,11 @@ def _fetch_last_trade(symbol: str) -> tuple[float | None, str | None]:
 
     # Polygon response can include either "results" (v2) or "last" (older variants)
     payload = data.get("results") or data.get("last") or {}
+    p_val = payload.get("p")
+    if p_val is None:
+        return None, None
     try:
-        price = float(payload.get("p"))
+        price = float(p_val)
     except (TypeError, ValueError):
         return None, None
 

@@ -475,7 +475,7 @@ def post_quality_scores(
         per_alert_results.append({"symbol": alert.symbol, "scores": scores})
 
         # Post per-alert quality score to Langfuse
-        if add_score and trace_id:
+        if add_score is not None and trace_id:
             add_score(
                 trace_id,
                 f"alert_quality_{alert.symbol}",
@@ -491,7 +491,7 @@ def post_quality_scores(
     batch = score_batch(alerts)
 
     # Post batch-level scores
-    if add_score and trace_id:
+    if add_score is not None and trace_id:
         add_score(
             trace_id,
             "batch_avg_quality",

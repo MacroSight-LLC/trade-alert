@@ -14,6 +14,7 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -385,11 +386,12 @@ def api_session_stats(
 
             raw = get_redis().hgetall(key) or {}
             stats: dict[str, int] = {}
+            raw_items: Iterable[tuple[Any, Any]]
             if isinstance(raw, dict):
-                items = raw.items()
+                raw_items = raw.items()
             else:
-                items = []
-            for k, v in items:
+                raw_items = ()
+            for k, v in raw_items:
                 field = k.decode() if isinstance(k, bytes) else str(k)
                 try:
                     stats[field] = int(v)

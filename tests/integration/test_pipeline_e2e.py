@@ -298,10 +298,14 @@ class TestDashboardAPISchemas:
 
     @pytest.fixture()
     def client(self) -> TestClient:
-        """Create a test client with mocked DB functions."""
+        """Create a test client with mocked DB functions (auth disabled)."""
         from dashboard_api import app
 
-        return TestClient(app)
+        with (
+            patch("dashboard_api.DASHBOARD_API_KEY", None),
+            patch("dashboard_api.DASHBOARD_REQUIRE_AUTH", False),
+        ):
+            yield TestClient(app)
 
     @patch("dashboard_api.get_summary_stats")
     def test_summary_endpoint(self, mock_stats: MagicMock, client: TestClient) -> None:

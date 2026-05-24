@@ -175,7 +175,7 @@ def insert_alert(
             )
             row = cur.fetchone()
             conn.commit()
-            return row[0]
+            return int(row[0])
     finally:
         _put_conn(conn)
 

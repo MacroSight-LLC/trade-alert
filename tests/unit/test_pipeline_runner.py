@@ -433,3 +433,18 @@ class TestExecCodeStepImportAllowlist:
                 {},
                 {},
             )
+
+    def test_from_import_normalizer(self) -> None:
+        code = "from normalizers.macro_normalizer import normalize\nresult = normalize"
+        fn = _exec_code_step(code, {}, {})
+        assert callable(fn)
+
+    def test_from_import_datetime(self) -> None:
+        code = "from datetime import datetime, timezone\nresult = datetime.now(tz=timezone.utc)"
+        assert _exec_code_step(code, {}, {}) is not None
+
+    def test_from_import_merger(self) -> None:
+        code = "from merger import merge, get_macro_regime\nresult = (merge, get_macro_regime)"
+        pair = _exec_code_step(code, {}, {})
+        assert callable(pair[0])
+        assert callable(pair[1])

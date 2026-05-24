@@ -117,6 +117,7 @@ class TestEpCeiling:
         alert_3 = _make_alert_dict(
             edge_probability=0.90,
             sources_agree=3,
+            confidence=0.84,
         )
         results, _ = _run_filter([alert_3], snapshots=snapshots_3)
         assert len(results) == 1
@@ -173,11 +174,11 @@ class TestSourceHallucination:
                 ],
             ),
         ]
-        alert = _make_alert_dict(sources_agree=4, edge_probability=0.75)
+        alert = _make_alert_dict(sources_agree=4, edge_probability=0.75, confidence=0.84)
         results, _ = _run_filter([alert], snapshots=snapshots)
         assert len(results) == 1
-        # sources_agree should be overridden to the actual count (3)
-        assert results[0].sources_agree == 3
+        # Server override: 3 signal families + injected macro family when risk-on
+        assert results[0].sources_agree == 4
 
 
 @pytest.mark.skipif(not _HAS_REDIS, reason="redis not installed")

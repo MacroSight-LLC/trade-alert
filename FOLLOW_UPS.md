@@ -14,76 +14,87 @@ commit that closed it.
 
 ## Open
 
+### FU-012 — Raise stability-tests pass threshold to 95%
+
+**Status:** OPEN (2026-05-23)
+**Component:** `.github/workflows/stability-tests.yml`
+**Action:** Run `stability-tests.yml` via `workflow_dispatch` and record pass rate for Python 3.11, 3.12, 3.13, and Windows jobs. Raise threshold from 88% to 95% only when all four jobs report ≥95%.
+**Acceptance:** Baseline recorded; threshold updated or item remains open until upstream CUGA suite is ready.
+
+---
+
 ### FU-007 — pg_partman alerts partitioning
 
-**Status:** DEFERRED (schema design)
-**Component:** `schema.sql` lines 176–199
-**Action:** Enable `pg_partman` monthly partitions on `alerts.created_at` after ops review of retention vs `scripts/purge_old_data.py`.
-**Acceptance:** New months auto-partition; purge script documented for partitioned tables.
+**Status:** READY_FOR_OPS_REVIEW (2026-05-23)
+**Component:** `schema.sql` lines 176–199, `scripts/enable_partitioning.sql`
+**Action:** Ops review retention vs `scripts/purge_old_data.py`, then run `scripts/enable_partitioning.sql` on prod Postgres during a maintenance window.
+**Acceptance:** New months auto-partition; purge script updated for partitioned semantics before cutover.
 
----
-
-### FU-008 — prompt_manager.py decomposition
-
-**Status:** DEFERRED (refactor)
-**Component:** `prompt_manager.py` (~34KB)
-**Action:** Split prompt fetch, template render, and gate-var injection into focused modules when touching prompts next.
-**Acceptance:** No single file >20KB; tests unchanged.
-
----
-
-### FU-009 — Mypy cleanup sprint
-
-**Status:** DEFERRED
-**Action:** Fix pre-existing mypy errors repo-wide without changing runtime behavior; keep `[tool.mypy] files` list as CI scope until clean.
-**Acceptance:** `uv run mypy --config-file pyproject.toml` exits 0.
+**Repo prep:** `scripts/enable_partitioning.sql` created; `# PARTITIONED TABLE NOTE` in `purge_old_data.py`; `tests/unit/test_schema_partitioning.py` added (commit `2517a79`).
 
 ---
 
 ### FU-006 — TimesFM MCP prod verification
 
-**Status:** OPEN
-**Component:** `timesfm_mcp.py` / forecast collector
-**Issue:** TimesFM MCP was unreachable in dev during v1.1.0 validation.
-**Action:** On prod, run `healthcheck.py` with TimesFM endpoint enabled and confirm:
-1. `/health` returns `{"timesfm": "ok"}`
-2. A full 15m orchestrator run produces a non-null forecast field in at least one alert.
-**Acceptance:** Logged prod trace shows `timesfm_forecast` key populated.
+**Status:** PARTIAL (health OK; forecast snapshots still empty on first prod cycle)
+**Component:** `healthcheck.py`, forecast collector
+**Repo work:** `# FU-006` comment on TimesFM MCP entry; `test_timesfm_health_check_included` in `tests/unit/test_healthcheck.py` (MCP contract: HTTP 200 on port 8012) — commit `6be84a9`.
+**Prod (2026-05-24):** TimesFM `/health` 200 via orchestrator healthcheck; forecast collector returned 0 snapshots (TimesFM MCP reachable, no symbols forecasted this cycle).
+**Action:** Re-run during market hours or with a seeded universe; confirm non-null forecast field in Redis snapshot.
+**Acceptance:** Logged prod trace shows forecast populated; then remove `-m "not e2e"` from integration CI.
 
-**Follow-on:** Once TimesFM is healthy on prod and the forecast collector path is validated
-end-to-end, lift the integration CI e2e exclusion (`-m "not e2e"` in
-`.github/workflows/trade-alert-tests.yml`) in a single line change.
+---
+
+## Resolved
+
+### FU-003 — Enable `VAULT_REQUIRED=true` for production deployments
+
+**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
+**Note:** `./deployment/verify-vault-required.sh` exits 0 with `VAULT_REQUIRED=true`; Vault health OK; no env-file fallback warnings. Shared loader: `deployment/load-prod-env.sh`.
 
 ---
 
 ### FU-002 — Sonnet 4 → 4.5 end-to-end output validation
 
-**Status:** PENDING PROD VERIFICATION
-**Action:** Re-run `./deployment/validate-sonnet-4-5.sh` on Hetzner prod host.
-**Capture:** prod trace IDs from Langfuse + Prometheus gate mix (`gate_rejection_total` labels).
-**Acceptance:** ≥1 live trace confirms `claude-sonnet-4-5` is being called; gate mix matches dev baseline within 5% per gate family.
+**Resolved:** 2026-05-24 — prod deploy on Hetzner `37.27.184.125`
+**Note:** Live 15m + 1h orchestrator runs; Langfuse traces confirm `claude-sonnet-4-5` (LiteLLM log + `validate-sonnet-4-5.sh` automated checks).
 
-**Local dev validation (2026-05-23):** Both orchestrators completed with `claude-sonnet-4-5`; LiteLLM + Langfuse traces confirmed. Merger fix (`model_dump(mode="json")`) in commit `4524365`.
+| Timeframe | Langfuse trace ID | Model |
+| --------- | ----------------- | ----- |
+| 15m | `d9106d73-825d-4435-92b6-2ff598b4d61b` | claude-sonnet-4-5 |
+| 1h | `ea51b5d2-a8ed-41db-863a-016e7a7c5662` | claude-sonnet-4-5 |
 
-| Cycle | Trace ID | Merger | LLM | Parsed | Passed | Rejected |
-| ----- | -------- | ------ | --- | ------ | ------ | -------- |
-| 15m | `7d9370bc-2a1b-4fa1-ba57-ba0f14451309` | 10 | 0 candidates | 0 | 0 | 0 |
-| 1h | `98b844c0-c924-4eed-9c92-0d21249eb748` | 10 | 1 candidate | 1 | 1 WATCH (AMZN) | 0 |
+**Fixes required for live run:** `workflow_sandbox.py` `__import__` must return module not symbol; mount `prompt_fetcher.py` / `prompt_renderer.py` in `docker-compose.prod.yml`.
 
 ---
 
-### FU-003 — Enable `VAULT_REQUIRED=true` for production deployments
+### FU-011 — outcome_tracker.py decomposition
 
-**Status:** PENDING PROD VERIFICATION
-**Action:** Confirm `VAULT_REQUIRED=true` on prod host. Run:
-`VAULT_REQUIRED=true ./deployment/verify-vault-required.sh`
-**Acceptance:** Script exits 0 with no fallback-to-env-file warnings.
-
-**Repo baseline (2026-05-23):** `.env.example` defaults `VAULT_REQUIRED=true`. Production checklist in [`SETUP_AND_OPERATIONS.md`](./SETUP_AND_OPERATIONS.md). Unit tests in `tests/unit/test_vault_env_loader.py`. Deploy smoke in `.github/workflows/deploy.yml`.
+**Resolved:** 2026-05-23 — `80e2371`
+**Note:** Postgres helpers extracted to `outcome_queries.py`; `outcome_tracker.py` slimmed to orchestration (~12KB).
 
 ---
 
-## Resolved
+### FU-010 — validate_and_filter.py decomposition
+
+**Resolved:** 2026-05-23 — `80e2371`
+**Note:** Extracted `gates/types.py`, `gates/reconciliation.py`, `gates/redis_circuit.py`, `gates/candidate.py`; orchestrator ~20KB; public API unchanged; 222+ gate tests green.
+
+---
+
+### FU-008 — prompt_manager.py decomposition
+
+**Resolved:** 2026-05-23 — `80e2371`
+**Note:** Split into `prompt_fetcher.py`, `prompt_renderer.py`, thin `prompt_manager.py` (all ≤20KB); `test_prompt_manager.py` unchanged.
+
+---
+
+### FU-009 — Mypy cleanup sprint
+
+**Resolved:** 2026-05-23 — `6be84a9`
+**Note:** 41 annotation errors fixed; `uv run mypy --config-file pyproject.toml` exits 0; CI merge gate enabled in `trade-alert-tests.yml`.
+
+---
 
 ### FU-005 — Document implicit gate input contracts for test authors
 
