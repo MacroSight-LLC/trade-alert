@@ -563,6 +563,7 @@ services:
       - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./outcome_queries.py:/app/outcome_queries.py
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
@@ -637,6 +638,7 @@ services:
       - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./outcome_queries.py:/app/outcome_queries.py
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
@@ -726,6 +728,7 @@ services:
       - ./eod_summary.py:/app/eod_summary.py
       - ./healthcheck.py:/app/healthcheck.py
       - ./outcome_tracker.py:/app/outcome_tracker.py
+      - ./outcome_queries.py:/app/outcome_queries.py
       - ./trace_analyzer.py:/app/trace_analyzer.py
       - ./langfuse_client.py:/app/langfuse_client.py
       - ./prompt_manager.py:/app/prompt_manager.py
