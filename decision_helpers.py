@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Any
 
+from reasoning.prompt_builder import build_prompt as _build_reasoning_prompt
 from telemetry.context import TelemetryContext
 
 logger = logging.getLogger(__name__)
@@ -261,107 +262,8 @@ def build_prompt(
     Returns:
         Dict with ``prompt`` and ``prompt_version`` keys.
     """
-    from prompt_manager import (
-        format_golden_examples,
-        format_winrate_context,
-        get_decision_prompts,
-        get_prompt_version,
-        get_quality_escalation_rules,
-    )
-
-    macro = merge_result["macro"]
-    snapshots_json = merge_result["snapshots_json"]
-    n = merge_result["n"]
-
-    def _market_reference_context(snaps_json: str, limit: int = 20) -> str:
-        """Extract symbol->reference price lines from snapshot raw payloads for prompt context."""
-        try:
-            snaps = json.loads(snaps_json)
-        except (TypeError, ValueError):
-            return ""
-
-        refs: dict[str, float] = {}
-        for snap in snaps:
-            sym = str(snap.get("symbol", "")).upper()
-            if not sym or sym in refs:
-                continue
-            for sig in snap.get("signals", []):
-                raw = sig.get("raw") or {}
-                if not isinstance(raw, dict):
-                    continue
-                for key in ("current_price", "last", "last_price", "price", "close"):
-                    try:
-                        px = float(raw.get(key, 0.0))
-                    except (TypeError, ValueError):
-                        continue
-                    if px > 0:
-                        refs[sym] = px
-                        break
-                if sym in refs:
-                    break
-
-        if not refs:
-            return ""
-
-        lines: list[str] = []
-        for i, sym in enumerate(sorted(refs.keys())):
-            if i >= limit:
-                break
-            lines.append(f"- {sym}: ${refs[sym]:,.2f}")
-        return "\n".join(lines)
-
-    _fred_vix = fred_results[0] if len(fred_results) > 0 else {}
-    _fred_yc = fred_results[1] if len(fred_results) > 1 else {}
-    vix = _fred_vix.get("vix_level") or _fred_vix.get("value", "N/A")
-    yc = _fred_yc.get("spread_bps") or _fred_yc.get("value", "N/A")
-
-    # Guard against zero/falsy FRED values that pass the "N/A" check but
-    # are clearly stale — e.g. VIX=0.0 or curve=0.0 are physically impossible
-    # in live markets.  Mark them stale so the LLM gets an honest signal.
-    import logging as _logging
-
-    _dh_log = _logging.getLogger(__name__)
-    try:
-        if vix != "N/A" and float(vix) == 0.0:
-            _dh_log.warning("FRED staleness: VIX returned 0.0 — marking as STALE")
-            vix = "STALE"
-    except (TypeError, ValueError):
-        pass
-    try:
-        if yc != "N/A" and float(yc) == 0.0:
-            _dh_log.warning("FRED staleness: yield-curve spread returned 0.0 — marking as STALE")
-            yc = "STALE"
-    except (TypeError, ValueError):
-        pass
-
-    _fred_live = vix not in ("N/A", "STALE") and yc not in ("N/A", "STALE")
-    data_freshness = "LIVE" if _fred_live else "CACHED (stale — FRED unavailable)"
-
-    risk_on = macro.get("risk_on", True)
-    macro_summary = f"{'Risk-on' if risk_on else 'Risk-off'}, VIX={vix}, Yield curve={yc}bps"
-
-    perf_ctx = format_winrate_context()
-    escalation = get_quality_escalation_rules(timeframe)
-    if escalation:
-        perf_ctx = perf_ctx + "\n" + escalation if perf_ctx else escalation
-
-    system_prompt, user_prompt = get_decision_prompts(
-        timeframe,
-        {
-            "macro_summary": macro_summary,
-            "vix": vix,
-            "yc": yc,
-            "n": n,
-            "snapshots_json": snapshots_json,
-            "market_reference_context": _market_reference_context(snapshots_json),
-            "data_freshness": data_freshness,
-            "performance_context": perf_ctx,
-            "few_shot_examples": format_golden_examples(),
-        },
-    )
-
-    full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
-    return {"prompt": full_prompt, "prompt_version": get_prompt_version()}
+    # TODO(PR-X): remove shim after workflow YAML imports reasoning.build_prompt directly
+    return _build_reasoning_prompt(timeframe, merge_result, fred_results).to_workflow_result()
 
 
 def log_ensemble_decision(

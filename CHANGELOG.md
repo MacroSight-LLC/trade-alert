@@ -12,6 +12,9 @@ phase ordering in the SSOT phase table.
 ## [Unreleased]
 
 ### Refactor
+- Extract decision prompt construction to `reasoning/prompt_builder.py` with
+  `ReasoningPrompt`, `FredContext`, and `parse_fred_context`; `decision_helpers.build_prompt`
+  remains a thin shim for workflow YAML compatibility.
 - Consolidate Langfuse tracing into `telemetry/` package (`client`, `tracing`,
   `context`, `gate_metrics`); `CandidateContext` uses `TelemetryContext`
   instead of `add_score_fn` injection; root shims kept for backward compatibility.
