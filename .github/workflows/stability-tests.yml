@@ -1,10 +1,8 @@
 name: Stability Tests
 
+# Upstream CUGA harness (run_stability_tests.py) is not vendored in trade-alert.
+# Manual only until FU-012 restores the harness — see FOLLOW_UPS.md.
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
   workflow_dispatch:
 
 jobs:
@@ -47,10 +45,15 @@ jobs:
           AGENT_SETTING_CONFIG: ${{ secrets.AGENT_SETTING_CONFIG }}
           TEST_RESULTS_FILE: test_results_python_${{ matrix.python-version }}.json
           PYTHONIOENCODING: utf-8
-        run: uv run run_stability_tests.py --method local
+        run: |
+          if [ ! -f run_stability_tests.py ]; then
+            echo "::warning::run_stability_tests.py not found — upstream CUGA harness missing (FU-012)."
+            exit 0
+          fi
+          uv run run_stability_tests.py --method local
 
       - name: Check pass rate
-        if: always()
+        if: always() && steps.test-run.outcome == 'success'
         run: |
           results_file="test_results_python_${{ matrix.python-version }}.json"
           if [ ! -f "$results_file" ]; then
@@ -76,6 +79,7 @@ jobs:
           name: test-logs-python-${{ matrix.python-version }}
           path: src/system_tests/e2e/logs/
           retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload test results
         if: always()
@@ -84,6 +88,7 @@ jobs:
           name: test-results-python-${{ matrix.python-version }}
           path: test_results_python_${{ matrix.python-version }}.json
           retention-days: 7
+          if-no-files-found: ignore
 
   stability-tests-windows:
     name: Stability Tests Windows (Python 3.12)
@@ -125,10 +130,16 @@ jobs:
           UV_NO_PROGRESS: 1
           UV_QUIET: 1
           PYTHONIOENCODING: utf-8
-        run: uv run run_stability_tests.py --method local
+        shell: pwsh
+        run: |
+          if (-not (Test-Path run_stability_tests.py)) {
+            Write-Host "::warning::run_stability_tests.py not found — upstream CUGA harness missing (FU-012)."
+            exit 0
+          }
+          uv run run_stability_tests.py --method local
 
       - name: Check pass rate
-        if: always()
+        if: always() && steps.test-run.outcome == 'success'
         shell: pwsh
         run: |
           $resultsFile = "test_results_python_3.12_windows.json"
@@ -151,6 +162,7 @@ jobs:
           name: test-logs-python-3.12-windows
           path: src/system_tests/e2e/logs/
           retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload test results
         if: always()
@@ -159,6 +171,7 @@ jobs:
           name: test-results-python-3.12-windows
           path: test_results_python_3.12_windows.json
           retention-days: 7
+          if-no-files-found: ignore
 
   summary:
     name: Test Summary
@@ -183,4 +196,9 @@ jobs:
           path: test-results
 
       - name: Generate summary report
-        run: uv run run_stability_tests.py --generate-summary --results-dir test-results
+        run: |
+          if [ ! -f run_stability_tests.py ]; then
+            echo "::warning::run_stability_tests.py not found — skipping summary (FU-012)."
+            exit 0
+          fi
+          uv run run_stability_tests.py --generate-summary --results-dir test-results

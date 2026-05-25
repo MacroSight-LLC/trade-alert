@@ -492,40 +492,43 @@ class TestAlertDedup:
 
 class TestRedisCircuitBreaker:
     def setup_method(self) -> None:
+        import gates.redis_circuit as rc
         import validate_and_filter as vf
 
-        vf._REDIS_FAILURE_COUNT = 0
-        vf._redis_circuit_open = False
-        vf._redis_last_failure_ts = 0.0
+        for mod in (vf, rc):
+            mod._REDIS_FAILURE_COUNT = 0
+            mod._redis_circuit_open = False
+            mod._redis_last_failure_ts = time.monotonic()
 
     def test_circuit_opens_after_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("REDIS_FAILURE_THRESHOLD", "2")
+        import gates.redis_circuit as rc
         import validate_and_filter as vf
 
+        rc._REDIS_FAILURE_THRESHOLD = 2
         vf._REDIS_FAILURE_THRESHOLD = 2
         _record_redis_failure()
         _record_redis_failure()
         assert is_redis_circuit_open() is True
 
     def test_circuit_resets_after_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import gates.redis_circuit as rc
         import validate_and_filter as vf
 
-        vf._redis_circuit_open = True
-        vf._redis_last_failure_ts = time.monotonic() - 61
-        vf._REDIS_FAILURE_WINDOW_SECONDS = 60
+        now = time.monotonic()
+        for mod in (vf, rc):
+            mod._redis_circuit_open = True
+            mod._redis_last_failure_ts = now - 61
+            mod._REDIS_FAILURE_WINDOW_SECONDS = 60
         assert is_redis_circuit_open() is False
 
     def test_get_watch_cycles_returns_zero_when_open(self) -> None:
-        import validate_and_filter as vf
-
-        vf._redis_circuit_open = True
-        assert _get_watch_cycles("AAPL", "15m") == 0
+        with patch("validate_and_filter._check_redis_circuit", return_value=True):
+            assert _get_watch_cycles("AAPL", "15m") == 0
 
     def test_reset_watch_cycles_noop_when_open(self) -> None:
-        import validate_and_filter as vf
-
-        vf._redis_circuit_open = True
-        _reset_watch_cycles(["AAPL"], "15m")
+        with patch("validate_and_filter._check_redis_circuit", return_value=True):
+            _reset_watch_cycles(["AAPL"], "15m")
 
 
 class TestCircuitBreakerIntegration:
@@ -603,7 +606,10 @@ class TestWatchCap:
         ]
         a1 = _watch_alert(symbol="AAA")
         a2 = _watch_alert(symbol="BBB")
-        with patch("validate_and_filter._classify_regime", return_value="trending_up"):
+        with (
+            patch("validate_and_filter._classify_regime", return_value="trending_up"),
+            patch("validate_and_filter._watch_max_for_regime", return_value=1),
+        ):
             results, _ = _run([a1, a2], snaps=snaps)
         assert len(results) == 1
 

@@ -213,7 +213,7 @@ default (configurable via `*_BIND` env vars). Langfuse exposed on `0.0.0.0:3000`
 
 - Vault: `VAULT_ADDR=http://vault:8200`, path `secret/trade-alert`
 - Redis: `REDIS_URL=redis://redis:6379`
-- Postgres: `DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/trade_alert`
+- Postgres: `DATABASE_URL` from Vault (`postgresql://USER@postgres:5432/trade_alert`)
 - Langfuse: `LANGFUSE_HOST=http://langfuse:3000`
 - LLM: Claude Sonnet 4.5 via LiteLLM (key from Vault)
 
@@ -401,7 +401,7 @@ consumes validated alert triggers from this repo.
 - Run `pip-audit` against `pyproject.toml` on every `main` push
 - Container hardening: `read_only: true`, `cap_drop: ALL`, `tmpfs: /tmp`
 - No `--privileged` containers; Vault uses `cap_add: IPC_LOCK` only
-- Dashboard requires `DASHBOARD_API_KEY` in prod (`DASHBOARD_REQUIRE_AUTH=true`)
+- Dashboard auth required in production (see SSOT security section)
 
 ---
 

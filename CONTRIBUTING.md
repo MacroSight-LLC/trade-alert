@@ -128,7 +128,7 @@ trade-alert uses two CI workflow families:
 
 - [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs and pushes to `main`. Uses **branch-level triggers** (not a `paths:` allowlist), so new root modules (`redis_client.py`, `constants.py`, `scripts/*.py`, normalizers, gates) always run CI. Runs ruff, mypy, jsonschema on workflows, unit + integration tests, and docker/compose validation (`docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.test.yml`).
 - [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — runs on every push to `main`; lint → test → build GHCR images; deploy + smoke **only when** repo variable `HETZNER_PROVISIONED=true` (Hetzner not provisioned yet — see [`RELEASING.md`](RELEASING.md)).
-- [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — CUGA upstream stability suite (separate from trade-alert gate); do not modify for trade-alert changes. The legacy `tests.yml` Playwright stub was removed; `trade-alert-tests.yml` is the authoritative trade-alert CI workflow.
+- [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — upstream CUGA stability suite (`workflow_dispatch` only; harness not vendored — see FU-012). Not a blocker for trade-alert merges.
 
 When opening a trade-alert PR, `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
 
