@@ -372,9 +372,7 @@ def validate_and_filter_step(
         _rescued = float(_ps.get("rescued", 0))
         telemetry.score("pre_llm_candidates_input", _in, comment=f"{timeframe} pre-LLM candidates")
         telemetry.score("pre_llm_candidates_kept", _kept, comment=f"{timeframe} candidates kept")
-        telemetry.score(
-            "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity"
-        )
+        telemetry.score("pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity")
         telemetry.score(
             "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength"
         )

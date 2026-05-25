@@ -125,8 +125,7 @@ def build_prompt(
     fred = parse_fred_context(fred_results)
     risk_on = macro.get("risk_on", True)
     macro_summary = (
-        f"{'Risk-on' if risk_on else 'Risk-off'}, "
-        f"VIX={fred.vix}, Yield curve={fred.yield_curve_bps}bps"
+        f"{'Risk-on' if risk_on else 'Risk-off'}, VIX={fred.vix}, Yield curve={fred.yield_curve_bps}bps"
     )
 
     perf_ctx = format_winrate_context()

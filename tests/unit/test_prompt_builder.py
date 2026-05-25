@@ -26,22 +26,28 @@ _FRED_LIVE = [{"vix_level": 18.5}, {"spread_bps": 42}]
 
 class TestBuildPromptHappyPath:
     def test_returns_reasoning_prompt_and_workflow_dict(self) -> None:
-        with patch(
-            "prompt_manager.format_golden_examples",
-            return_value="examples",
-        ), patch(
-            "prompt_manager.format_winrate_context",
-            return_value="winrate",
-        ), patch(
-            "prompt_manager.get_quality_escalation_rules",
-            return_value="",
-        ), patch(
-            "prompt_manager.get_prompt_version",
-            return_value="v1.2.3",
-        ), patch(
-            "prompt_manager.get_decision_prompts",
-            return_value=("System text", "User text"),
-        ) as mock_get:
+        with (
+            patch(
+                "prompt_manager.format_golden_examples",
+                return_value="examples",
+            ),
+            patch(
+                "prompt_manager.format_winrate_context",
+                return_value="winrate",
+            ),
+            patch(
+                "prompt_manager.get_quality_escalation_rules",
+                return_value="",
+            ),
+            patch(
+                "prompt_manager.get_prompt_version",
+                return_value="v1.2.3",
+            ),
+            patch(
+                "prompt_manager.get_decision_prompts",
+                return_value=("System text", "User text"),
+            ) as mock_get,
+        ):
             result = build_prompt("15m", _MERGE_RESULT, _FRED_LIVE)
 
         assert result.system == "System text"
@@ -97,10 +103,7 @@ class TestMarketReferenceContext:
         assert "- AAPL: $150.00" in result
 
     def test_limit_caps_symbols(self) -> None:
-        snaps = [
-            {"symbol": f"S{i}", "signals": [{"raw": {"price": float(i + 1)}}]}
-            for i in range(25)
-        ]
+        snaps = [{"symbol": f"S{i}", "signals": [{"raw": {"price": float(i + 1)}}]} for i in range(25)]
         lines = market_reference_context(json.dumps(snaps), limit=20)
         assert lines.count("- ") == 20
 
@@ -142,21 +145,27 @@ class TestDecisionHelpersShim:
         }
         fred = [{"vix_level": 20.0}, {"spread_bps": 5}]
 
-        with patch(
-            "prompt_manager.format_golden_examples",
-            return_value="",
-        ), patch(
-            "prompt_manager.format_winrate_context",
-            return_value="",
-        ), patch(
-            "prompt_manager.get_quality_escalation_rules",
-            return_value="",
-        ), patch(
-            "prompt_manager.get_prompt_version",
-            return_value="v-shim",
-        ), patch(
-            "prompt_manager.get_decision_prompts",
-            return_value=("S", "U"),
+        with (
+            patch(
+                "prompt_manager.format_golden_examples",
+                return_value="",
+            ),
+            patch(
+                "prompt_manager.format_winrate_context",
+                return_value="",
+            ),
+            patch(
+                "prompt_manager.get_quality_escalation_rules",
+                return_value="",
+            ),
+            patch(
+                "prompt_manager.get_prompt_version",
+                return_value="v-shim",
+            ),
+            patch(
+                "prompt_manager.get_decision_prompts",
+                return_value=("S", "U"),
+            ),
         ):
             shim_result = dh_build_prompt("15m", merge, fred)
             direct = build_prompt("15m", merge, fred).to_workflow_result()

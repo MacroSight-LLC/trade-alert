@@ -139,15 +139,12 @@ def _stage_reconciliation(ctx: CandidateContext) -> None:
                 "sources_agree_override",
                 float(abs(llm_sources_agree - deterministic_sources_agree)),
                 comment=(
-                    f"{ctx.alert.symbol}: llm {llm_sources_agree}, "
-                    f"server {deterministic_sources_agree}"
+                    f"{ctx.alert.symbol}: llm {llm_sources_agree}, server {deterministic_sources_agree}"
                 ),
             )
     ctx.alert.sources_agree = deterministic_sources_agree
 
-    ceiling = (
-        0.50 if ctx.actual_sources == 0 else EP_CEILING.get(min(ctx.actual_sources, 11), 0.99)
-    )
+    ceiling = 0.50 if ctx.actual_sources == 0 else EP_CEILING.get(min(ctx.actual_sources, 11), 0.99)
     if ctx.alert.edge_probability > ceiling:
         original_ep = ctx.alert.edge_probability
         ctx.alert.edge_probability = ceiling
@@ -249,11 +246,7 @@ def _stage_extended_hours_penalty(ctx: CandidateContext) -> None:
 
 
 def _stage_market_session_closed(ctx: CandidateContext) -> None:
-    if (
-        ctx.directional
-        and ctx.market_session == "closed"
-        and ctx.config.market_hours_gates_enabled
-    ):
+    if ctx.directional and ctx.market_session == "closed" and ctx.config.market_hours_gates_enabled:
         logger.info(
             "Market-session gate: %s %s rejected (session=%s)",
             ctx.alert.symbol,
@@ -401,8 +394,7 @@ def _stage_forecast_contradicts(ctx: CandidateContext) -> None:
     )
     if _fc_contradicts and not _fc_high_conviction:
         logger.info(
-            "Forecast contradiction: %s %s rejected "
-            "(forecast_score=%.2f, threshold=%.2f, sa=%d, ep=%.2f)",
+            "Forecast contradiction: %s %s rejected (forecast_score=%.2f, threshold=%.2f, sa=%d, ep=%.2f)",
             ctx.alert.symbol,
             ctx.alert.direction,
             _fc_score,
