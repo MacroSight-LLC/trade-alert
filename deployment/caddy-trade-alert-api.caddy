@@ -1,10 +1,13 @@
-# Caddy snippet — expose trade-alert dashboard API for static UI at www.macrosight.net/trade-alert/
-# Install on Hetzner VPS; DNS A record: trade-alert-api.macrosight.net → VPS IP
+# Caddy — TLS for trade-alert dashboard API (static UI at www.macrosight.net/trade-alert/)
 #
-# Requires on dashboard container:
+# DNS (Netlify): trade-alert-api.macrosight.net A → Hetzner VPS public IP
+# Compose: caddy service uses network_mode: host → reverse_proxy 127.0.0.1:8080
+#
+# Dashboard env:
+#   DASHBOARD_BIND=127.0.0.1
 #   DASHBOARD_CORS_ORIGINS=https://www.macrosight.net
-#   DASHBOARD_API_KEY=...
 #   DASHBOARD_REQUIRE_AUTH=true
+#   DASHBOARD_API_KEY=...  (also seed via scripts/vault-init.sh)
 
 trade-alert-api.macrosight.net {
 	reverse_proxy 127.0.0.1:8080

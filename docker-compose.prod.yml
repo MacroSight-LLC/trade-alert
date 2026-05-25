@@ -848,6 +848,24 @@ services:
           memory: 512M
           cpus: "0.5"
 
+  # --- Caddy TLS reverse proxy (trade-alert-api.macrosight.net → dashboard) ---
+  # Uses host networking so Let's Encrypt HTTP-01 can bind :80/:443 on the VPS.
+  # DNS: trade-alert-api.macrosight.net A → VPS public IP (Netlify DNS).
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: trade-alert-caddy
+    network_mode: host
+    volumes:
+      - ./deployment/caddy-trade-alert-api.caddy:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
   # --- Postgres Backup (daily pg_dump) ---
 
   pg-backup:
@@ -938,6 +956,8 @@ volumes:
   timesfm-hf-cache:
   prometheus-data:
   grafana-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   trade-net:

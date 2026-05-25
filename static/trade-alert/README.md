@@ -22,7 +22,8 @@ The page calls JSON APIs on the trade-alert **dashboard** service (`dashboard_ap
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/api/summary` | KPI header |
+| `GET /api/auth/test` | Yes | Validate API key |
+| `GET /api/summary` | Yes | KPI: alerts today, win rate |
 | `/api/kpis` | Gate rejection rate, poll interval |
 | `/api/health` | Redis / system status |
 | `/api/alerts` | Recent alerts table |

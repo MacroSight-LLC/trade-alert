@@ -67,6 +67,16 @@ curl -s -X OPTIONS \
 
 Open **https://www.macrosight.net/trade-alert/** — enter the API key when prompted.
 
+## Netlify site (macrosight.net marketing repo)
+
+If the UI lives in **`public/trade-alert/index.html`** on Netlify (not the trade-alert repo
+`static/trade-alert/` copy), see **[DASHBOARD_NETLIFY_WIRING.md](./DASHBOARD_NETLIFY_WIRING.md)** for:
+
+- `netlify.toml` CSP `connect-src` for `trade-alert-api.macrosight.net`
+- DNS + Hetzner + CORS checklist
+- `/api/*` contract for custom KPI cards and alerts table
+- Online/offline probe via `GET /health` vs authenticated `GET /api/auth/test`
+
 ## 5. Same-origin alternative
 
 If you prefer one hostname, proxy both paths on the VPS:
