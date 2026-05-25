@@ -52,7 +52,7 @@ class TestFormatEmbedStructure:
 
     def test_description_within_discord_limit(self, sample_alert: PlaybookAlert) -> None:
         with (
-            patch("discord_formatter._truncate_field", return_value="x" * 5000),
+            patch("formatter.embed._truncate_field", return_value="x" * 5000),
             patch.object(logging.Logger, "warning") as mock_warn,
         ):
             result = format_embed(sample_alert)
@@ -365,7 +365,7 @@ class TestEmbedHistoricalStats:
     """format_embed includes a Track Record field."""
 
     @patch(
-        "discord_formatter.get_similar_alert_stats",
+        "formatter.embed.get_similar_alert_stats",
         return_value="\U0001f4ca Similar past alerts: 70% win rate (N=10)",
     )
     def test_track_record_field_added(self, _mock_stats: MagicMock) -> None:
@@ -387,7 +387,7 @@ class TestEmbedHistoricalStats:
         field_names = [f["name"] for f in result["embeds"][0]["fields"]]
         assert any("Track Record" in n for n in field_names)
 
-    @patch("discord_formatter.get_similar_alert_stats", return_value="")
+    @patch("formatter.embed.get_similar_alert_stats", return_value="")
     def test_no_track_record_when_empty(self, _mock_stats: MagicMock) -> None:
         alert = PlaybookAlert(
             symbol="NVDA",

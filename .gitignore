@@ -21,6 +21,7 @@ docs/examples/demo_apps/email_mcp/mail_sink/build
 docs/examples/demo_apps/email_mcp/mcp_server/build
 backup_*
 test_results.json
+stability_results.json
 vendor
 logs/
 .milvus*

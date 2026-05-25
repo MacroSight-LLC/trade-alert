@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
+from gates.entry_order import EntryOrder
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -167,14 +168,13 @@ class PlaybookAlert(BaseModel):
                 raise ValueError(f"entry[{key!r}] must be a finite number, got {val!r}")
         if self.direction == "WATCH":
             return self
-        level = float(self.entry["level"])
-        stop = float(self.entry["stop"])
-        target = float(self.entry["target"])
-        if self.direction == "LONG" and not (stop < level < target):
-            raise ValueError(
-                f"LONG entry requires stop < level < target, got stop={stop}, level={level}, target={target}"
-            )
-        if self.direction == "SHORT" and not (target < level < stop):
+        order = EntryOrder.from_dict(self.entry)
+        if not order.has_valid_ordering(self.direction):
+            level, stop, target = order.level, order.stop, order.target
+            if self.direction == "LONG":
+                raise ValueError(
+                    f"LONG entry requires stop < level < target, got stop={stop}, level={level}, target={target}"
+                )
             raise ValueError(
                 f"SHORT entry requires target < level < stop, got stop={stop}, level={level}, target={target}"
             )

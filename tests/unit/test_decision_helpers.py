@@ -1,4 +1,4 @@
-"""Unit tests for decision_helpers.py — merge_snapshots and build_prompt."""
+"""Unit tests for decision_helpers.py — merge_snapshots."""
 
 from __future__ import annotations
 

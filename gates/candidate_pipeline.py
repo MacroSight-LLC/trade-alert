@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING
 
 import gate_config
 from gates.dedup import _try_dedup_set
+from gates.entry_order import EntryOrder
 from gates.reconciliation import _aligned_family_count
 from gates.regime import EP_CEILING
 from gates.rr_volume import _rr
+from gates.entry_order import EntryOrder
 from gates.types import GateRejection
 from models import PlaybookAlert
 from telemetry.context import TelemetryContext
@@ -162,38 +164,32 @@ def _stage_entry_order(ctx: CandidateContext) -> None:
     if not ctx.directional:
         return
 
-    for _pk in ("stop", "level", "target"):
-        if ctx.alert.entry[_pk] <= 0:
-            logger.warning(
-                "Invalid price: %s %s %s=%.4f (must be > 0)",
-                ctx.alert.symbol,
-                ctx.alert.direction,
-                _pk,
-                ctx.alert.entry[_pk],
-            )
-            ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
-            return
+    try:
+        order = EntryOrder.from_dict(ctx.alert.entry)
+    except (ValueError, TypeError, KeyError):
+        ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
+        return
 
-    if ctx.alert.direction == "LONG":
-        if not (ctx.alert.entry["stop"] < ctx.alert.entry["level"] < ctx.alert.entry["target"]):
-            logger.warning(
-                "Entry order invalid: %s LONG stop=%.2f level=%.2f target=%.2f",
-                ctx.alert.symbol,
-                ctx.alert.entry["stop"],
-                ctx.alert.entry["level"],
-                ctx.alert.entry["target"],
-            )
-            ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
-    elif ctx.alert.direction == "SHORT":
-        if not (ctx.alert.entry["target"] < ctx.alert.entry["level"] < ctx.alert.entry["stop"]):
-            logger.warning(
-                "Entry order invalid: %s SHORT target=%.2f level=%.2f stop=%.2f",
-                ctx.alert.symbol,
-                ctx.alert.entry["target"],
-                ctx.alert.entry["level"],
-                ctx.alert.entry["stop"],
-            )
-            ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
+    if not order.all_finite_positive():
+        logger.warning(
+            "Invalid price: %s %s entry=%s (must be > 0)",
+            ctx.alert.symbol,
+            ctx.alert.direction,
+            ctx.alert.entry,
+        )
+        ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
+        return
+
+    if not order.is_valid_for_direction(ctx.alert.direction):
+        logger.warning(
+            "Entry order invalid: %s %s stop=%.2f level=%.2f target=%.2f",
+            ctx.alert.symbol,
+            ctx.alert.direction,
+            order.stop,
+            order.level,
+            order.target,
+        )
+        ctx.tracker.add(GateRejection.ENTRY_ORDER_INVALID)
 
 
 def _stage_entry_market_drift(ctx: CandidateContext) -> None:

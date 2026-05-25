@@ -54,23 +54,10 @@ def _resolve_database_url() -> str | None:
 
 DATABASE_URL: str | None = _resolve_database_url()
 
-# SSOT §3: all 12 MCP services with /health endpoints
-# Uses env-var overrides matching pipeline_runner.py pattern
-MCP_SERVICES: list[tuple[str, str]] = [
-    ("tradingview-mcp", os.getenv("TRADINGVIEW_MCP_URL", "http://tradingview-mcp:8001") + "/health"),
-    ("polygon-mcp", os.getenv("POLYGON_MCP_URL", "http://polygon-mcp:8002") + "/health"),
-    ("discord-mcp", os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003") + "/health"),
-    ("finnhub-mcp", os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004") + "/health"),
-    ("rot-mcp", os.getenv("ROT_MCP_URL", "http://rot-mcp:8005") + "/health"),
-    ("edgar-mcp", os.getenv("EDGAR_MCP_URL", "http://edgar-mcp:8006") + "/health"),
-    ("yfinance-mcp", os.getenv("YFINANCE_MCP_URL", "http://yfinance-mcp:8007") + "/health"),
-    ("trading-mcp", os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008") + "/health"),
-    ("fred-mcp", os.getenv("FRED_MCP_URL", "http://fred-mcp:8009") + "/health"),
-    ("spamshield-mcp", os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010") + "/health"),
-    ("alpaca-mcp", os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011") + "/health"),
-    # FU-006: TimesFM MCP health — prod verification pending forecast collector e2e
-    ("timesfm-mcp", os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012") + "/health"),
-]
+# SSOT §3: all 12 MCP services with /health endpoints (shared mcp.registry).
+from mcp.registry import get_health_services
+
+MCP_SERVICES: list[tuple[str, str]] = get_health_services()
 
 
 HEALTH_LOG_PATH: Path = Path(os.getenv("HEALTH_LOG_DIR", "logs")) / "health.jsonl"

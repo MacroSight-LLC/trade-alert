@@ -44,7 +44,7 @@ class TestFetchCandles:
     """Tests for the _fetch_candles helper."""
 
     @patch.dict("os.environ", {"POLYGON_API_KEY": "test-key"})
-    @patch("chart_gen._get_chart_client")
+    @patch("formatter.chart._get_chart_client")
     def test_returns_dataframe(self, mock_client_fn: MagicMock) -> None:
         """Happy-path: returns properly-shaped DataFrame."""
         mock_resp = MagicMock()
@@ -61,7 +61,7 @@ class TestFetchCandles:
         assert df.index.name == "Date"
 
     @patch.dict("os.environ", {"POLYGON_API_KEY": "test-key"})
-    @patch("chart_gen._get_chart_client")
+    @patch("formatter.chart._get_chart_client")
     def test_empty_on_no_results(self, mock_client_fn: MagicMock) -> None:
         """Returns empty DataFrame when Polygon has no data."""
         mock_resp = MagicMock()
@@ -74,7 +74,7 @@ class TestFetchCandles:
         assert df.empty
 
     @patch.dict("os.environ", {"POLYGON_API_KEY": "test-key"})
-    @patch("chart_gen._get_chart_client")
+    @patch("formatter.chart._get_chart_client")
     def test_empty_on_http_error(self, mock_client_fn: MagicMock) -> None:
         """Returns empty DataFrame when the HTTP request fails."""
         import httpx as _httpx
@@ -92,7 +92,7 @@ class TestFetchCandles:
         assert df.empty
 
     @patch.dict("os.environ", {"POLYGON_API_KEY": "test-key"})
-    @patch("chart_gen._get_chart_client")
+    @patch("formatter.chart._get_chart_client")
     def test_unknown_timeframe_uses_default(self, mock_client_fn: MagicMock) -> None:
         """Unknown timeframe falls back to 15m/minute/48."""
         mock_resp = MagicMock()
@@ -111,9 +111,9 @@ class TestFetchCandles:
         df = _fetch_candles("NVDA", "15m")
         assert df.empty
 
-    @patch("chart_gen.time.sleep")
+    @patch("formatter.chart.time.sleep")
     @patch.dict("os.environ", {"POLYGON_API_KEY": "test-key"})
-    @patch("chart_gen._get_chart_client")
+    @patch("formatter.chart._get_chart_client")
     def test_retries_on_429(self, mock_client_fn: MagicMock, mock_sleep: MagicMock) -> None:
         """Retries once on 429 with backoff, then succeeds."""
         resp_429 = MagicMock()
@@ -141,12 +141,12 @@ class TestGenerateChart:
     @pytest.fixture(autouse=True)
     def _mock_quote_sources(self):
         with (
-            patch("chart_gen._fetch_last_trade", return_value=(None, None)),
-            patch("chart_gen._fetch_alpaca_last_close", return_value=(None, None)),
+            patch("formatter.chart._fetch_last_trade", return_value=(None, None)),
+            patch("formatter.chart._fetch_alpaca_last_close", return_value=(None, None)),
         ):
             yield
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_returns_png_bytes(self, mock_fetch: MagicMock) -> None:
         """Happy-path: returns valid PNG bytes."""
         bars = _make_polygon_bars(30)
@@ -171,7 +171,7 @@ class TestGenerateChart:
         assert current_price is not None
         assert current_ts is not None
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_returns_none_on_empty_data(self, mock_fetch: MagicMock) -> None:
         """Returns None when no candle data is available."""
         mock_fetch.return_value = pd.DataFrame()
@@ -184,7 +184,7 @@ class TestGenerateChart:
         assert current_price is None
         assert current_ts is None
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_handles_zero_prices(self, mock_fetch: MagicMock) -> None:
         """Zero entry prices should be skipped gracefully (no crash)."""
         bars = _make_polygon_bars(20)
@@ -200,7 +200,7 @@ class TestGenerateChart:
         assert result is not None
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_handles_missing_entry_keys(self, mock_fetch: MagicMock) -> None:
         """Missing entry dict keys default to 0 (no crash)."""
         bars = _make_polygon_bars(20)
@@ -214,7 +214,7 @@ class TestGenerateChart:
         result, _, _, _ = generate_chart("NVDA", "15m", {})
         assert result is not None
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_returns_none_when_mplfinance_missing(self, mock_fetch: MagicMock) -> None:
         """Returns None if mplfinance cannot be imported."""
         bars = _make_polygon_bars(20)
@@ -241,7 +241,7 @@ class TestGenerateChart:
         assert result is None
         assert atr is None
 
-    @patch("chart_gen._fetch_candles")
+    @patch("formatter.chart._fetch_candles")
     def test_daily_timeframe(self, mock_fetch: MagicMock) -> None:
         """1D timeframe uses day span and renders correctly."""
         bars = _make_polygon_bars(40)

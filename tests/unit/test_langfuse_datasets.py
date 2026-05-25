@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 class TestCaptureDecisionRun:
     """Tests for capture_decision_run."""
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_no_client_returns_early(self, mock_get: MagicMock) -> None:
         """Should silently return when Langfuse is not configured."""
         mock_get.return_value = None
@@ -23,7 +23,7 @@ class TestCaptureDecisionRun:
         # Should not raise
         capture_decision_run("15m", "[]", "", "[]")
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_successful_capture(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         mock_get.return_value = lf
@@ -50,7 +50,7 @@ class TestCaptureDecisionRun:
         assert call_kwargs["expected_output"]["alert_count"] == 1
         lf.flush.assert_called_once()
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_empty_alerts(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         mock_get.return_value = lf
@@ -61,7 +61,7 @@ class TestCaptureDecisionRun:
         call_kwargs = lf.create_dataset_item.call_args[1]
         assert call_kwargs["expected_output"]["alert_count"] == 0
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_malformed_alerts_json(self, mock_get: MagicMock) -> None:
         """Malformed alerts JSON should not crash — gracefully produces empty alerts."""
         lf = MagicMock()
@@ -73,7 +73,7 @@ class TestCaptureDecisionRun:
         call_kwargs = lf.create_dataset_item.call_args[1]
         assert call_kwargs["expected_output"]["alert_count"] == 0
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_alerts_as_list_not_string(self, mock_get: MagicMock) -> None:
         """When alerts_json is already a list, should handle it."""
         lf = MagicMock()
@@ -86,7 +86,7 @@ class TestCaptureDecisionRun:
         call_kwargs = lf.create_dataset_item.call_args[1]
         assert call_kwargs["expected_output"]["alert_count"] == 1
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_langfuse_api_error_is_swallowed(self, mock_get: MagicMock) -> None:
         """API errors should be logged but not raised."""
         lf = MagicMock()
@@ -107,14 +107,14 @@ class TestCaptureDecisionRun:
 class TestPromoteToGolden:
     """Tests for promote_to_golden."""
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_no_client(self, mock_get: MagicMock) -> None:
         mock_get.return_value = None
         from langfuse_datasets import promote_to_golden
 
         promote_to_golden("item-123")  # should not raise
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_successful_promotion(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         source_item = SimpleNamespace(
@@ -132,7 +132,7 @@ class TestPromoteToGolden:
         call_kwargs = lf.create_dataset_item.call_args[1]
         assert call_kwargs["dataset_name"] == "decision-golden"
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_custom_expected_output(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         source_item = SimpleNamespace(
@@ -159,14 +159,14 @@ class TestPromoteToGolden:
 class TestGetGoldenExamples:
     """Tests for get_golden_examples."""
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_no_client_returns_empty(self, mock_get: MagicMock) -> None:
         mock_get.return_value = None
         from langfuse_datasets import get_golden_examples
 
         assert get_golden_examples() == []
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_empty_dataset(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         lf.get_dataset.return_value = SimpleNamespace(items=[])
@@ -176,7 +176,7 @@ class TestGetGoldenExamples:
 
         assert get_golden_examples() == []
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_returns_examples(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         items = [
@@ -194,7 +194,7 @@ class TestGetGoldenExamples:
         assert len(result) == 1
         assert result[0]["input"]["timeframe"] == "15m"
 
-    @patch("langfuse_datasets.get_langfuse_client")
+    @patch("telemetry.datasets.get_langfuse_client")
     def test_dataset_error_returns_empty(self, mock_get: MagicMock) -> None:
         lf = MagicMock()
         lf.get_dataset.side_effect = RuntimeError("not found")

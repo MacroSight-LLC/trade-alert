@@ -72,6 +72,8 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset(
         "healthcheck",
         "trace_analyzer",
         "gate_config",
+        "reasoning",
+        "reasoning.prompt_builder",
     }
 )
 
@@ -85,10 +87,10 @@ _IMPORT_FROM_ALLOWLIST: dict[str, frozenset[str]] = {
     "decision_helpers": frozenset(
         {
             "merge_snapshots",
-            "build_prompt",
             "validate_and_filter_step",
         }
     ),
+    "reasoning.prompt_builder": frozenset({"build_prompt"}),
     "notifier_and_logger": frozenset({"notify", "send_ops_message", "send_ops_embed"}),
     "pipeline_tracing": frozenset(
         {

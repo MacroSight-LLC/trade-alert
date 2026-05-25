@@ -6,7 +6,10 @@ import logging
 import os
 import random
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from reasoning.prompt_builder import ReasoningPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,25 @@ except ImportError:
     pass
 
 
+def _resolve_messages(prompt: str | ReasoningPrompt) -> tuple[str, str]:
+    """Extract system and user messages from a flat prompt or ReasoningPrompt."""
+    from reasoning.prompt_builder import ReasoningPrompt as _ReasoningPrompt
+
+    if isinstance(prompt, _ReasoningPrompt):
+        return prompt.system, prompt.user
+
+    system_msg = ""
+    user_msg = prompt
+    if prompt.startswith("SYSTEM:"):
+        parts = prompt.split("\n\nUSER:\n", 1)
+        if len(parts) == 2:
+            system_msg = parts[0].removeprefix("SYSTEM:").strip()
+            user_msg = parts[1].strip()
+    return system_msg, user_msg
+
+
 def llm_call(
-    prompt: str,
+    prompt: str | ReasoningPrompt,
     model: str,
     *,
     trace_id: str | None = None,
@@ -32,13 +52,7 @@ def llm_call(
 
     fallback_model = os.environ.get("DECISION_FALLBACK_MODEL", "").strip()
 
-    system_msg = ""
-    user_msg = prompt
-    if prompt.startswith("SYSTEM:"):
-        parts = prompt.split("\n\nUSER:\n", 1)
-        if len(parts) == 2:
-            system_msg = parts[0].removeprefix("SYSTEM:").strip()
-            user_msg = parts[1].strip()
+    system_msg, user_msg = _resolve_messages(prompt)
 
     messages: list[dict[str, str]] = []
     if system_msg:

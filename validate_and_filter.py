@@ -32,6 +32,7 @@ from gate_config import (
     GATE_EP,
     GATE_RR,
     GATE_SA,
+    GateConfig,
     classify_regime,
 )
 from telemetry.context import TelemetryContext
@@ -154,37 +155,7 @@ _SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "2
 
 def _build_candidate_gate_config() -> CandidateGateConfig:
     """Build per-candidate config from this module (supports test monkeypatch/reload)."""
-    mod = sys.modules[__name__]
-    return CandidateGateConfig(
-        sa_family_min_score=mod._SA_FAMILY_MIN_SCORE,
-        sa_include_macro_context=mod._SA_INCLUDE_MACRO_CONTEXT,
-        sa_macro_context_score=mod._SA_MACRO_CONTEXT_SCORE,
-        sa_forecast_confirm_bonus_enabled=mod._SA_FORECAST_CONFIRM_BONUS_ENABLED,
-        sa_forecast_bonus_threshold=mod._SA_FORECAST_BONUS_THRESHOLD,
-        high_confidence_min=mod._HIGH_CONFIDENCE_MIN,
-        high_confidence_min_sa=mod._HIGH_CONFIDENCE_MIN_SA,
-        macro_veto_sa=mod._MACRO_VETO_SA,
-        macro_veto_ep=mod._MACRO_VETO_EP,
-        vix_soft_threshold=mod._VIX_SOFT_THRESHOLD,
-        vix_soft_sa=mod._VIX_SOFT_SA,
-        vix_soft_ep=mod._VIX_SOFT_EP,
-        watch_sa_min=mod._WATCH_SA_MIN,
-        watch_conf_min=mod._WATCH_CONF_MIN,
-        watch_ep_delta=mod._WATCH_EP_DELTA,
-        forecast_gate_score_threshold=mod._FORECAST_GATE_SCORE_THRESHOLD,
-        forecast_gate_sa=mod._FORECAST_GATE_SA,
-        forecast_gate_ep=mod._FORECAST_GATE_EP,
-        volume_confirm_score=mod._VOLUME_CONFIRM_SCORE,
-        volume_confirm_penalty=mod._VOLUME_CONFIRM_PENALTY,
-        volume_confirm_penalty_choppy=mod._VOLUME_CONFIRM_PENALTY_CHOPPY,
-        entry_market_drift_max_pct=mod._ENTRY_MARKET_DRIFT_MAX_PCT,
-        entry_market_drift_vix_bump=mod._ENTRY_MARKET_DRIFT_VIX_BUMP,
-        entry_market_drift_prepost_bump=mod._ENTRY_MARKET_DRIFT_PREPOST_BUMP,
-        entry_market_drift_cap_pct=mod._ENTRY_MARKET_DRIFT_CAP_PCT,
-        entry_market_drift_vix_high_threshold=mod._ENTRY_MARKET_DRIFT_VIX_HIGH_THRESHOLD,
-        entry_market_drift_vix_high_bump=mod._ENTRY_MARKET_DRIFT_VIX_HIGH_BUMP,
-        market_hours_gates_enabled=mod._MARKET_HOURS_GATES_ENABLED,
-    )
+    return GateConfig.from_module(sys.modules[__name__]).candidate_config()
 
 
 def validate_and_filter(

@@ -12,7 +12,6 @@ import logging
 import os
 from typing import Any
 
-from reasoning.prompt_builder import build_prompt as _build_reasoning_prompt
 from telemetry.context import TelemetryContext
 
 logger = logging.getLogger(__name__)
@@ -245,25 +244,6 @@ def merge_snapshots(
         "n": len(pruned),
         "prune_stats": stats,
     }
-
-
-def build_prompt(
-    timeframe: str,
-    merge_result: dict[str, Any],
-    fred_results: list[dict[str, Any]],
-) -> dict[str, str]:
-    """Build the ensemble prompt for the decision LLM.
-
-    Args:
-        timeframe: Pipeline timeframe.
-        merge_result: Output from :func:`merge_snapshots`.
-        fred_results: FRED MCP results ``[{vix_level: ...}, {spread_bps: ...}]``.
-
-    Returns:
-        Dict with ``prompt`` and ``prompt_version`` keys.
-    """
-    # TODO(PR-X): remove shim after workflow YAML imports reasoning.build_prompt directly
-    return _build_reasoning_prompt(timeframe, merge_result, fred_results).to_workflow_result()
 
 
 def log_ensemble_decision(

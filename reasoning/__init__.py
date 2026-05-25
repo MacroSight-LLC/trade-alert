@@ -1,5 +1,19 @@
-"""Trade-alert prompt reasoning (domain-specific, pre-gate)."""
+"""Decision reasoning layer — prompt construction from collector outputs."""
 
-from reasoning.prompt_builder import PromptBuilder, ReasoningPrompt, build_prompt
+from reasoning.prompt_builder import (
+    FredContext,
+    PromptContext,
+    ReasoningPrompt,
+    build_prompt,
+    market_reference_context,
+    parse_fred_context,
+)
 
-__all__ = ["PromptBuilder", "ReasoningPrompt", "build_prompt"]
+__all__ = [
+    "FredContext",
+    "PromptContext",
+    "ReasoningPrompt",
+    "build_prompt",
+    "market_reference_context",
+    "parse_fred_context",
+]

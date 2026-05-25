@@ -11,7 +11,24 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+### Added
+- FU-012: `run_stability_tests.py` trade-alert stability harness (gate pass rate,
+  latency percentiles, circuit-breaker trips); restore `.github/workflows/stability-tests.yml`
+  on `workflow_dispatch` and `push: main`.
+
 ### Refactor
+- `llm_client.llm_call` accepts `ReasoningPrompt` directly (no string split required).
+- Add typed `PromptContext` in `reasoning/prompt_builder.py`; workflows import
+  `reasoning.build_prompt` directly (removed `decision_helpers.build_prompt` shim).
+- Move `langfuse_datasets.py` → `telemetry/datasets.py` with root shim.
+- Extract MCP endpoint registry to `mcp/registry.py`; `pipeline_runner.py` and
+  `healthcheck.py` share `get_endpoint()` / `get_health_services()`.
+- Extract Discord/chart formatting to `formatter/` package with
+  `PlaybookFormatter` facade; root `discord_formatter.py` and `chart_gen.py`
+  remain backward-compatible shims.
+- Add unified `GateConfig` dataclass in `gate_config.py` and `EntryOrder` in
+  `gates/entry_order.py`; `validate_and_filter._build_candidate_gate_config`
+  delegates to `GateConfig.from_module()`.
 - Extract decision prompt construction to `reasoning/prompt_builder.py` with
   `ReasoningPrompt`, `FredContext`, and `parse_fred_context`; `decision_helpers.build_prompt`
   remains a thin shim for workflow YAML compatibility.
@@ -28,7 +45,7 @@ phase ordering in the SSOT phase table.
 
 ### Fixed
 - CI: detect-secrets false positives in `.cursor/rules/trade-alert.mdc`; flaky Redis circuit-breaker and WATCH-cap unit tests.
-- CI: removed upstream `stability-tests.yml` (harness missing, FU-012); secrets check uses hash-only verifier (no line-drift failures).
+- CI: stability harness restored (FU-012 `run_stability_tests.py` + `stability-tests.yml`).
 - CI: `trade-alert-tests` PR-only; `deploy.yml` owns `main` push (no duplicate full suite).
 - CI: bump `actions/checkout@v5` and `astral-sh/setup-uv@v7` in trade-alert and deploy workflows.
 - CI: lowercase GHCR image paths for `MacroSight-LLC/trade-alert` org casing.

@@ -42,29 +42,14 @@ from resilience.circuit_breaker import CircuitBreakerRegistry
 from workflow_sandbox import exec_code_step as _exec_code_step
 from workflow_template import render_params as _render_params
 from workflow_template import render_template as _render_template
+from mcp.registry import get_endpoint, get_registry, register_workflow_overrides
 from workflow_template import safe_eval as _safe_eval  # noqa: F401 — re-export for tests
 
 configure_logging()
 logger = logging.getLogger("pipeline_runner")
 
-# MCP server endpoint mapping — matches docker-compose.prod.yml
-MCP_ENDPOINTS: dict[str, str] = {
-    "tradingview-mcp": os.getenv("TRADINGVIEW_MCP_URL", "http://tradingview-mcp:8001"),
-    "polygon-mcp": os.getenv("POLYGON_MCP_URL", "http://polygon-mcp:8002"),
-    "discord-mcp": os.getenv("DISCORD_MCP_URL", "http://discord-mcp:8003"),
-    "finnhub-mcp": os.getenv("FINNHUB_MCP_URL", "http://finnhub-mcp:8004"),
-    "rot-mcp": os.getenv("ROT_MCP_URL", "http://rot-mcp:8005"),
-    "edgar-mcp": os.getenv("EDGAR_MCP_URL", "http://edgar-mcp:8006"),
-    "yfinance-mcp": os.getenv("YFINANCE_MCP_URL", "http://yfinance-mcp:8007"),
-    "trading-mcp": os.getenv("TRADING_MCP_URL", "http://trading-mcp:8008"),
-    "fred-mcp": os.getenv("FRED_MCP_URL", "http://fred-mcp:8009"),
-    "spamshield-mcp": os.getenv("SPAMSHIELD_MCP_URL", "http://spamshield-mcp:8010"),
-    "alpaca-mcp": os.getenv("ALPACA_MCP_URL", "http://alpaca-mcp:8011"),
-    "timesfm-mcp": os.getenv("TIMESFM_MCP_URL", "http://timesfm-mcp:8012"),
-}
-
-# Also accept workflow-level mcp_servers overrides
-_workflow_mcp_endpoints: dict[str, str] = {}
+# Backward-compatible re-export (same dict as mcp.registry singleton).
+MCP_ENDPOINTS: dict[str, str] = get_registry().endpoints
 
 MCP_TIMEOUT = float(os.environ.get("MCP_TIMEOUT", "150"))
 if MCP_TIMEOUT <= 0:
@@ -104,7 +89,7 @@ async def _mcp_call_async(
         )
         return {"error": f"Circuit open for {tool}", "circuit_open": True}
 
-    base = _workflow_mcp_endpoints.get(tool) or MCP_ENDPOINTS.get(tool)
+    base = get_endpoint(tool)
     if not base:
         logger.error("Unknown MCP tool: %s", tool)
         return {"error": f"Unknown MCP: {tool}"}
@@ -287,11 +272,7 @@ def run_workflow(
     # Register workflow-level MCP endpoint overrides.
     # Environment variables (e.g. TRADINGVIEW_MCP_URL) take precedence over
     # YAML-hardcoded Docker hostnames so the pipeline works from the host.
-    for srv in wf.get("mcp_servers", []):
-        srv_name = srv["name"]
-        if "endpoint" in srv:
-            env_key = srv_name.upper().replace("-", "_") + "_URL"
-            _workflow_mcp_endpoints[srv_name] = os.getenv(env_key, srv["endpoint"])
+    register_workflow_overrides(wf.get("mcp_servers", []))
 
     wf_steps: list[dict[str, Any]] = wf.get("steps", [])
     step_results: dict[str, Any] = {}

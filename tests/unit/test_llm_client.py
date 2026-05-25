@@ -110,3 +110,34 @@ class TestLlmCall:
         resp.choices[0].message.content = None
         mock_completion.return_value = resp
         assert llm_client.llm_call("prompt", "claude-sonnet-4-5") == ""
+
+    @patch("llm_client.time.sleep")
+    @patch("litellm.completion")
+    def test_reasoning_prompt_uses_system_user_directly(
+        self, mock_completion: MagicMock, _mock_sleep: MagicMock
+    ) -> None:
+        from reasoning.prompt_builder import PromptContext, ReasoningPrompt
+
+        mock_completion.return_value = _mock_completion_response("ok")
+        context = PromptContext(
+            macro_summary="m",
+            vix="18",
+            yc="42",
+            n=0,
+            snapshots_json="[]",
+            market_reference_context="",
+            data_freshness="LIVE",
+            performance_context="",
+            few_shot_examples="",
+        )
+        prompt = ReasoningPrompt(
+            system="System role",
+            user="User task",
+            prompt_version="v1",
+            timeframe="15m",
+            context=context,
+        )
+        llm_client.llm_call(prompt, "claude-sonnet-4-5")
+        messages = mock_completion.call_args.kwargs["messages"]
+        assert messages[0]["content"] == "System role"
+        assert messages[1]["content"] == "User task"

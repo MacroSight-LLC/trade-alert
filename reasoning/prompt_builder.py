@@ -9,11 +9,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Expected ``mcp_context`` keys passed to ``get_decision_prompts`` (future PromptContext):
-#   macro_summary (str), vix (str), yc (str), n (int), snapshots_json (str),
-#   market_reference_context (str), data_freshness (str), performance_context (str),
-#   few_shot_examples (str)
-
 
 @dataclass(frozen=True)
 class FredContext:
@@ -25,6 +20,34 @@ class FredContext:
 
 
 @dataclass(frozen=True)
+class PromptContext:
+    """Typed template variables for decision prompt rendering."""
+
+    macro_summary: str
+    vix: str
+    yc: str
+    n: int
+    snapshots_json: str
+    market_reference_context: str
+    data_freshness: str
+    performance_context: str
+    few_shot_examples: str
+
+    def as_template_vars(self) -> dict[str, Any]:
+        return {
+            "macro_summary": self.macro_summary,
+            "vix": self.vix,
+            "yc": self.yc,
+            "n": self.n,
+            "snapshots_json": self.snapshots_json,
+            "market_reference_context": self.market_reference_context,
+            "data_freshness": self.data_freshness,
+            "performance_context": self.performance_context,
+            "few_shot_examples": self.few_shot_examples,
+        }
+
+
+@dataclass(frozen=True)
 class ReasoningPrompt:
     """Fully-rendered decision prompt components (immutable record)."""
 
@@ -32,13 +55,21 @@ class ReasoningPrompt:
     user: str
     prompt_version: str
     timeframe: str
-    mcp_context: dict[str, Any]
+    context: PromptContext
 
     def to_llm_prompt(self) -> str:
         return f"SYSTEM:\n{self.system}\n\nUSER:\n{self.user}"
 
     def to_workflow_result(self) -> dict[str, str]:
         return {"prompt": self.to_llm_prompt(), "prompt_version": self.prompt_version}
+
+
+def _fred_field(data: dict[str, Any], *keys: str) -> Any:
+    """Return first present FRED field value, or ``N/A`` if none set."""
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return "N/A"
 
 
 def market_reference_context(snaps_json: str, limit: int = 20) -> str:
@@ -83,8 +114,8 @@ def parse_fred_context(fred_results: list[dict[str, Any]]) -> FredContext:
     """Parse VIX and yield-curve from FRED MCP parallel_tool_calls results."""
     fred_vix = fred_results[0] if len(fred_results) > 0 else {}
     fred_yc = fred_results[1] if len(fred_results) > 1 else {}
-    vix = fred_vix.get("vix_level") or fred_vix.get("value", "N/A")
-    yc = fred_yc.get("spread_bps") or fred_yc.get("value", "N/A")
+    vix = _fred_field(fred_vix, "vix_level", "value")
+    yc = _fred_field(fred_yc, "spread_bps", "value")
 
     try:
         if vix != "N/A" and float(vix) == 0.0:
@@ -133,36 +164,24 @@ def build_prompt(
     if escalation:
         perf_ctx = perf_ctx + "\n" + escalation if perf_ctx else escalation
 
-    mcp_context: dict[str, Any] = {
-        "macro_summary": macro_summary,
-        "vix": fred.vix,
-        "yc": fred.yield_curve_bps,
-        "n": n,
-        "snapshots_json": snapshots_json,
-        "market_reference_context": market_reference_context(snapshots_json),
-        "data_freshness": fred.data_freshness,
-        "performance_context": perf_ctx,
-        "few_shot_examples": format_golden_examples(),
-    }
+    context = PromptContext(
+        macro_summary=macro_summary,
+        vix=fred.vix,
+        yc=fred.yield_curve_bps,
+        n=n,
+        snapshots_json=snapshots_json,
+        market_reference_context=market_reference_context(snapshots_json),
+        data_freshness=fred.data_freshness,
+        performance_context=perf_ctx,
+        few_shot_examples=format_golden_examples(),
+    )
 
-    system_prompt, user_prompt = get_decision_prompts(timeframe, mcp_context)
+    system_prompt, user_prompt = get_decision_prompts(timeframe, context.as_template_vars())
 
     return ReasoningPrompt(
         system=system_prompt,
         user=user_prompt,
         prompt_version=get_prompt_version(),
         timeframe=timeframe,
-        mcp_context=mcp_context,
+        context=context,
     )
-
-
-class PromptBuilder:
-    """Namespace for prompt construction (stateless)."""
-
-    @staticmethod
-    def build(
-        timeframe: str,
-        merge_result: dict[str, Any],
-        fred_results: list[dict[str, Any]],
-    ) -> ReasoningPrompt:
-        return build_prompt(timeframe, merge_result, fred_results)

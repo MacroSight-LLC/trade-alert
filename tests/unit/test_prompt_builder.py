@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from reasoning.prompt_builder import (
+    PromptContext,
     ReasoningPrompt,
     build_prompt,
     market_reference_context,
@@ -54,10 +55,11 @@ class TestBuildPromptHappyPath:
         assert result.user == "User text"
         assert result.prompt_version == "v1.2.3"
         assert result.timeframe == "15m"
-        assert result.mcp_context["vix"] == "18.5"
-        assert result.mcp_context["yc"] == "42"
-        assert result.mcp_context["data_freshness"] == "LIVE"
-        mock_get.assert_called_once()
+        assert isinstance(result.context, PromptContext)
+        assert result.context.vix == "18.5"
+        assert result.context.yc == "42"
+        assert result.context.data_freshness == "LIVE"
+        mock_get.assert_called_once_with("15m", result.context.as_template_vars())
 
         workflow = result.to_workflow_result()
         assert set(workflow.keys()) == {"prompt", "prompt_version"}
@@ -77,13 +79,13 @@ class TestParseFredContext:
         assert ctx.vix == "22.0"
         assert ctx.yield_curve_bps == "N/A"
 
-    def test_zero_vix_marked_stale(self) -> None:
-        ctx = parse_fred_context([{"value": 0.0}, {"spread_bps": 10}])
+    def test_zero_vix_level_marked_stale(self) -> None:
+        ctx = parse_fred_context([{"vix_level": 0.0}, {"spread_bps": 10}])
         assert ctx.vix == "STALE"
         assert ctx.yield_curve_bps == "10"
 
     def test_zero_yield_curve_marked_stale(self) -> None:
-        ctx = parse_fred_context([{"vix_level": 15.0}, {"value": 0.0}])
+        ctx = parse_fred_context([{"vix_level": 15.0}, {"spread_bps": 0.0}])
         assert ctx.vix == "15.0"
         assert ctx.yield_curve_bps == "STALE"
 
@@ -108,14 +110,43 @@ class TestMarketReferenceContext:
         assert lines.count("- ") == 20
 
 
+class TestPromptContext:
+    def test_as_template_vars_keys(self) -> None:
+        ctx = PromptContext(
+            macro_summary="Risk-on",
+            vix="18",
+            yc="42",
+            n=3,
+            snapshots_json="[]",
+            market_reference_context="",
+            data_freshness="LIVE",
+            performance_context="",
+            few_shot_examples="",
+        )
+        vars_ = ctx.as_template_vars()
+        assert vars_["vix"] == "18"
+        assert vars_["n"] == 3
+
+
 class TestReasoningPromptContract:
     def test_to_llm_prompt_llm_client_compatibility(self) -> None:
+        context = PromptContext(
+            macro_summary="m",
+            vix="18",
+            yc="42",
+            n=0,
+            snapshots_json="[]",
+            market_reference_context="",
+            data_freshness="LIVE",
+            performance_context="",
+            few_shot_examples="",
+        )
         prompt = ReasoningPrompt(
             system="SYS",
             user="USR",
             prompt_version="v1",
             timeframe="15m",
-            mcp_context={},
+            context=context,
         )
         result = prompt.to_llm_prompt()
         system_part, user_part = result.split("\n\nUSER:\n", 1)
@@ -123,51 +154,23 @@ class TestReasoningPromptContract:
         assert user_part == "USR"
 
     def test_frozen_immutability(self) -> None:
+        context = PromptContext(
+            macro_summary="m",
+            vix="18",
+            yc="42",
+            n=0,
+            snapshots_json="[]",
+            market_reference_context="",
+            data_freshness="LIVE",
+            performance_context="",
+            few_shot_examples="",
+        )
         prompt = ReasoningPrompt(
             system="S",
             user="U",
             prompt_version="v",
             timeframe="1h",
-            mcp_context={},
+            context=context,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             prompt.system = "changed"  # type: ignore[misc]
-
-
-class TestDecisionHelpersShim:
-    def test_shim_matches_build_prompt_workflow_result(self) -> None:
-        from decision_helpers import build_prompt as dh_build_prompt
-
-        merge = {
-            "macro": {"risk_on": False},
-            "snapshots_json": "[]",
-            "n": 1,
-        }
-        fred = [{"vix_level": 20.0}, {"spread_bps": 5}]
-
-        with (
-            patch(
-                "prompt_manager.format_golden_examples",
-                return_value="",
-            ),
-            patch(
-                "prompt_manager.format_winrate_context",
-                return_value="",
-            ),
-            patch(
-                "prompt_manager.get_quality_escalation_rules",
-                return_value="",
-            ),
-            patch(
-                "prompt_manager.get_prompt_version",
-                return_value="v-shim",
-            ),
-            patch(
-                "prompt_manager.get_decision_prompts",
-                return_value=("S", "U"),
-            ),
-        ):
-            shim_result = dh_build_prompt("15m", merge, fred)
-            direct = build_prompt("15m", merge, fred).to_workflow_result()
-
-        assert shim_result == direct

@@ -1,0 +1,76 @@
+name: Stability Tests
+
+# FU-012: trade-alert stability harness (run_stability_tests.py).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "run_stability_tests.py"
+      - "validate_and_filter.py"
+      - "gates/**"
+      - ".github/workflows/stability-tests.yml"
+
+jobs:
+  stability-tests:
+    name: Stability Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install uv and set the Python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run stability tests
+        id: test-run
+        env:
+          TEST_RESULTS_FILE: test_results_python_${{ matrix.python-version }}.json
+          PYTHONIOENCODING: utf-8
+        run: |
+          if [ ! -f run_stability_tests.py ]; then
+            echo "::warning::run_stability_tests.py not found — skipping (FU-012)."
+            exit 0
+          fi
+          uv run run_stability_tests.py --method local --iterations 20
+
+      - name: Check pass rate
+        if: always() && steps.test-run.outcome == 'success'
+        run: |
+          results_file="test_results_python_${{ matrix.python-version }}.json"
+          if [ ! -f "$results_file" ]; then
+            echo "Test results file not found — harness may have been skipped."
+            exit 0
+          fi
+          python3 << EOF
+          import json
+          import sys
+          with open('$results_file', 'r') as f:
+              data = json.load(f)
+          pass_rate = data.get('pass_rate', 0)
+          if pass_rate < 80:
+              print(f"Pass rate {pass_rate}% below 80% threshold.")
+              sys.exit(1)
+          print(f"Pass rate {pass_rate}% meets 80% threshold.")
+          EOF
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stability-results-python-${{ matrix.python-version }}
+          path: test_results_python_${{ matrix.python-version }}.json
+          retention-days: 7
+          if-no-files-found: warn

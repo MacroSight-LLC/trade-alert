@@ -62,8 +62,8 @@ steps:
       if_true:
           type: code
           code: |
-              from decision_helpers import build_prompt
-              result = build_prompt("1h", steps["merge-snapshots"], steps["fetch-fred-context"])
+              from reasoning.prompt_builder import build_prompt
+              result = build_prompt("1h", steps["merge-snapshots"], steps["fetch-fred-context"]).to_workflow_result()
       if_false:
           type: code
           code: |
