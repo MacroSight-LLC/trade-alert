@@ -1,5 +1,7 @@
 # FU-012: Stability harness restore
 
+GitHub: https://github.com/MacroSight-LLC/trade-alert/issues/14
+
 Track re-enabling CUGA stability tests on `main` after the harness was removed
 during the stabilization sprint.
 

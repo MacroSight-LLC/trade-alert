@@ -1,4 +1,9 @@
-"""Compatibility shim — use ``telemetry.gate_metrics`` for new code."""
+"""Compatibility shim — deprecated; import from ``telemetry.gate_metrics`` instead.
+
+.. deprecated::
+    Use ``from telemetry import log_gate_summary, record_gate_scores`` in new code.
+    This module remains for existing callers until migration completes.
+"""
 
 from telemetry.gate_metrics import (  # noqa: F401
     log_decision_gate_summary,

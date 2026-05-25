@@ -1,4 +1,9 @@
-"""Compatibility shim — use ``telemetry.tracing`` for new code."""
+"""Compatibility shim — deprecated; import from ``telemetry.tracing`` instead.
+
+.. deprecated::
+    Use ``from telemetry import score, span_step, trace`` in new code.
+    This module remains for existing callers until migration completes.
+"""
 
 from telemetry.tracing import (  # noqa: F401
     add_score,
