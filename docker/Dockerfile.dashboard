@@ -15,9 +15,10 @@ RUN pip install --no-cache-dir \
     httpx \
     slowapi \
     structlog \
-    prometheus_client
+    prometheus_client \
+    redis
 
-COPY dashboard_api.py db.py models.py vault_env_loader.py log_config.py dashboard.html ./
+COPY dashboard_api.py db.py models.py vault_env_loader.py log_config.py redis_client.py dashboard.html ./
 
 RUN useradd -r -s /bin/false appuser
 USER appuser
