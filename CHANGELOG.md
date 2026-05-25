@@ -12,6 +12,9 @@ phase ordering in the SSOT phase table.
 ## [Unreleased]
 
 ### Added
+- Static dashboard deploy path for `https://www.macrosight.net/trade-alert/` —
+  `static/trade-alert/index.html` + `scripts/sync_static_dashboard.sh`;
+  configurable API base via meta tag / `?api=` query; see `docs/DASHBOARD_STATIC_HOSTING.md`.
 - FU-012: `run_stability_tests.py` trade-alert stability harness (gate pass rate,
   latency percentiles, circuit-breaker trips); restore `.github/workflows/stability-tests.yml`
   on `workflow_dispatch` and `push: main`.

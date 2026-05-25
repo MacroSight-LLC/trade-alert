@@ -96,6 +96,7 @@ pytest tests/unit/ -q   # 620+ tests
 | `alert_quality.py`       | Per-alert quality scoring (5 sub-scores) with calibration      |
 | `winrate_injector.py`    | Injects historical win-rate calibration into prompts           |
 | `dashboard_api.py`       | FastAPI analytics dashboard + Prometheus `/metrics` endpoint   |
+| `dashboard.html`         | Single-file UI (also deployed to [static/trade-alert/](static/trade-alert/) for www.macrosight.net) |
 | `vault_env_loader.py`    | Auto-loads Vault secrets into `os.environ` on import           |
 | `constants.py`           | Centralized Redis keys, TTLs, market hours/holidays            |
 | `redis_client.py`        | Singleton Redis client with retry + connection pooling         |
