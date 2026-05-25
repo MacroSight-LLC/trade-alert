@@ -1,13 +1,10 @@
 # Supersedes the removed `.github/workflows/tests.yml` (legacy CUGA upstream Playwright stub).
 name: trade-alert tests
 
-# Branch-level triggers (not path allowlists) so new modules/scripts/gates never
-# silently skip CI. Previously, files outside an explicit paths: list did not run
-# this workflow (e.g. redis_client.py, constants.py, scripts/new_tool.py).
+# PR gate: full quality suite. Pushes to main use deploy.yml (lint/test/build/deploy).
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   unit-tests:
@@ -69,10 +66,10 @@ jobs:
       - name: Type-check with mypy (FU-009)
         run: uv run mypy --config-file pyproject.toml
 
-      - name: Verify secrets baseline (IBM detect-secrets)
+      - name: Verify secrets baseline (no new secrets)
         run: |
-          uv pip install pre-commit
-          uv run pre-commit run detect-secrets --all-files
+          uv pip install 'detect-secrets @ git+https://github.com/ibm/detect-secrets.git@master'
+          uv run python scripts/verify_secrets_baseline.py
 
       - name: Run unit tests with coverage
         run: |
@@ -133,7 +130,7 @@ jobs:
     needs: [unit-tests, integration-tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build CUGA image
         run: docker build -f docker/Dockerfile.cuga -t trade-alert:ci .
       - name: Build MCP image

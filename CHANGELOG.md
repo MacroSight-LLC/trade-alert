@@ -13,7 +13,8 @@ phase ordering in the SSOT phase table.
 
 ### Fixed
 - CI: detect-secrets false positives in `.cursor/rules/trade-alert.mdc`; flaky Redis circuit-breaker and WATCH-cap unit tests.
-- CI: upstream `stability-tests.yml` limited to `workflow_dispatch` until FU-012 harness is restored.
+- CI: removed upstream `stability-tests.yml` (harness missing, FU-012); secrets check uses hash-only verifier (no line-drift failures).
+- CI: `trade-alert-tests` PR-only; `deploy.yml` owns `main` push (no duplicate full suite).
 - CI: bump `actions/checkout@v5` and `astral-sh/setup-uv@v7` in trade-alert and deploy workflows.
 - CI: lowercase GHCR image paths for `MacroSight-LLC/trade-alert` org casing.
 ## [1.2.0] - 2026-05-23

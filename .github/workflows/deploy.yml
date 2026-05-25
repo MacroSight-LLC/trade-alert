@@ -32,6 +32,14 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      - name: Type-check with mypy
+        run: uv run mypy --config-file pyproject.toml
+
+      - name: Verify secrets baseline (no new secrets)
+        run: |
+          uv pip install 'detect-secrets @ git+https://github.com/ibm/detect-secrets.git@master'
+          uv run python scripts/verify_secrets_baseline.py
+
   # ── Job 2: Unit tests ────────────────────────────────────────────
   test:
     needs: lint
@@ -104,6 +112,18 @@ jobs:
             echo "IMAGE_TIMESFM=ghcr.io/${repo}/timesfm"
             echo "IMAGE_DASHBOARD=ghcr.io/${repo}/dashboard"
           } >> "$GITHUB_ENV"
+
+      - name: Validate compose configs
+        run: |
+          docker compose config --quiet
+          env $(grep -v '^#' .env.example | grep '=' | sed 's/=.*/=ci-compose-placeholder/' | xargs) \
+            VAULT_TOKEN=ci-compose-placeholder \
+            LANGFUSE_DB_PASSWORD=ci-compose-placeholder \
+            SALT=ci-compose-placeholder \
+            DASHBOARD_API_KEY=ci-compose-placeholder \
+            GRAFANA_ADMIN_PASSWORD=ci-compose-placeholder \
+            docker compose -f docker-compose.prod.yml config --quiet
+          docker compose -f docker-compose.test.yml config --quiet
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

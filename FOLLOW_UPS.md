@@ -27,7 +27,7 @@ commit that closed it.
 
 **Status:** DEFERRED — 2026-05-24
 **Component:** `.github/workflows/stability-tests.yml`
-**Note:** `run_stability_tests.py` not found in repo (upstream CUGA harness missing). Workflow is **`workflow_dispatch` only** (2026-05-25) so it no longer fails on every `main` push. Threshold stays at **88%** until harness is restored and all four matrix jobs report ≥95%.
+**Note:** `run_stability_tests.py` not found in repo (upstream CUGA harness missing). **`.github/workflows/stability-tests.yml` removed** (2026-05-25); restore workflow when harness is vendored. Threshold target stays **88%** until harness is restored and all four matrix jobs report ≥95%.
 **Action:** Restore or vendor `run_stability_tests.py`, re-run workflow_dispatch, then raise threshold if all jobs ≥95%.
 
 ---

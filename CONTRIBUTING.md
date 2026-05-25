@@ -126,11 +126,12 @@ Why this matters:
 
 trade-alert uses two CI workflow families:
 
-- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — gates trade-alert PRs and pushes to `main`. Uses **branch-level triggers** (not a `paths:` allowlist), so new root modules (`redis_client.py`, `constants.py`, `scripts/*.py`, normalizers, gates) always run CI. Runs ruff, mypy, jsonschema on workflows, unit + integration tests, and docker/compose validation (`docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.test.yml`).
-- [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — runs on every push to `main`; lint → test → build GHCR images; deploy + smoke **only when** repo variable `HETZNER_PROVISIONED=true` (Hetzner not provisioned yet — see [`RELEASING.md`](RELEASING.md)).
-- [`.github/workflows/stability-tests.yml`](.github/workflows/stability-tests.yml) — upstream CUGA stability suite (`workflow_dispatch` only; harness not vendored — see FU-012). Not a blocker for trade-alert merges.
+- [`.github/workflows/trade-alert-tests.yml`](.github/workflows/trade-alert-tests.yml) — **PR gate**: ruff, mypy, secrets baseline (new-hash check only), jsonschema on workflows, unit + integration tests, docker/compose validation. Does **not** run on `main` push (see deploy workflow).
+- [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — **`main` push**: lint (ruff, mypy, secrets) → unit tests → build/push GHCR images + compose validation; deploy + smoke **only when** repo variable `HETZNER_PROVISIONED=true` (Hetzner not provisioned yet — see [`RELEASING.md`](RELEASING.md)).
 
-When opening a trade-alert PR, `trade-alert-tests.yml` must be green. The CUGA workflows run independently and are not a blocker for trade-alert merges.
+Upstream CUGA stability tests (`run_stability_tests.py`) were removed from CI until FU-012 restores the harness. Use local `uv run pytest tests/unit/` before pushing to `main`.
+
+When opening a trade-alert PR, `trade-alert-tests.yml` must be green.
 
 **Branch protection:** `deploy.yml` is independent of the path-filtered PR gate. Direct pushes to `main` skip `trade-alert-tests.yml`. Require PR checks (at minimum `trade-alert-tests.yml`) via branch protection before merging to `main`.
 
