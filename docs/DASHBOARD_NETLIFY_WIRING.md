@@ -82,7 +82,24 @@ DASHBOARD_BIND=127.0.0.1
 
 Restart dashboard after setting vars.
 
-### 4. Netlify CSP (`netlify.toml` on website repo)
+### 4. Netlify CSP + server-side proxy (`my-site-3` repo)
+
+The live UI at `/trade-alert/` uses **Netlify Functions** so visitors never enter an API key:
+
+```
+Browser → /trade-alert/api/summary → Netlify Function → Hetzner API (+ X-API-Key)
+```
+
+Set in **Netlify → Site → Environment variables**:
+
+| Variable | Value |
+|----------|--------|
+| `DASHBOARD_API_KEY` | Same as Hetzner `~/trade-alert/.env` |
+| `TRADE_ALERT_API_BASE` | `https://trade-alert-api.macrosight.net` (optional) |
+
+CSP `connect-src` is `'self'` only (no direct browser calls to Hetzner). See `docs/TRADE_ALERT_DASHBOARD.md` in the website repo.
+
+### 5. Netlify CSP (`netlify.toml` on website repo) — legacy direct-browser mode
 
 Allow the browser to `fetch()` the API from your static page:
 
