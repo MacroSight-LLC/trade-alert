@@ -69,8 +69,10 @@ docs/examples/demo_apps/email_mcp/mcp_mail
 vendor/
 cuga.egg-info
 
-# IDE and editor files
-.cursor/
+# IDE and editor files (track shared Cursor rules; ignore local IDE state)
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 
 # Local TLS certs for HTTPS (e.g. IBM Verify)
 deployment/certs/*.key

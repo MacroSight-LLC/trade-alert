@@ -1,0 +1,478 @@
+---
+description: trade-alert SSOT, architecture, coding standards, and Cursor behavior
+alwaysApply: true
+---
+
+# trade-alert — Cursor Project Rules
+# MacroSight-LLC/trade-alert
+# Last updated: 2026-05-25
+# ─────────────────────────────────────────────────────────────────────────────
+
+## 0. Identity & SSOT
+
+This is the **trade-alert** project: a production trading alert engine built on
+top of the `cuga-agent` framework, deployed on Hetzner via Docker Compose, and
+operated by MacroSight LLC.
+
+**Single Source of Truth (SSOT):**
+`CUGA-Trading-Alert-System-SPEC-v1.3.md` (aliased as `SSOT.md`) is the
+authoritative architecture, schema, and implementation reference.
+
+Before generating or editing ANY code, read the relevant section of the SSOT.
+Do not deviate from its architecture, filenames, schemas, or conventions under
+any circumstances.
+
+---
+
+## 1. Absolute Rules (Never Violate)
+
+1. **No secrets in code, YAML, or config files.** All secrets live in HashiCorp
+   Vault at path `secret/trade-alert`. They are seeded from `.env.secrets`
+   (git-ignored) and loaded at runtime by `vault_env_loader.py`. Never
+   hardcode tokens, API keys, passwords, or connection strings.
+
+2. **Do not modify files under `src/cuga/`.** Treat that directory as a
+   read-only upstream library. All trade-alert extensions live outside it.
+
+3. **Do not auto-refactor across the whole repo.** Scope every change to the
+   single file or function named in the task. If a broader refactor is needed,
+   propose a plan first and get explicit approval before executing.
+
+4. **Do not add new architectural concepts** not already present in the SSOT.
+   Extend, don't invent.
+
+5. **Never push broken code to `main`.** All changes must pass `ruff`, `mypy`,
+   and the relevant `pytest` tier before commit.
+
+6. **One file at a time.** Generate or edit one file per response, scoped to
+   the referenced SSOT section. Name the target file explicitly at the top of
+   your response.
+
+---
+
+## 2. Repository Structure
+
+```
+trade-alert/
+├── src/cuga/                    ← upstream CUGA library (READ-ONLY)
+├── workflows/                   ← CUGA YAML workflow definitions
+│   ├── orchestrator-15m.yaml
+│   ├── orchestrator-1h.yaml
+│   ├── outcome-tracker.yaml
+│   └── state-summary.yaml
+├── gates/                       ← gate modules (validate_and_filter.py consumes these)
+├── normalizers/                 ← signal normalization modules
+├── resilience/                  ← circuit breaker, retry, backoff logic
+├── schemas/                     ← Pydantic models and JSON schemas
+├── scripts/                     ← ops scripts (purge, seed, validate)
+├── deployment/                  ← Vault config, Prometheus config, deploy scripts
+├── docker/                      ← Dockerfiles (Dockerfile.cuga, Dockerfile.mcp,
+│                                Dockerfile.dashboard, Dockerfile.timesfm)
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── system/
+├── docs/                        ← supplemental docs
+└── .github/workflows/           ← CI/CD GitHub Actions
+```
+
+Core application modules (root level):
+
+```
+├── pipeline_runner.py           ← workflow YAML executor (entry point for cron)
+├── validate_and_filter.py       ← 23-gate alert filter (main quality layer)
+├── decision_helpers.py          ← LLM decision support utilities
+├── merger.py                    ← signal merging across collectors
+├── db.py                        ← Postgres interactions (asyncpg + psycopg2)
+├── models.py                    ← Pydantic data models
+├── notifier.py                  ← Discord notification dispatch
+├── notifier_and_logger.py       ← shim combining notifier + alert_logger
+├── alert_logger.py              ← alert persistence to Postgres
+├── discord_bot.py               ← !scan, !status, !last Discord commands
+├── discord_formatter.py         ← embed/chart formatting for Discord
+├── chart_gen.py                 ← mplfinance candlestick chart generation
+├── outcome_tracker.py           ← trade outcome resolution and scoring
+├── outcome_queries.py           ← Postgres outcome query helpers
+├── winrate_injector.py          ← injects historical win-rate into decision context
+├── langfuse_client.py           ← Langfuse trace/span client
+├── langfuse_datasets.py         ← Langfuse dataset management
+├── pipeline_tracing.py          ← pipeline-level trace decorators
+├── trace_analyzer.py            ← self-healing trace analysis and pipeline health
+├── gate_telemetry.py            ← per-gate Prometheus metrics emission
+├── gate_config.py               ← gate threshold and config loader
+├── prompt_manager.py            ← Langfuse prompt version management
+├── prompt_fetcher.py            ← prompt fetch with caching
+├── prompt_renderer.py           ← Jinja2 prompt rendering with context injection
+├── llm_client.py                ← LLM API client (Claude Sonnet 4.5 via LiteLLM)
+├── llm_response_parser.py       ← structured LLM response parsing
+├── alert_quality.py             ← alert quality scoring
+├── execution_mapper.py          ← maps alert → execution payload
+├── execution_trigger.py         ← trigger logic for trade-execute downstream
+├── execution_webhook.py         ← HTTP webhook to trade-execute service
+├── eod_summary.py               ← end-of-day summary report to Discord
+├── healthcheck.py               ← system health check (DB, Redis, Vault, MCPs)
+├── redis_client.py              ← Redis client with circuit breaker
+├── vault_env_loader.py          ← Vault secret injection at container startup
+├── metrics.py                   ← Prometheus metric registrations
+├── log_config.py                ← structlog JSON logging configuration
+├── constants.py                 ← shared constants (signal types, timeframes, etc.)
+├── workflow_sandbox.py          ← sandbox runner for workflow testing
+├── workflow_template.py         ← workflow YAML template helpers
+├── dashboard_api.py             ← FastAPI dashboard backend
+├── dashboard.html               ← single-page dashboard frontend
+├── schema.sql                   ← Postgres DDL (auto-applied at first container start)
+├── crontab                      ← supercronic schedule (ET timezone)
+├── pyproject.toml               ← Python packaging (uv, setuptools)
+└── ruff.toml                    ← Ruff linter config
+```
+
+---
+
+## 3. Pipeline Architecture
+
+### Full Pipeline Flow
+
+```
+supercronic (crontab)
+→ pipeline_runner.py [workflows/orchestrator-15m.yaml | orchestrator-1h.yaml]
+→ 7 parallel collectors (CUGA YAML tools → MCP servers)
+→ merger.py (deduplication, signal merging)
+→ validate_and_filter.py (23 gates)
+→ decision_helpers.py + llm_client.py (Claude Sonnet 4.5)
+→ alert_logger.py + notifier.py (Postgres + Discord)
+→ chart_gen.py (candlestick chart attachments)
+→ execution_trigger.py → execution_webhook.py (→ trade-execute)
+```
+
+### Parallel Schedules (America/New_York)
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| 15m pipeline | :30,:45 9h + */15 10-15h + :00 16h Mon-Fri | Main signal cycle |
+| 1h pipeline | :00 10-16h Mon-Fri | Hourly regime cycle |
+| Outcome tracker | */15 9-18h Mon-Fri | Position resolution |
+| State summary | 9:15 + 16:10 Mon-Fri | Pre/post market summary |
+| EOD summary | 16:20 Mon-Fri | End-of-day Discord report |
+| Healthcheck | */15 24/7 | System health to health.jsonl |
+| Data retention | Sun 03:00 | Purge old data |
+| Langfuse purge | Sun 02:00 | Purge Langfuse datasets |
+
+### Signal Types (11)
+
+`technical_trend`, `volume_spike`, `sentiment_bull`, `sentiment_bear`,
+`options_flow`, `insider_activity`, `relative_strength`, `macro_risk_off`,
+`catalyst_event`, `short_interest`, `price_forecast`
+
+---
+
+## 4. Infrastructure Stack
+
+### Docker Services (24 containers, docker-compose.prod.yml)
+
+**Infrastructure:**
+- `vault` — HashiCorp Vault 1.15.0 (server mode, file backend, auto-unseal)
+- `redis` — Redis 7 Alpine (appendonly, 512MB limit)
+- `postgres` — pgvector/pgvector:pg16 (1GB limit, pgvector extension)
+- `langfuse-db` — Postgres 16 Alpine (Langfuse backing store)
+- `langfuse` — Langfuse v2 (self-hosted LLM tracing + prompt management)
+
+**Application:**
+- `cuga` — Main app container (`sleep infinity`, `exec docker compose exec`)
+- `cron` — Supercronic scheduler running pipeline_runner.py
+- `discord-bot` — Discord command handler (!scan, !status, !last)
+- `dashboard` — FastAPI + uvicorn dashboard API (port 8080)
+
+**MCP Servers (ports 8001–8012, profile: mcp):**
+
+| Port | Service | Data Source |
+|------|---------|-------------|
+| 8001 | tradingview-mcp | TradingView |
+| 8002 | polygon-mcp | Polygon.io |
+| 8003 | discord-mcp | Discord |
+| 8004 | finnhub-mcp | Finnhub |
+| 8005 | rot-mcp | ROT signals |
+| 8006 | edgar-mcp | SEC EDGAR |
+| 8007 | yfinance-mcp | Yahoo Finance |
+| 8008 | trading-mcp | Trading data |
+| 8009 | fred-mcp | FRED macro |
+| 8010 | spamshield-mcp | Spam filtering |
+| 8011 | alpaca-mcp | Alpaca Markets |
+| 8012 | timesfm-mcp | Google TimesFM (6GB, torch) |
+
+**Observability:**
+- `prometheus` — v2.53.0 (port 9090, 30d retention)
+- `grafana` — v11.1.0 (port 3001)
+- `pg-backup` — Daily pg_dump at 03:00 UTC (7-day retention)
+
+### Networking
+
+All services on `trade-net` bridge network. Ports bound to `127.0.0.1` by
+default (configurable via `*_BIND` env vars). Langfuse exposed on `0.0.0.0:3000`.
+
+### Secrets & Config
+
+- Vault: `VAULT_ADDR=http://vault:8200`, path `secret/trade-alert`
+- Redis: `REDIS_URL=redis://redis:6379`
+- Postgres: `DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/trade_alert`
+- Langfuse: `LANGFUSE_HOST=http://langfuse:3000`
+- LLM: Claude Sonnet 4.5 via LiteLLM (key from Vault)
+
+---
+
+## 5. Code Standards
+
+### Python
+
+- **Python version:** 3.11 (pinned via `.python-version`)
+- **Type hints:** `mypy --strict` on all files listed in `pyproject.toml [tool.mypy]`
+- **Formatting:** `ruff format` (replaces Black)
+- **Linting:** `ruff check` with `ruff.toml` config. No unused imports. No `# noqa` without justification.
+- **Testing:** `pytest` with `pytest-asyncio`. Coverage target: **>90%** on core pipeline modules.
+- **Async:** Use `asyncio`/`asyncpg` for all DB and HTTP I/O. Never block the event loop.
+- **Logging:** Use `structlog` via `log_config.py`. Always include `trace_id`, `symbol`, `timeframe`, `workflow` fields.
+- **Error handling:** Raise typed exceptions. Never silently swallow exceptions in pipeline-critical paths.
+- **Pydantic:** Use `pydantic v2` models for all data structures. Define in `models.py` or `schemas/`.
+
+### Imports
+
+```python
+# Standard library first
+import asyncio
+from typing import Any
+
+# Third-party
+import structlog
+from pydantic import BaseModel
+
+# Internal — use absolute imports from project root
+from db import get_connection
+from models import AlertRecord
+```
+
+### Naming Conventions
+
+- Files: `snake_case.py`
+- Classes: `PascalCase`
+- Functions/variables: `snake_case`
+- Constants: `UPPER_SNAKE_CASE` (defined in `constants.py`)
+- Redis keys: `{type}:{scope}:{timeframe}:{symbol}` (e.g. `dedup:alert:15m:AAPL`)
+- Prometheus metrics: `trade_alert_{subsystem}_{metric}_{unit}` (e.g. `trade_alert_redis_circuit_open`)
+
+### Key Redis Key Patterns
+
+```
+dedup:alert:{timeframe}:{direction}:{symbol}   # Gate dedup (ALERT_DEDUP_TTL_SECONDS)
+dedup:watch:{timeframe}:{symbol}               # WATCH dedup (WATCH_DEDUP_TTL_SECONDS)
+watch:decay:{timeframe}:{symbol}               # WATCH decay score
+snapshot:{timeframe}:{symbol}                  # Latest snapshot queue item
+```
+
+### Prometheus Metrics (registered in metrics.py)
+
+```
+trade_alert_redis_circuit_open           # Gauge: Redis circuit breaker state
+trade_alert_watch_decay_skipped_total    # Counter: WATCH skips from decay
+```
+
+---
+
+## 6. Gate Architecture (validate_and_filter.py)
+
+The filter has **23 gates** applied sequentially. All gate thresholds are:
+- Configurable via env vars
+- Logged per-gate with `gate_telemetry.py`
+- Traced per-pipeline run in Langfuse
+
+**Gate categories:**
+1. Schema/type validation gates
+2. Confidence threshold gates (base anchors: 15m=0.70, 1h=0.75)
+3. Regime-aware dynamic gates (VIX, macro.risk_on, breadth/trend strength)
+4. Deduplication gates (Redis-backed, TTL-controlled)
+5. Alert quality gates (alert_quality.py scoring)
+6. Coverage gates (minimum signal sources required)
+7. Cost/latency budget gates ($0.50 budget, 180s max latency)
+
+**Never modify gate order** without updating the SSOT spec section on validation.
+
+---
+
+## 7. LLM Integration
+
+- **Model:** Claude Sonnet 4.5 (via LiteLLM, configured in `llm_client.py`)
+- **Prompt management:** All prompts versioned in Langfuse. Fetched at runtime
+  via `prompt_fetcher.py`. Never hardcode prompt text in Python.
+- **Prompt version:** Controlled by `PROMPT_VERSION` env var (default: `v1.0`)
+- **Response parsing:** Structured output parsed by `llm_response_parser.py`
+  using Pydantic models. Never parse LLM JSON with raw `json.loads()` without a
+  Pydantic validator.
+- **Cost budget:** $0.50 per pipeline run. Enforced in `validate_and_filter.py`.
+- **Tracing:** All LLM calls must create a Langfuse span via `pipeline_tracing.py`.
+
+---
+
+## 8. Observability Rules
+
+### Logging (structlog)
+
+Every log statement in pipeline-critical code must include:
+
+```python
+log.info("event_name", trace_id=trace_id, symbol=symbol, timeframe=timeframe)
+```
+
+### Tracing (Langfuse)
+
+- Every pipeline run creates a root trace in Langfuse
+- Each gate that rejects an alert must log a `gate_rejection` event
+- LLM calls must be wrapped in a child span with `model`, `prompt_version`, `cost_usd`
+- `trace_analyzer.py` validates trace completeness and posts `pipeline_health` score
+
+### Metrics (Prometheus)
+
+- All counters/gauges registered in `metrics.py`
+- Labels: `timeframe`, `symbol`, `gate_name` where applicable
+- Scraped by Prometheus on `dashboard:8080/metrics`
+
+### Health Checks
+
+`healthcheck.py` validates every 15 minutes:
+- Postgres connectivity
+- Redis connectivity + circuit breaker state
+- Vault seal status
+- MCP server `/health` endpoints (8001–8012)
+- Langfuse API availability
+
+Results written to `/app/logs/health.jsonl`
+
+---
+
+## 9. Workflow YAML Conventions
+
+CUGA YAML workflows in `workflows/` must follow:
+
+```yaml
+name: orchestrator-15m
+description: "15-minute trading alert pipeline"
+steps:
+  - name: collect_signals
+    tool: <mcp_server_name>
+    parallel: true  # for collector steps
+  - name: merge_signals
+    tool: merger
+    depends_on: [collect_signals]
+```
+
+- Use only tools registered in the SSOT §3 MCP table
+- Parallel collector steps must use `parallel: true`
+- Never add sleep/delay steps — use the crontab schedule instead
+- Workflow files are mounted as volumes in prod; changes take effect immediately
+
+---
+
+## 10. Database Conventions
+
+- Schema defined in `schema.sql` (auto-applied at first Postgres start)
+- All DB interactions via `db.py` using `asyncpg` (async) or `psycopg2` (sync scripts)
+- Alert records stored as JSONB in `alerts` table
+- Win-rate history in `outcomes` table
+- Execution payloads tracked via `idempotency_key` column
+- **Never raw string-format SQL.** Use parameterized queries.
+- Schema changes must update `schema.sql` AND add an Alembic migration (once migrations are introduced)
+
+---
+
+## 11. Execution Bridge (→ trade-execute)
+
+The downstream `trade-execute` service (private repo: MacroSight-LLC/trade-execute)
+consumes validated alert triggers from this repo.
+
+- `execution_mapper.py` maps `AlertRecord` → `ExecutionPayload` (schema v1.0)
+- `execution_trigger.py` applies pre-execution gate checks
+- `execution_webhook.py` POSTs to trade-execute over HTTP with `idempotency_key`
+- **Never modify `ExecutionPayload` schema** without coordinating with trade-execute
+
+---
+
+## 12. Security & Compliance
+
+- All secrets from Vault; `VAULT_REQUIRED=true` enforced in prod containers
+- `vault_env_loader.py` must be the only path secrets enter the process env
+- Run `detect-secrets scan` baseline before every commit (`.secrets.baseline` is committed)
+- Run `pip-audit` against `pyproject.toml` on every `main` push
+- Container hardening: `read_only: true`, `cap_drop: ALL`, `tmpfs: /tmp`
+- No `--privileged` containers; Vault uses `cap_add: IPC_LOCK` only
+- Dashboard requires `DASHBOARD_API_KEY` in prod (`DASHBOARD_REQUIRE_AUTH=true`)
+
+---
+
+## 13. Testing
+
+### Test Layout
+
+```
+tests/
+├── unit/          # Pure logic tests; no external I/O; mock all dependencies
+├── integration/   # Tests with live Postgres/Redis (use docker-compose.test.yml)
+└── system/        # Full pipeline smoke tests
+```
+
+### Rules
+
+- Unit tests: `pytest tests/unit` — must pass in <30s with no network
+- Integration tests: require `docker-compose.test.yml` to be running
+- System tests: run against a full stack; capture Langfuse `trace_id` as assertion
+- Parametrize tests over signal types and timeframes where applicable
+- Use `conftest.py` fixtures for Postgres, Redis, and mock LLM responses
+- Minimum coverage on core modules: **pipeline_runner.py**, **validate_and_filter.py**,
+  **db.py**, **outcome_tracker.py**, **notifier.py** → **>90%**
+
+---
+
+## 14. Git & PR Conventions
+
+- **Branch names:** `feat/`, `fix/`, `chore/`, `docs/`, `refactor/` prefixes
+- **Commit format:** Conventional Commits (`feat(gate): add VIX regime gate`)
+- **Never force-push `main`**
+- PRs touching pipeline-critical files (`pipeline_runner.py`, `validate_and_filter.py`,
+  `execution_webhook.py`, `db.py`) require system test confirmation before merge
+- Use the CHANGELOG.md (Keep a Changelog format) for all notable changes
+
+---
+
+## 15. Cursor-Specific Behavior
+
+### When generating code:
+
+1. State the target filename and SSOT section at the top of your response
+2. Include `# SSOT §X.Y` comments on non-obvious design decisions
+3. Emit a checklist at the end: `[ ] ruff [ ] mypy [ ] tests [ ] CHANGELOG`
+
+### When refactoring:
+
+1. Propose the plan with file list and rationale
+2. Wait for approval before executing
+3. Do one file at a time, never bulk-edit the whole repo
+
+### When debugging:
+
+1. Check `logs/health.jsonl` and `logs/cron.log` first
+2. Query Langfuse for `pipeline_health` score
+3. Check Prometheus/Grafana for Redis circuit breaker and gate rejection metrics
+4. Reference `trace_analyzer.py` output before concluding root cause
+
+### When writing new gates:
+
+1. Add the gate to `gates/` as a typed class
+2. Register in `gate_config.py` with env-var-configurable threshold
+3. Add telemetry emission in `gate_telemetry.py`
+4. Add unit test in `tests/unit/test_gates.py`
+5. Update `CUGA-Trading-Alert-System-SPEC-v1.3.md` gate table
+
+### Never:
+
+- Inline prompt text in Python code
+- Use `print()` for logging (use `structlog`)
+- Import from `src/cuga/` internals (use the public API only)
+- Bypass `vault_env_loader.py` to read secrets
+- Add `time.sleep()` in async code
+- Commit without running `pre-commit run --all-files`
