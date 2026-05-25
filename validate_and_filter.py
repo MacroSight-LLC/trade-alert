@@ -34,11 +34,8 @@ from gate_config import (
     GATE_SA,
     classify_regime,
 )
-from gate_telemetry import (
-    log_decision_gate_summary,
-    record_langfuse_gate_scores,
-    record_prometheus_gate_metrics,
-)
+from telemetry.context import TelemetryContext
+from telemetry.gate_metrics import log_gate_summary, record_gate_scores, record_prometheus_gate_metrics
 from gates.candidate import CandidateGateConfig, _evaluate_candidate
 from gates.dedup import _dedup_key, _reset_dedup_keys, _try_dedup_set
 from gates.reconciliation import (
@@ -233,9 +230,15 @@ def validate_and_filter(
         )
         mark_circuit_warned()
 
+    telemetry = (
+        TelemetryContext.with_callback(trace_id, add_score_fn)
+        if add_score_fn is not None
+        else TelemetryContext.for_trace(trace_id)
+    )
+
     raw, _parse_used_repair = parse_llm_alerts(
         llm_response,
-        add_score_fn=add_score_fn,
+        add_score_fn=telemetry.as_score_fn(),
         trace_id=trace_id,
     )
     if raw is None:
@@ -298,8 +301,7 @@ def validate_and_filter(
             sa_gate=sa_gate,
             conf_gate=conf_gate,
             market_session=market_session,
-            add_score_fn=add_score_fn,
-            trace_id=trace_id,
+            telemetry=telemetry,
         )
         if outcome.status == "parse_failed":
             continue
@@ -428,7 +430,7 @@ def validate_and_filter(
     pre_dist = _candidate_distribution(candidates)
     post_dist = _candidate_distribution(alerts)
 
-    log_decision_gate_summary(
+    log_gate_summary(
         timeframe=timeframe,
         raw_count=len(raw),
         candidates_count=len(candidates),
@@ -464,10 +466,9 @@ def validate_and_filter(
         dedup_suppressed_count,
     )
 
-    if add_score_fn and trace_id:
-        record_langfuse_gate_scores(
-            add_score_fn=add_score_fn,
-            trace_id=trace_id,
+    if telemetry.enabled:
+        record_gate_scores(
+            telemetry=telemetry,
             raw_count=len(raw),
             alerts=alerts,
             rejections=rejections,

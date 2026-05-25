@@ -88,6 +88,23 @@ class TestSourceHallucinationStage:
         _stage_source_hallucination(ctx)
         assert not ctx.tracker.reasons
 
+    def test_emits_symbol_hallucination_score_via_telemetry(self) -> None:
+        from telemetry.context import TelemetryContext
+
+        scores: list[tuple[str, float]] = []
+        telemetry = TelemetryContext.for_trace("trace-test")
+
+        def _capture_score(name: str, value: float, *, comment: str = "") -> None:
+            scores.append((name, value))
+
+        telemetry.score = _capture_score  # type: ignore[method-assign]
+
+        alert = _make_alert(symbol="GHOST")
+        ctx = _base_ctx(alert, snap_types={})
+        ctx.telemetry = telemetry
+        _stage_source_hallucination(ctx)
+        assert scores == [("symbol_hallucination", 1.0)]
+
 
 class TestMacroVetoStage:
     def test_vetoes_long_1h_risk_off_high_vix(self) -> None:

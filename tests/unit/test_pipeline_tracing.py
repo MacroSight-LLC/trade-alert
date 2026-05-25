@@ -12,11 +12,11 @@ import pipeline_tracing as pt
 class TestCreatePipelineTrace:
     """Tests for root trace creation."""
 
-    @patch("pipeline_tracing.get_langfuse_client", return_value=None)
+    @patch("telemetry.tracing.get_client", return_value=None)
     def test_returns_none_when_unconfigured(self, _mock: MagicMock) -> None:
         assert pt.create_pipeline_trace("15m") is None
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_creates_trace_with_correct_session_id(self, mock_client: MagicMock) -> None:
         trace_obj = MagicMock()
         trace_obj.id = "trace-abc-123"
@@ -34,7 +34,7 @@ class TestCreatePipelineTrace:
             tags=["timeframe:15m", "pipeline"],
         )
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_1h_session_id(self, mock_client: MagicMock) -> None:
         trace_obj = MagicMock()
         trace_obj.id = "trace-1h-456"
@@ -52,7 +52,7 @@ class TestCreatePipelineTrace:
             tags=["timeframe:1h", "pipeline"],
         )
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_returns_none_on_sdk_error(self, mock_client: MagicMock) -> None:
         lf = MagicMock()
         lf.trace.side_effect = RuntimeError("SDK broken")
@@ -72,13 +72,13 @@ class TestSpanStep:
             ctx["output"] = {"ok": True}
         # Should not raise
 
-    @patch("pipeline_tracing.get_langfuse_client", return_value=None)
+    @patch("telemetry.tracing.get_client", return_value=None)
     def test_noop_when_client_is_none(self, _mock: MagicMock) -> None:
         with pt.span_step("some-trace-id", "test-step") as ctx:
             ctx["output"] = {"ok": True}
         # Should not raise
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_creates_and_ends_span(self, mock_client: MagicMock) -> None:
         span_obj = MagicMock()
         trace_ref = MagicMock()
@@ -102,7 +102,7 @@ class TestSpanStep:
         assert end_kwargs["output"] == {"symbols": 20}
         assert end_kwargs["status_message"] == "done"
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_span_still_ends_on_exception(self, mock_client: MagicMock) -> None:
         span_obj = MagicMock()
         trace_ref = MagicMock()
@@ -130,11 +130,11 @@ class TestEndPipelineTrace:
     def test_noop_when_trace_id_is_none(self) -> None:
         pt.end_pipeline_trace(None)  # Should not raise
 
-    @patch("pipeline_tracing.get_langfuse_client", return_value=None)
+    @patch("telemetry.tracing.get_client", return_value=None)
     def test_noop_when_client_is_none(self, _mock: MagicMock) -> None:
         pt.end_pipeline_trace("trace-123")  # Should not raise
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_updates_and_flushes_trace(self, mock_client: MagicMock) -> None:
         trace_ref = MagicMock()
         lf = MagicMock()
@@ -153,7 +153,7 @@ class TestEndPipelineTrace:
         )
         lf.flush.assert_called_once()
 
-    @patch("pipeline_tracing.get_langfuse_client")
+    @patch("telemetry.tracing.get_client")
     def test_handles_sdk_error_gracefully(self, mock_client: MagicMock) -> None:
         lf = MagicMock()
         lf.trace.side_effect = RuntimeError("flush failed")

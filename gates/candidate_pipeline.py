@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import gate_config
 from gates.dedup import _try_dedup_set
@@ -14,6 +14,7 @@ from gates.regime import EP_CEILING
 from gates.rr_volume import _rr
 from gates.types import GateRejection
 from models import PlaybookAlert
+from telemetry.context import TelemetryContext
 
 if TYPE_CHECKING:
     from gates.candidate import CandidateGateConfig, CandidateOutcome
@@ -63,8 +64,7 @@ class CandidateContext:
     forecast_scores: dict[str, float]
     volume_scores: dict[str, float]
     ref_prices: dict[str, float]
-    add_score_fn: Callable[..., Any] | None = None
-    trace_id: str | None = None
+    telemetry: TelemetryContext = field(default_factory=TelemetryContext.noop)
     tracker: ReasonTracker = field(default_factory=ReasonTracker)
 
     @property
@@ -86,9 +86,8 @@ class StageResult:
 def _stage_source_hallucination(ctx: CandidateContext) -> None:
     if ctx.actual_sources == 0:
         logger.warning("SYMBOL_HALLUCINATION: %s not present in merged snapshots", ctx.alert.symbol)
-        if ctx.add_score_fn and ctx.trace_id:
-            ctx.add_score_fn(
-                ctx.trace_id,
+        if ctx.telemetry.enabled:
+            ctx.telemetry.score(
                 "symbol_hallucination",
                 1.0,
                 comment=f"{ctx.alert.symbol}: not in snapshot data",
@@ -135,9 +134,8 @@ def _stage_reconciliation(ctx: CandidateContext) -> None:
             llm_sources_agree,
             deterministic_sources_agree,
         )
-        if ctx.add_score_fn and ctx.trace_id:
-            ctx.add_score_fn(
-                ctx.trace_id,
+        if ctx.telemetry.enabled:
+            ctx.telemetry.score(
                 "sources_agree_override",
                 float(abs(llm_sources_agree - deterministic_sources_agree)),
                 comment=(

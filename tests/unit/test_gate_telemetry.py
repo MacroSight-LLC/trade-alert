@@ -28,14 +28,14 @@ class TestRecordPrometheusGateMetrics:
             ("MSFT", GateRejection.EP_THRESHOLD),
             ("TSLA", GateRejection.CONF_THRESHOLD),
         ]
-        with patch("gate_telemetry.GATE_REJECTIONS") as mock_rejections:
+        with patch("telemetry.gate_metrics.GATE_REJECTIONS") as mock_rejections:
             ep_labels = MagicMock()
             conf_labels = MagicMock()
             mock_rejections.labels.side_effect = lambda gate: {
                 "ep_threshold": ep_labels,
                 "conf_threshold": conf_labels,
             }[gate]
-            with patch("gate_telemetry.ALERTS_PER_CYCLE") as mock_cycle:
+            with patch("telemetry.gate_metrics.ALERTS_PER_CYCLE") as mock_cycle:
                 observe = MagicMock()
                 mock_cycle.labels.return_value = observe
                 record_prometheus_gate_metrics(
@@ -49,8 +49,8 @@ class TestRecordPrometheusGateMetrics:
         observe.observe.assert_called_once_with(1)
 
     def test_empty_rejections_only_observes_alerts(self) -> None:
-        with patch("gate_telemetry.GATE_REJECTIONS") as mock_rejections:
-            with patch("gate_telemetry.ALERTS_PER_CYCLE") as mock_cycle:
+        with patch("telemetry.gate_metrics.GATE_REJECTIONS") as mock_rejections:
+            with patch("telemetry.gate_metrics.ALERTS_PER_CYCLE") as mock_cycle:
                 observe = MagicMock()
                 mock_cycle.labels.return_value = observe
                 record_prometheus_gate_metrics(timeframe="1h", alerts=[], rejections=[])
@@ -126,7 +126,7 @@ class TestGracefulFailure:
 
     def test_prometheus_inc_failure_propagates_from_caller(self) -> None:
         """Document current behavior: Prometheus errors bubble to validate_and_filter."""
-        with patch("gate_telemetry.GATE_REJECTIONS") as mock_rejections:
+        with patch("telemetry.gate_metrics.GATE_REJECTIONS") as mock_rejections:
             mock_rejections.labels.return_value.inc.side_effect = RuntimeError("registry down")
             with pytest.raises(RuntimeError, match="registry down"):
                 record_prometheus_gate_metrics(

@@ -1,232 +1,25 @@
-"""Pipeline-level Langfuse tracing for all pipeline steps.
+"""Compatibility shim — use ``telemetry.tracing`` for new code."""
 
-Creates a root trace per orchestrator run and wraps collector,
-merger, decision, and notifier steps in named spans so the full pipeline
-is visible in the Langfuse timeline — not just the LLM calls.
+from telemetry.tracing import (  # noqa: F401
+    add_score,
+    create_pipeline_trace,
+    end_pipeline_trace,
+    get_langfuse_client,
+    score,
+    span_step,
+    tag,
+    tag_trace,
+    trace,
+)
 
-Also fixes the session_id linkage: the root trace is tagged with
-``session_id = "orchestrator-{timeframe}"`` so
-:func:`trace_analyzer.fetch_latest_trace` can locate it.
-
-All functions degrade to no-ops when Langfuse is not configured.
-"""
-
-from __future__ import annotations
-
-import hashlib
-import logging
-import time
-from collections.abc import Generator
-from contextlib import contextmanager
-from datetime import UTC, datetime
-from typing import Any
-
-from langfuse_client import get_langfuse_client, register_langfuse_failure
-
-logger = logging.getLogger(__name__)
-
-
-def create_pipeline_trace(
-    timeframe: str,
-    *,
-    metadata: dict[str, Any] | None = None,
-) -> str | None:
-    """Create a root Langfuse trace for one orchestrator run.
-
-    Args:
-        timeframe: Pipeline timeframe (``"15m"`` or ``"1h"``).
-        metadata: Extra metadata dict attached to the trace.
-
-    Returns:
-        The Langfuse trace ID, or ``None`` if Langfuse is unavailable.
-    """
-    lf = get_langfuse_client()
-    if lf is None:
-        return None
-
-    try:
-        trace = lf.trace(
-            name=f"pipeline-{timeframe}",
-            session_id=f"orchestrator-{timeframe}",
-            metadata=metadata or {},
-            tags=[f"timeframe:{timeframe}", "pipeline"],
-        )
-        trace_id: str = trace.id
-        logger.info(
-            "Created pipeline trace %s (session=orchestrator-%s)",
-            trace_id,
-            timeframe,
-        )
-        return trace_id
-    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-        register_langfuse_failure(exc)
-        return None
-
-
-@contextmanager
-def span_step(
-    trace_id: str | None,
-    name: str,
-    *,
-    input_data: Any = None,
-    level: str = "DEFAULT",
-) -> Generator[dict[str, Any], None, None]:
-    """Context manager that wraps a pipeline step in a Langfuse span.
-
-    Usage::
-
-        with span_step(trace_id, "run-collectors") as ctx:
-            # ... do work ...
-            ctx["output"] = {"symbols": 42}
-
-    Args:
-        trace_id: Parent trace ID (from :func:`create_pipeline_trace`).
-            If ``None`` the block executes without tracing.
-        name: Human-readable step name shown in the Langfuse timeline.
-        input_data: Optional input payload recorded on the span.
-        level: Span level — ``"DEFAULT"``, ``"DEBUG"``, ``"WARNING"``,
-            or ``"ERROR"``.
-
-    Yields:
-        A mutable dict where callers can set ``output``, ``level``,
-        and ``status_message`` before the span closes.
-    """
-    ctx: dict[str, Any] = {"output": None, "status_message": "ok", "level": level}
-
-    if trace_id is None:
-        yield ctx
-        return
-
-    lf = get_langfuse_client()
-    if lf is None:
-        yield ctx
-        return
-
-    start = time.monotonic()
-    start_ts = datetime.now(tz=UTC)
-    span = None
-    try:
-        span = lf.trace(id=trace_id).span(
-            name=name,
-            start_time=start_ts,
-            input=input_data,
-            level=level,
-        )
-    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-        register_langfuse_failure(exc)
-        logger.warning("Failed to open span '%s': %s", name, exc)
-
-    try:
-        yield ctx
-    finally:
-        elapsed = time.monotonic() - start
-        if span is not None:
-            try:
-                span.end(
-                    end_time=datetime.now(tz=UTC),
-                    output=ctx.get("output"),
-                    status_message=ctx.get("status_message", "ok"),
-                    level=ctx.get("level", level),
-                    metadata={"duration_s": round(elapsed, 3)},
-                )
-            except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-                register_langfuse_failure(exc)
-                logger.warning("Failed to close span '%s': %s", name, exc)
-
-        # Post per-step latency score for collector spans so Langfuse
-        # dashboards can track individual collector p95 trends.
-        if trace_id is not None and name.startswith("run-collector"):
-            try:
-                collector_name = name.replace("run-collectors-", "").replace("run-collector-", "")
-                add_score(
-                    trace_id,
-                    f"collector_latency_{collector_name}",
-                    round(elapsed, 3),
-                    comment=f"{collector_name} completed in {elapsed:.3f}s",
-                )
-            except (ConnectionError, OSError, RuntimeError):
-                pass
-
-
-def add_score(
-    trace_id: str | None,
-    name: str,
-    value: float,
-    *,
-    comment: str = "",
-) -> None:
-    """Post a numeric score to a Langfuse trace.
-
-    Args:
-        trace_id: The trace to score.
-        name: Score name (e.g. ``"pipeline_health"``, ``"alert_quality"``).
-        value: Numeric value (0.0\u20131.0 typical).
-        comment: Optional description.
-    """
-    if trace_id is None:
-        return
-    lf = get_langfuse_client()
-    if lf is None:
-        return
-    try:
-        # Deterministic ID so re-runs upsert instead of appending duplicates
-        score_id = hashlib.sha256(f"{trace_id}:{name}".encode()).hexdigest()[:32]
-        lf.score(id=score_id, trace_id=trace_id, name=name, value=value, comment=comment)
-    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-        register_langfuse_failure(exc)
-        logger.warning("Failed to post score '%s' to trace %s: %s", name, trace_id, exc)
-
-
-def tag_trace(trace_id: str | None, tags: list[str]) -> None:
-    """Append tags to an existing trace.
-
-    Uses ``lf.trace(id=...)`` directly instead of fetching the trace
-    first, which avoids 404 errors when the trace hasn't been flushed
-    to the Langfuse backend yet.
-
-    Args:
-        trace_id: The trace to tag.
-        tags: List of string tags to add.
-    """
-    if trace_id is None:
-        return
-    lf = get_langfuse_client()
-    if lf is None:
-        return
-    try:
-        lf.trace(id=trace_id, tags=tags)
-    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-        register_langfuse_failure(exc)
-        logger.warning("Failed to tag trace %s: %s", trace_id, exc)
-
-
-def end_pipeline_trace(
-    trace_id: str | None,
-    *,
-    output: Any = None,
-    metadata: dict[str, Any] | None = None,
-) -> None:
-    """Finalise a pipeline trace with output and optional metadata.
-
-    Args:
-        trace_id: The trace ID to update (from :func:`create_pipeline_trace`).
-        output: Final pipeline output (e.g. alert count, health status).
-        metadata: Additional metadata to merge onto the trace.
-    """
-    if trace_id is None:
-        return
-
-    lf = get_langfuse_client()
-    if lf is None:
-        return
-
-    try:
-        lf.trace(id=trace_id).update(
-            output=output,
-            metadata=metadata or {},
-        )
-        lf.flush()
-        logger.info("Finalised pipeline trace %s", trace_id)
-    except (ConnectionError, OSError, ValueError, RuntimeError) as exc:
-        register_langfuse_failure(exc)
-        logger.warning("Failed to finalise pipeline trace: %s", exc)
+__all__ = [
+    "add_score",
+    "create_pipeline_trace",
+    "end_pipeline_trace",
+    "get_langfuse_client",
+    "score",
+    "span_step",
+    "tag",
+    "tag_trace",
+    "trace",
+]

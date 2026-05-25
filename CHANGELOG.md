@@ -12,6 +12,9 @@ phase ordering in the SSOT phase table.
 ## [Unreleased]
 
 ### Refactor
+- Consolidate Langfuse tracing into `telemetry/` package (`client`, `tracing`,
+  `context`, `gate_metrics`); `CandidateContext` uses `TelemetryContext`
+  instead of `add_score_fn` injection; root shims kept for backward compatibility.
 - Extract `RedisCircuitBreaker` dataclass in `gates/redis_circuit.py`; fix
   `last_failure_ts=0` auto-reset bug; remove `sys.modules` state sync from
   `validate_and_filter.py`; direct circuit imports in `gates/watch` and

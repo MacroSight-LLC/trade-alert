@@ -12,6 +12,8 @@ import logging
 import os
 from typing import Any
 
+from telemetry.context import TelemetryContext
+
 logger = logging.getLogger(__name__)
 
 _MERGE_LIMIT_15M: int = int(os.environ.get("MERGE_LIMIT_15M", "30"))
@@ -363,7 +365,7 @@ def build_prompt(
 
 
 def log_ensemble_decision(
-    trace_id: str | None,
+    telemetry: TelemetryContext,
     *,
     timeframe: str,
     snapshots_json: str,
@@ -374,11 +376,9 @@ def log_ensemble_decision(
     market_session: str = "unknown",
 ) -> None:
     """Log LLM decision I/O to Langfuse without exposing raw signal payloads."""
-    if not trace_id:
+    if not telemetry.enabled:
         return
     try:
-        from pipeline_tracing import add_score, tag_trace
-
         snaps = json.loads(snapshots_json) if snapshots_json else []
         type_counts: dict[str, int] = {}
         for snap in snaps:
@@ -387,13 +387,12 @@ def log_ensemble_decision(
                 type_counts[t] = type_counts.get(t, 0) + 1
 
         summary = f"symbols={len(snaps)} types={type_counts}"
-        add_score(trace_id, "decision_input_summary", float(len(snaps)), comment=summary[:500])
+        telemetry.score("decision_input_summary", float(len(snaps)), comment=summary[:500])
 
         raw_out = str(llm_response or "")[:10240]
-        add_score(trace_id, "decision_raw_response_len", float(len(raw_out)), comment=raw_out[:2000])
+        telemetry.score("decision_raw_response_len", float(len(raw_out)), comment=raw_out[:2000])
 
-        tag_trace(
-            trace_id,
+        telemetry.tag(
             [
                 f"timeframe:{timeframe}",
                 f"vix:{vix:.1f}",
@@ -424,10 +423,9 @@ def validate_and_filter_step(
     Returns:
         Dict with ``alerts_json``, ``count``, and optional ``quality``.
     """
-    try:
-        from pipeline_tracing import add_score, tag_trace
-    except ImportError:
-        add_score = tag_trace = None  # type: ignore[assignment]
+    from telemetry.context import TelemetryContext
+
+    telemetry = TelemetryContext.for_trace(trace_id)
 
     # Read VIX for server-side gates
     try:
@@ -453,7 +451,7 @@ def validate_and_filter_step(
         pass
 
     log_ensemble_decision(
-        trace_id,
+        telemetry,
         timeframe=timeframe,
         snapshots_json=merge_result.get("snapshots_json", "[]"),
         llm_response=llm_response,
@@ -463,29 +461,28 @@ def validate_and_filter_step(
         market_session=_session,
     )
 
-    if add_score is not None and trace_id:
+    if telemetry.enabled:
         _ps = merge_result.get("prune_stats") or {}
         _in = float(_ps.get("input", 0))
         _kept = float(_ps.get("kept", 0))
         _d_types = float(_ps.get("dropped_low_types", 0))
         _d_strength = float(_ps.get("dropped_low_strength", 0))
         _rescued = float(_ps.get("rescued", 0))
-        add_score(trace_id, "pre_llm_candidates_input", _in, comment=f"{timeframe} pre-LLM candidates")
-        add_score(trace_id, "pre_llm_candidates_kept", _kept, comment=f"{timeframe} candidates kept")
-        add_score(
-            trace_id, "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity"
+        telemetry.score("pre_llm_candidates_input", _in, comment=f"{timeframe} pre-LLM candidates")
+        telemetry.score("pre_llm_candidates_kept", _kept, comment=f"{timeframe} candidates kept")
+        telemetry.score(
+            "pre_llm_pruned_low_types", _d_types, comment="pruned for low signal-type diversity"
         )
-        add_score(
-            trace_id, "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength"
+        telemetry.score(
+            "pre_llm_pruned_low_strength", _d_strength, comment="pruned for low weighted strength"
         )
-        add_score(
-            trace_id,
+        telemetry.score(
             "pre_llm_prune_rescued",
             _rescued,
             comment="rescued top candidates when prune emptied set",
         )
         if _in > 0:
-            add_score(trace_id, "pre_llm_keep_rate", _kept / _in, comment="pre-LLM candidate keep ratio")
+            telemetry.score("pre_llm_keep_rate", _kept / _in, comment="pre-LLM candidate keep ratio")
 
     alerts, alerts_json = _vf(
         llm_response=llm_response,
@@ -493,7 +490,7 @@ def validate_and_filter_step(
         macro=_macro,
         vix=_vix,
         timeframe=timeframe,
-        add_score_fn=add_score,
+        add_score_fn=telemetry.as_score_fn(),
         trace_id=trace_id,
     )
     result: dict[str, Any] = {"alerts_json": alerts_json, "count": len(alerts)}
@@ -525,7 +522,7 @@ def validate_and_filter_step(
     except Exception as de:
         logger.debug("Dataset capture failed (non-blocking): %s", de)
 
-    if tag_trace is not None and trace_id:
-        tag_trace(trace_id, [f"alerts:{len(alerts)}"])
+    if telemetry.enabled:
+        telemetry.tag([f"alerts:{len(alerts)}"])
 
     return result

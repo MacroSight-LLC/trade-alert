@@ -10,6 +10,7 @@ from typing import Any, Literal
 from gates.candidate_pipeline import DEFAULT_PIPELINE, CandidateContext
 from gates.types import GateRejection
 from models import PlaybookAlert
+from telemetry.context import TelemetryContext
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ def _evaluate_candidate(
     sa_gate: int,
     conf_gate: float,
     market_session: str,
+    telemetry: TelemetryContext | None = None,
     add_score_fn: Callable[..., Any] | None = None,
     trace_id: str | None = None,
 ) -> CandidateOutcome:
@@ -117,7 +119,6 @@ def _evaluate_candidate(
         forecast_scores=forecast_scores,
         volume_scores=volume_scores,
         ref_prices=ref_prices,
-        add_score_fn=add_score_fn,
-        trace_id=trace_id,
+        telemetry=telemetry or TelemetryContext.for_trace(trace_id),
     )
     return DEFAULT_PIPELINE.run(ctx)
