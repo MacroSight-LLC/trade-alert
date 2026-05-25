@@ -11,6 +11,12 @@ phase ordering in the SSOT phase table.
 
 ## [Unreleased]
 
+### Refactor
+- Extract `RedisCircuitBreaker` dataclass in `gates/redis_circuit.py`; fix
+  `last_failure_ts=0` auto-reset bug; remove `sys.modules` state sync from
+  `validate_and_filter.py`; direct circuit imports in `gates/watch` and
+  `gates/dedup`; test fixtures use `get_breaker().reset_for_tests()`.
+
 ### Fixed
 - CI: detect-secrets false positives in `.cursor/rules/trade-alert.mdc`; flaky Redis circuit-breaker and WATCH-cap unit tests.
 - CI: removed upstream `stability-tests.yml` (harness missing, FU-012); secrets check uses hash-only verifier (no line-drift failures).

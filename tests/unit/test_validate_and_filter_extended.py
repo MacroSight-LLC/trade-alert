@@ -403,7 +403,7 @@ class TestWatchDecay:
         mock.pipeline.return_value = pipe
         mock.set.return_value = True
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 a = _watch_alert(symbol="MSFT")
                 snaps = [_snap("MSFT", ["technical_trend", "volume_spike", "sentiment_bull"])]
                 results, _ = _run([a], snaps=snaps)
@@ -474,7 +474,7 @@ class TestAlertDedup:
         pipe.execute.return_value = [0]
         mock.pipeline.return_value = pipe
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 a = _alert()
                 snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull", "options_flow"])]
                 r1, _ = _run([a], snaps=snaps)
@@ -483,7 +483,7 @@ class TestAlertDedup:
         assert len(r2) == 0
 
     def test_fail_open_when_circuit_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        with patch("validate_and_filter._check_redis_circuit", return_value=True):
+        with patch("gates.redis_circuit._check_redis_circuit", return_value=True):
             assert _try_dedup_set("AAPL", "LONG", "15m") is False
 
 
@@ -493,49 +493,43 @@ class TestAlertDedup:
 class TestRedisCircuitBreaker:
     def setup_method(self) -> None:
         import gates.redis_circuit as rc
-        import validate_and_filter as vf
 
-        for mod in (vf, rc):
-            mod._REDIS_FAILURE_COUNT = 0
-            mod._redis_circuit_open = False
-            mod._redis_last_failure_ts = time.monotonic()
+        rc.get_breaker().reset_for_tests()
 
     def test_circuit_opens_after_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("REDIS_FAILURE_THRESHOLD", "2")
         import gates.redis_circuit as rc
-        import validate_and_filter as vf
 
-        rc._REDIS_FAILURE_THRESHOLD = 2
-        vf._REDIS_FAILURE_THRESHOLD = 2
+        rc.get_breaker().failure_threshold = 2
         _record_redis_failure()
         _record_redis_failure()
         assert is_redis_circuit_open() is True
 
     def test_circuit_resets_after_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import gates.redis_circuit as rc
-        import validate_and_filter as vf
 
-        now = time.monotonic()
-        for mod in (vf, rc):
-            mod._redis_circuit_open = True
-            mod._redis_last_failure_ts = now - 61
-            mod._REDIS_FAILURE_WINDOW_SECONDS = 60
+        breaker = rc.get_breaker()
+        breaker.circuit_open = True
+        breaker.last_failure_ts = time.monotonic() - 61
+        breaker.failure_window_seconds = 60
         assert is_redis_circuit_open() is False
 
     def test_get_watch_cycles_returns_zero_when_open(self) -> None:
-        with patch("validate_and_filter._check_redis_circuit", return_value=True):
+        with patch("gates.redis_circuit._check_redis_circuit", return_value=True):
             assert _get_watch_cycles("AAPL", "15m") == 0
 
     def test_reset_watch_cycles_noop_when_open(self) -> None:
-        with patch("validate_and_filter._check_redis_circuit", return_value=True):
+        with patch("gates.redis_circuit._check_redis_circuit", return_value=True):
             _reset_watch_cycles(["AAPL"], "15m")
 
 
 class TestCircuitBreakerIntegration:
     def test_watch_capped_when_circuit_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import gates.redis_circuit as rc
         import validate_and_filter as vf
 
-        vf._redis_circuit_open = True
+        breaker = rc.get_breaker()
+        breaker.circuit_open = True
+        breaker.last_failure_ts = time.monotonic()
         monkeypatch.setattr(vf, "_WATCH_MAX_STRESSED", 1)
         monkeypatch.setattr(vf, "_WATCH_MAX_TRENDING", 3)
         a1 = _watch_alert(symbol="MSFT")
@@ -550,9 +544,11 @@ class TestCircuitBreakerIntegration:
         assert mock_skipped.inc.call_count >= 0
 
     def test_validate_and_filter_warns_when_circuit_open(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._redis_circuit_open = True
+        breaker = rc.get_breaker()
+        breaker.circuit_open = True
+        breaker.last_failure_ts = time.monotonic()
         a = _watch_alert()
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
         results, _ = _run([a], snaps=snaps)
@@ -618,7 +614,7 @@ class TestDedupHelpers:
     def test_reset_dedup_keys(self) -> None:
         mock = MagicMock()
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 _reset_dedup_keys(["AAPL"], "15m")
         assert mock.delete.called
 
@@ -626,7 +622,7 @@ class TestDedupHelpers:
         mock = MagicMock()
         mock.set.side_effect = Exception("redis down")
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 assert _try_dedup_set("AAPL", "LONG", "15m") is False
 
 
@@ -637,7 +633,7 @@ class TestIncrWatchCycles:
         pipe.execute.return_value = [2]
         mock.pipeline.return_value = pipe
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 assert _incr_watch_cycles("AAPL", "15m", 0.7, 0.65) == 2
 
 

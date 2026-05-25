@@ -192,18 +192,17 @@ class TestHelperCoverage:
         assert _get_volume_spike_scores(snaps) == {}
 
     def test_incr_watch_cycles_records_redis_failure(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._REDIS_FAILURE_COUNT = 0
-        vf._redis_circuit_open = False
+        rc.get_breaker().reset_for_tests()
         mock = MagicMock()
         pipe = MagicMock()
         pipe.execute.side_effect = RuntimeError("redis down")
         mock.pipeline.return_value = pipe
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 assert _incr_watch_cycles("AAPL", "15m", 0.7, 0.65) == 0
-        assert vf._REDIS_FAILURE_COUNT >= 1
+        assert rc.get_breaker().failure_count >= 1
 
     def test_reference_prices_edge_cases(self) -> None:
         snaps = [
@@ -220,47 +219,49 @@ class TestHelperCoverage:
         assert _watch_is_improving("AAPL", 0.8, prev) is False
 
     def test_get_watch_prev_state_records_failure(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._REDIS_FAILURE_COUNT = 0
-        vf._redis_circuit_open = False
+        rc.get_breaker().reset_for_tests()
         mock = MagicMock()
         mock.hgetall.side_effect = RuntimeError("redis down")
         with patch("validate_and_filter.get_redis", return_value=mock):
             assert _get_watch_prev_state("AAPL", "15m") is None
 
     def test_circuit_reset_after_window(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._redis_circuit_open = True
-        vf._redis_last_failure_ts = time.monotonic() - 120
-        vf._REDIS_FAILURE_WINDOW_SECONDS = 60
+        breaker = rc.get_breaker()
+        breaker.circuit_open = True
+        breaker.last_failure_ts = time.monotonic() - 120
+        breaker.failure_window_seconds = 60
         with patch("validate_and_filter.REDIS_CIRCUIT_OPEN") as mock_gauge:
             assert _check_redis_circuit() is False
             mock_gauge.set.assert_called_with(0)
 
     def test_record_redis_failure_resets_count_in_new_window(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._REDIS_FAILURE_COUNT = 5
-        vf._redis_last_failure_ts = time.monotonic() - 120
-        vf._REDIS_FAILURE_THRESHOLD = 3
+        breaker = rc.get_breaker()
+        breaker.failure_count = 5
+        breaker.last_failure_ts = time.monotonic() - 120
+        breaker.failure_threshold = 3
         _record_redis_failure()
-        assert vf._REDIS_FAILURE_COUNT == 1
+        assert breaker.failure_count == 1
 
     def test_record_redis_failure_opens_circuit_and_sets_gauge(self) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._REDIS_FAILURE_COUNT = 0
-        vf._redis_circuit_open = False
-        vf._redis_last_failure_ts = 0.0
-        vf._REDIS_FAILURE_THRESHOLD = 2
+        breaker = rc.get_breaker()
+        breaker.failure_count = 0
+        breaker.circuit_open = False
+        breaker.last_failure_ts = 0.0
+        breaker.failure_threshold = 2
         with patch("validate_and_filter.REDIS_CIRCUIT_OPEN") as mock_gauge:
             with patch("validate_and_filter.GATE_REJECTIONS") as mock_rejections:
                 mock_rejections.labels.return_value.inc = MagicMock()
                 _record_redis_failure()
                 _record_redis_failure()
-        assert vf._redis_circuit_open is True
+        assert breaker.circuit_open is True
         mock_gauge.set.assert_called_with(1)
         mock_rejections.labels.assert_called_with(gate="redis_circuit_open")
 
@@ -629,7 +630,7 @@ class TestWatchPathCoverage:
         pipe.execute.return_value = [0]
         mock.pipeline.return_value = pipe
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 a = _watch_alert()
                 snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
                 r1, _ = _run([a], snaps=snaps)
@@ -649,7 +650,7 @@ class TestWatchPathCoverage:
         mock.pipeline.return_value = pipe
         mock.set.return_value = True
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 a = _watch_alert(edge_probability=0.68)
                 snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
                 results, _ = _run([a], snaps=snaps)
@@ -680,10 +681,11 @@ class TestWatchPathCoverage:
         assert len(results) == 1
 
     def test_circuit_open_warning_on_validate(self, caplog: pytest.LogCaptureFixture) -> None:
-        import validate_and_filter as vf
+        import gates.redis_circuit as rc
 
-        vf._redis_circuit_open = True
-        vf._redis_last_failure_ts = time.monotonic()
+        breaker = rc.get_breaker()
+        breaker.circuit_open = True
+        breaker.last_failure_ts = time.monotonic()
         a = _watch_alert()
         snaps = [_snap("AAPL", ["technical_trend", "volume_spike", "sentiment_bull"])]
         with caplog.at_level(logging.WARNING):
@@ -704,7 +706,7 @@ class TestWatchPathCoverage:
         mock.set.return_value = True
         mock.delete.return_value = 1
         with patch("validate_and_filter.get_redis", return_value=mock):
-            with patch("validate_and_filter._check_redis_circuit", return_value=False):
+            with patch("gates.redis_circuit._check_redis_circuit", return_value=False):
                 long_a = _alert(direction="LONG", confidence=0.80)
                 watch_a = _watch_alert(symbol="MSFT")
                 snaps = [

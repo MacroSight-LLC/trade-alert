@@ -49,13 +49,13 @@ from gates.reconciliation import (
     _signal_directional_score,
 )
 from gates.redis_circuit import (
-    _check_redis_circuit as _rc_check_redis_circuit,
-    _record_redis_failure as _rc_record_redis_failure,
-    is_redis_circuit_open as _rc_is_redis_circuit_open,
+    _check_redis_circuit,
+    _record_redis_failure,
+    circuit_warned_this_cycle,
+    is_redis_circuit_open,
     mark_circuit_warned,
     reset_circuit_warned_flag,
 )
-import gates.redis_circuit as _redis_circuit
 from gates.regime import (
     EP_CEILING,
     _dynamic_gates,
@@ -153,51 +153,6 @@ _MARKET_HOURS_GATES_ENABLED: bool = os.environ.get("MARKET_HOURS_GATES_ENABLED",
 _SESSION_PREPOST_EP_BUMP: float = float(os.environ.get("SESSION_PREPOST_EP_BUMP", "0.03"))
 _SESSION_PREPOST_CONF_BUMP: float = float(os.environ.get("SESSION_PREPOST_CONF_BUMP", "0.05"))
 _SESSION_PREPOST_SA_BUMP: int = int(os.environ.get("SESSION_PREPOST_SA_BUMP", "2"))
-
-_REDIS_STATE_ATTRS = (
-    "_REDIS_FAILURE_COUNT",
-    "_REDIS_FAILURE_THRESHOLD",
-    "_REDIS_FAILURE_WINDOW_SECONDS",
-    "_redis_last_failure_ts",
-    "_redis_circuit_open",
-    "_redis_circuit_warned_this_cycle",
-)
-
-
-def _sync_redis_state_to_module() -> None:
-    mod = sys.modules[__name__]
-    for name in _REDIS_STATE_ATTRS:
-        setattr(mod, name, getattr(_redis_circuit, name))
-
-
-def _sync_redis_state_from_module() -> None:
-    mod = sys.modules[__name__]
-    for name in _REDIS_STATE_ATTRS:
-        if hasattr(mod, name):
-            setattr(_redis_circuit, name, getattr(mod, name))
-
-
-def _check_redis_circuit() -> bool:
-    _sync_redis_state_from_module()
-    result = _rc_check_redis_circuit()
-    _sync_redis_state_to_module()
-    return result
-
-
-def _record_redis_failure() -> None:
-    _sync_redis_state_from_module()
-    _rc_record_redis_failure()
-    _sync_redis_state_to_module()
-
-
-def is_redis_circuit_open() -> bool:
-    _sync_redis_state_from_module()
-    result = _rc_is_redis_circuit_open()
-    _sync_redis_state_to_module()
-    return result
-
-
-_sync_redis_state_to_module()
 
 
 def _build_candidate_gate_config() -> CandidateGateConfig:

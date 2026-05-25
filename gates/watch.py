@@ -13,7 +13,7 @@ def get_redis():
 
 
 def _circuit():
-    from validate_and_filter import _check_redis_circuit, _record_redis_failure
+    from gates.redis_circuit import _check_redis_circuit, _record_redis_failure
 
     return _check_redis_circuit, _record_redis_failure
 

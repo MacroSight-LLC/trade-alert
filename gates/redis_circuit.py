@@ -5,15 +5,68 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-_REDIS_FAILURE_COUNT = 0
-_REDIS_FAILURE_THRESHOLD = int(os.environ.get("REDIS_FAILURE_THRESHOLD", "3"))
-_REDIS_FAILURE_WINDOW_SECONDS = int(os.environ.get("REDIS_FAILURE_WINDOW_SECONDS", "60"))
-_redis_last_failure_ts: float = 0.0
-_redis_circuit_open: bool = False
-_redis_circuit_warned_this_cycle: bool = False
+
+@dataclass
+class RedisCircuitBreaker:
+    failure_count: int = 0
+    failure_threshold: int = field(
+        default_factory=lambda: int(os.environ.get("REDIS_FAILURE_THRESHOLD", "3"))
+    )
+    failure_window_seconds: int = field(
+        default_factory=lambda: int(os.environ.get("REDIS_FAILURE_WINDOW_SECONDS", "60"))
+    )
+    last_failure_ts: float = 0.0
+    circuit_open: bool = False
+    warned_this_cycle: bool = False
+
+    def check(self) -> bool:
+        """Return True when the circuit is open (skip Redis calls).
+
+        Lazy-resets after ``failure_window_seconds`` with no new failures.
+        """
+        now = time.monotonic()
+        if (
+            self.circuit_open
+            and self.last_failure_ts > 0.0
+            and (now - self.last_failure_ts) >= self.failure_window_seconds
+        ):
+            self.circuit_open = False
+            self.failure_count = 0
+            _, redis_circuit_open = _metrics()
+            redis_circuit_open.set(0)
+            logger.info("Redis circuit breaker reset — WATCH decay re-enabled")
+        return self.circuit_open
+
+    def record_failure(self) -> None:
+        """Increment failure counter and open circuit if threshold exceeded."""
+        now = time.monotonic()
+        if self.last_failure_ts and (now - self.last_failure_ts) >= self.failure_window_seconds:
+            self.failure_count = 0
+
+        self.failure_count += 1
+        self.last_failure_ts = now
+
+        if self.failure_count >= self.failure_threshold and not self.circuit_open:
+            self.circuit_open = True
+            gate_rejections, redis_circuit_open = _metrics()
+            redis_circuit_open.set(1)
+            gate_rejections.labels(gate="redis_circuit_open").inc()
+            logger.warning(
+                "Redis circuit breaker OPEN after %d failures in %ds window",
+                self.failure_count,
+                self.failure_window_seconds,
+            )
+
+    def reset_for_tests(self) -> None:
+        """Full state reset — call from conftest autouse fixture."""
+        self.failure_count = 0
+        self.last_failure_ts = 0.0
+        self.circuit_open = False
+        self.warned_this_cycle = False
 
 
 def _metrics():
@@ -23,65 +76,33 @@ def _metrics():
     return vf.GATE_REJECTIONS, vf.REDIS_CIRCUIT_OPEN
 
 
+_breaker = RedisCircuitBreaker()
+
+
+def get_breaker() -> RedisCircuitBreaker:
+    """Return the module-level singleton — use in tests and health checks."""
+    return _breaker
+
+
 def _check_redis_circuit() -> bool:
-    """Return True when the circuit is open (skip Redis calls).
-
-    Lazy-resets the circuit after ``_REDIS_FAILURE_WINDOW_SECONDS`` with no
-    new failures.
-    """
-    global _redis_circuit_open, _REDIS_FAILURE_COUNT  # noqa: PLW0603
-
-    now = time.monotonic()
-    if _redis_circuit_open and (now - _redis_last_failure_ts) >= _REDIS_FAILURE_WINDOW_SECONDS:
-        _redis_circuit_open = False
-        _REDIS_FAILURE_COUNT = 0
-        _, redis_circuit_open = _metrics()
-        redis_circuit_open.set(0)
-        logger.info("Redis circuit breaker reset — WATCH decay re-enabled")
-
-    return _redis_circuit_open
+    return _breaker.check()
 
 
 def _record_redis_failure() -> None:
-    """Increment failure counter and open circuit if threshold exceeded."""
-    global _redis_circuit_open, _REDIS_FAILURE_COUNT, _redis_last_failure_ts  # noqa: PLW0603
-
-    now = time.monotonic()
-    if _redis_last_failure_ts and (now - _redis_last_failure_ts) >= _REDIS_FAILURE_WINDOW_SECONDS:
-        _REDIS_FAILURE_COUNT = 0
-
-    _REDIS_FAILURE_COUNT += 1
-    _redis_last_failure_ts = now
-
-    if _REDIS_FAILURE_COUNT >= _REDIS_FAILURE_THRESHOLD and not _redis_circuit_open:
-        _redis_circuit_open = True
-        gate_rejections, redis_circuit_open = _metrics()
-        redis_circuit_open.set(1)
-        gate_rejections.labels(gate="redis_circuit_open").inc()
-        logger.warning(
-            "Redis circuit breaker OPEN after %d failures in %ds window",
-            _REDIS_FAILURE_COUNT,
-            _REDIS_FAILURE_WINDOW_SECONDS,
-        )
+    _breaker.record_failure()
 
 
 def is_redis_circuit_open() -> bool:
-    """Public accessor for healthcheck / dashboard."""
-    return _check_redis_circuit()
+    return _breaker.check()
 
 
 def reset_circuit_warned_flag() -> None:
-    """Reset per-cycle warning flag at the start of validate_and_filter."""
-    global _redis_circuit_warned_this_cycle  # noqa: PLW0603
-    _redis_circuit_warned_this_cycle = False
+    _breaker.warned_this_cycle = False
 
 
 def mark_circuit_warned() -> None:
-    """Record that the circuit-open warning was emitted this cycle."""
-    global _redis_circuit_warned_this_cycle  # noqa: PLW0603
-    _redis_circuit_warned_this_cycle = True
+    _breaker.warned_this_cycle = True
 
 
 def circuit_warned_this_cycle() -> bool:
-    """Return whether the circuit-open warning was already logged this cycle."""
-    return _redis_circuit_warned_this_cycle
+    return _breaker.warned_this_cycle
