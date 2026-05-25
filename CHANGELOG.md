@@ -15,7 +15,7 @@ phase ordering in the SSOT phase table.
 - CI: detect-secrets false positives in `.cursor/rules/trade-alert.mdc`; flaky Redis circuit-breaker and WATCH-cap unit tests.
 - CI: upstream `stability-tests.yml` limited to `workflow_dispatch` until FU-012 harness is restored.
 - CI: bump `actions/checkout@v5` and `astral-sh/setup-uv@v7` in trade-alert and deploy workflows.
-
+- CI: lowercase GHCR image paths for `MacroSight-LLC/trade-alert` org casing.
 ## [1.2.0] - 2026-05-23
 
 Stabilization sprint: CI/CD hardening, module decomposition, test coverage, and ops prep.

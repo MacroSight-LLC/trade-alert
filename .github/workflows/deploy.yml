@@ -7,10 +7,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga
-  IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp
-  IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm
-  IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard
 
 jobs:
   # ── Job 1: Lint ──────────────────────────────────────────────────
@@ -99,6 +95,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set GHCR image paths
+        run: |
+          repo="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "IMAGE_CUGA=ghcr.io/${repo}/cuga"
+            echo "IMAGE_MCP=ghcr.io/${repo}/mcp"
+            echo "IMAGE_TIMESFM=ghcr.io/${repo}/timesfm"
+            echo "IMAGE_DASHBOARD=ghcr.io/${repo}/dashboard"
+          } >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -181,11 +187,18 @@ jobs:
       DEPLOY_SHA: ${{ github.sha }}
       GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
       GHCR_USER: ${{ github.repository_owner }}
-      IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga:${{ github.sha }}
-      IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp:${{ github.sha }}
-      IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm:${{ github.sha }}
-      IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard:${{ github.sha }}
     steps:
+      - name: Set GHCR image paths
+        run: |
+          repo="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          sha="${{ github.sha }}"
+          {
+            echo "IMAGE_CUGA=ghcr.io/${repo}/cuga:${sha}"
+            echo "IMAGE_MCP=ghcr.io/${repo}/mcp:${sha}"
+            echo "IMAGE_TIMESFM=ghcr.io/${repo}/timesfm:${sha}"
+            echo "IMAGE_DASHBOARD=ghcr.io/${repo}/dashboard:${sha}"
+          } >> "$GITHUB_ENV"
+
       - name: Require GHCR_READ_TOKEN
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
@@ -204,10 +217,10 @@ jobs:
           DEPLOY_SHA: ${{ github.sha }}
           GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
           GHCR_USER: ${{ github.repository_owner }}
-          IMAGE_CUGA: ghcr.io/${{ github.repository }}/cuga:${{ github.sha }}
-          IMAGE_MCP: ghcr.io/${{ github.repository }}/mcp:${{ github.sha }}
-          IMAGE_TIMESFM: ghcr.io/${{ github.repository }}/timesfm:${{ github.sha }}
-          IMAGE_DASHBOARD: ghcr.io/${{ github.repository }}/dashboard:${{ github.sha }}
+          IMAGE_CUGA: ${{ env.IMAGE_CUGA }}
+          IMAGE_MCP: ${{ env.IMAGE_MCP }}
+          IMAGE_TIMESFM: ${{ env.IMAGE_TIMESFM }}
+          IMAGE_DASHBOARD: ${{ env.IMAGE_DASHBOARD }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: deploy
