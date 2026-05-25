@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+# Match tests/unit/conftest.py — avoid time-of-day market-session gate failures.
+os.environ.setdefault("MARKET_HOURS_GATES_ENABLED", "0")
+
 DEFAULT_SYMBOLS = ("AAPL", "NVDA", "MSFT", "GOOGL", "TSLA")
 DEFAULT_ITERATIONS = 50
 PASS_RATE_MIN = float(os.environ.get("STABILITY_PASS_RATE_MIN", "0.80"))
@@ -69,6 +72,7 @@ def _mock_redis() -> MagicMock:
     mock.hget.return_value = None
     mock.get.return_value = None
     mock.exists.return_value = 0
+    mock.set.return_value = True
     pipe = MagicMock()
     pipe.execute.return_value = [0, 0, 0, 0]
     mock.pipeline.return_value = pipe
