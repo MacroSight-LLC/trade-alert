@@ -783,6 +783,9 @@ services:
       DYNACONF_ADVANCED_FEATURES__LANGFUSE_TRACING: "true"
       LANGFUSE_HOST: http://langfuse:3000
       TZ: America/New_York
+      DISCORD_BOT_POLL_INTERVAL: ${DISCORD_BOT_POLL_INTERVAL:-5}
+      DISCORD_BOT_HTTP_TIMEOUT: ${DISCORD_BOT_HTTP_TIMEOUT:-30}
+      DISCORD_BOT_STARTUP_ANNOUNCE: ${DISCORD_BOT_STARTUP_ANNOUNCE:-false}
     logging: *default-logging
     networks:
       - trade-net

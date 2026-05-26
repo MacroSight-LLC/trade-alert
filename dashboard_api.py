@@ -346,14 +346,23 @@ def api_health(request: Request) -> dict[str, Any]:
 
         last_run: float | None = None
         try:
-            from prometheus_client import REGISTRY
+            from redis_client import get_redis
 
-            for metric in REGISTRY.collect():
-                if metric.name == "pipeline_last_run_timestamp":
-                    for sample in metric.samples:
-                        last_run = sample.value
+            raw = get_redis().get("pipeline:last_run_ts")
+            if raw:
+                last_run = float(raw)
         except Exception:  # noqa: BLE001
             pass
+        if last_run is None:
+            try:
+                from prometheus_client import REGISTRY
+
+                for metric in REGISTRY.collect():
+                    if metric.name == "pipeline_last_run_timestamp":
+                        for sample in metric.samples:
+                            last_run = sample.value
+            except Exception:  # noqa: BLE001
+                pass
 
         return {
             "status": "live" if redis_ok else "degraded",

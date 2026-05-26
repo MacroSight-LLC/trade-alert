@@ -370,6 +370,12 @@ def run_workflow(
     _wf_label = workflow_path.stem
     PIPELINE_RUNS.labels(workflow=_wf_label, status="failure" if workflow_failed else "success").inc()
     PIPELINE_LAST_RUN.labels(workflow=_wf_label).set_to_current_time()
+    try:
+        from redis_client import get_redis
+
+        get_redis().set("pipeline:last_run_ts", str(time.time()))
+    except Exception:  # noqa: BLE001
+        pass
 
     # Latency breakdown summary
     if step_timings:

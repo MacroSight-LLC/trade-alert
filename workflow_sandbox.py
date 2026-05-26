@@ -37,6 +37,8 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset(
         "time",
         "datetime",
         "math",
+        "db",
+        "outcome_tracker",
         "hashlib",
         "copy",
         "collections",
@@ -80,6 +82,7 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset(
 # Per-module symbols allowed via ``from module import symbol``.
 _IMPORT_FROM_ALLOWLIST: dict[str, frozenset[str]] = {
     "datetime": frozenset({"datetime", "timezone", "timedelta", "UTC"}),
+    "zoneinfo": frozenset({"ZoneInfo"}),
     "merger": frozenset({"merge", "get_macro_regime"}),
     "normalizers": frozenset({"normalize_forecast"}),
     "healthcheck": frozenset({"run_healthcheck"}),
@@ -110,6 +113,12 @@ _IMPORT_FROM_ALLOWLIST: dict[str, frozenset[str]] = {
     "normalizers.forecast_normalizer": frozenset({"normalize"}),
     "normalizers.macro_normalizer": frozenset({"normalize"}),
     "normalizers.si_normalizer": frozenset({"normalize"}),
+    "gate_config": frozenset({"GATE_EP", "GATE_SA", "GATE_CONF", "classify_regime"}),
+    "gates.regime": frozenset({"_dynamic_gates"}),
+    "gates.watch": frozenset({"_watch_decay_key"}),
+    "validate_and_filter": frozenset({"_WATCH_DECAY_CYCLES"}),
+    "db": frozenset({"get_winrate_by_bucket"}),
+    "outcome_tracker": frozenset({"run_tracker_cycle"}),
 }
 
 _ALLOWED_BUILTINS: frozenset[str] = frozenset(

@@ -48,7 +48,10 @@ ALLOWED_USER_IDS: frozenset[str] = frozenset(
 )
 OPS_ROLE_ID: str = os.getenv("DISCORD_OPS_ROLE_ID", "").strip()
 API_BASE = "https://discord.com/api/v10"
-POLL_INTERVAL: float = float(os.getenv("DISCORD_BOT_POLL_INTERVAL", "3.0"))
+POLL_INTERVAL: float = float(os.getenv("DISCORD_BOT_POLL_INTERVAL", "5.0"))
+HTTP_TIMEOUT: float = float(os.getenv("DISCORD_BOT_HTTP_TIMEOUT", os.getenv("DISCORD_HTTP_TIMEOUT", "30.0")))
+MAX_POLL_BACKOFF: float = float(os.getenv("DISCORD_BOT_MAX_BACKOFF", "60.0"))
+STARTUP_ANNOUNCE: bool = os.getenv("DISCORD_BOT_STARTUP_ANNOUNCE", "true").lower() in ("1", "true", "yes")
 
 # Track processed message IDs to avoid re-processing
 _processed: set[str] = set()
@@ -63,14 +66,39 @@ _ET = ZoneInfo("America/New_York")
 
 # Shared HTTP client (reused across all calls)
 _http_client: httpx.Client | None = None
+_poll_errors: int = 0
+
+
+def _reset_client() -> None:
+    """Drop the shared client so the next request opens a fresh connection."""
+    global _http_client  # noqa: PLW0603
+    if _http_client is not None and not _http_client.is_closed:
+        try:
+            _http_client.close()
+        except Exception:  # noqa: BLE001
+            pass
+    _http_client = None
 
 
 def _get_client() -> httpx.Client:
     """Return shared httpx client, creating if needed."""
     global _http_client  # noqa: PLW0603
     if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.Client(timeout=10.0)
+        _http_client = httpx.Client(
+            timeout=httpx.Timeout(HTTP_TIMEOUT, connect=min(10.0, HTTP_TIMEOUT)),
+        )
     return _http_client
+
+
+def _database_url() -> str:
+    """Resolve Postgres DSN for container runtime (same rules as db.py)."""
+    from db import _resolve_database_url
+
+    url = _resolve_database_url()
+    if not url:
+        msg = "DATABASE_URL not set"
+        raise RuntimeError(msg)
+    return url
 
 
 def _headers() -> dict[str, str]:
@@ -94,6 +122,7 @@ def _send_message(channel_id: str, content: str) -> None:
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("Failed to send message: %s", exc)
+        _reset_client()
 
 
 def _send_embed(channel_id: str, embed: dict) -> None:
@@ -112,6 +141,7 @@ def _send_embed(channel_id: str, embed: dict) -> None:
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("Failed to send embed: %s", exc)
+        _reset_client()
 
 
 def _run_pipeline(timeframe: str) -> tuple[bool, str]:
@@ -432,11 +462,7 @@ def _build_session_report() -> str:
         import psycopg2
 
         label, start_utc, end_utc, session_date = _session_window()
-        db_url = os.getenv("DATABASE_URL", "")
-        if not db_url:
-            return "❌ DATABASE_URL not set — cannot build session report"
-
-        conn = psycopg2.connect(db_url, connect_timeout=5)
+        conn = psycopg2.connect(_database_url(), connect_timeout=5)
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -537,37 +563,34 @@ def _send_last_alert(channel_id: str) -> None:
         channel_id: Channel to send the response to.
     """
     try:
-        import psycopg2
+        from db import get_recent_alerts
 
-        db_url = os.getenv("DATABASE_URL", "")
-        if not db_url:
-            logger.error("DATABASE_URL not set")
-            return
-        conn = psycopg2.connect(db_url, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT symbol, direction, edge_probability, sources_agree, "
-                    "confidence, thesis, timeframe, created_at, outcome "
-                    "FROM alerts ORDER BY created_at DESC LIMIT 1"
-                )
-                row = cur.fetchone()
-        finally:
-            conn.close()
-
-        if not row:
+        rows = get_recent_alerts(limit=1)
+        if not rows:
             _send_message(channel_id, "No alerts in the database yet.")
             return
 
-        sym, direction, ep, sa, conf, thesis, tf, created, outcome = row
+        row = rows[0]
+        sym = row.get("symbol", "?")
+        direction = row.get("direction", "?")
+        ep = row.get("edge_probability")
+        sa = row.get("sources_agree")
+        conf = row.get("confidence")
+        thesis = row.get("thesis") or ""
+        tf = row.get("timeframe", "?")
+        created = row.get("created_at")
+        outcome = row.get("outcome")
         outcome_str = f" → **{outcome}**" if outcome else ""
+        ep_s = f"{float(ep):.0%}" if ep is not None else "?"
+        conf_s = f"{float(conf):.0%}" if conf is not None else "?"
+        created_s = created.strftime("%Y-%m-%d %H:%M UTC") if hasattr(created, "strftime") else str(created)
         _send_message(
             channel_id,
             f"**Last Alert{outcome_str}**\n"
             f"**{sym}** {direction} ({tf})\n"
-            f"EP: {ep:.0%} | SA: {sa}/10 | Conf: {conf:.0%}\n"
+            f"EP: {ep_s} | SA: {sa}/10 | Conf: {conf_s}\n"
             f"_{thesis[:200]}_\n"
-            f"Fired: {created:%Y-%m-%d %H:%M UTC}",
+            f"Fired: {created_s}",
         )
     except Exception as exc:
         logger.error("Failed to fetch last alert: %s", exc)
@@ -580,19 +603,21 @@ def _poll_messages() -> None:
     Uses ``?after=`` to efficiently fetch only new messages.
     Tracks the last-seen message ID to avoid re-processing.
     """
-    global _processed  # noqa: PLW0603
+    global _processed, _poll_errors  # noqa: PLW0603
 
     last_id = "0"
 
     logger.info(
-        "Bot started — polling channel %s every %.1fs",
+        "Bot started — polling channel %s every %.1fs (timeout %.1fs)",
         OPS_CHANNEL_ID,
         POLL_INTERVAL,
+        HTTP_TIMEOUT,
     )
-    _send_message(
-        OPS_CHANNEL_ID,
-        "Bot online. Type `!help` for available commands.",
-    )
+    if STARTUP_ANNOUNCE:
+        _send_message(
+            OPS_CHANNEL_ID,
+            "Bot online. Type `!help` for available commands.",
+        )
 
     while not _shutdown.is_set():
         try:
@@ -606,6 +631,7 @@ def _poll_messages() -> None:
             )
             resp.raise_for_status()
             messages = resp.json()
+            _poll_errors = 0
 
             # Messages come newest-first, reverse for chronological order
             for msg in reversed(messages):
@@ -634,9 +660,22 @@ def _poll_messages() -> None:
                     _handle_command(content, OPS_CHANNEL_ID, author, msg.get("guild_id"))
 
         except httpx.HTTPError as exc:
-            logger.warning("Poll error: %s", exc)
+            _poll_errors += 1
+            _reset_client()
+            backoff = min(POLL_INTERVAL * (2 ** min(_poll_errors - 1, 4)), MAX_POLL_BACKOFF)
+            logger.warning(
+                "Poll error (%d): %s — retry in %.1fs",
+                _poll_errors,
+                exc,
+                backoff,
+            )
+            time.sleep(backoff)
+            continue
         except Exception as exc:
+            _poll_errors += 1
             logger.error("Unexpected poll error: %s", exc)
+            time.sleep(min(POLL_INTERVAL * 2, MAX_POLL_BACKOFF))
+            continue
 
         time.sleep(POLL_INTERVAL)
 
