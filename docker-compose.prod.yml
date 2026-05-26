@@ -830,6 +830,7 @@ services:
       - ./models.py:/app/models.py
       - ./vault_env_loader.py:/app/vault_env_loader.py
       - ./redis_client.py:/app/redis_client.py
+      - ./db_legacy.py:/app/db_legacy.py
       - ./log_config.py:/app/log_config.py
     command:
       [

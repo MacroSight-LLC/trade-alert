@@ -1,0 +1,15 @@
+{
+  "source_dump": "trade_alert_20260410_030000.dump",
+  "description": "Cherry-picked local dev alerts (Apr 2026). Imported into legacy_alerts only — prod alerts table untouched.",
+  "alert_ids": [1, 2, 3, 4, 5, 23, 24, 31],
+  "notes": {
+    "1": "HOOD — insider cluster + 8-K catalyst",
+    "2": "HOLX — volume spike + 8-K",
+    "3": "INTC — sentiment + volume (early trial)",
+    "4": "AVGO — 57x volume breakout",
+    "5": "AMD — max sentiment + 8-K cluster",
+    "23": "META — LONG (representative; many WATCH duplicates excluded)",
+    "24": "AMZN — 5-source LONG confluence",
+    "31": "AMD — bearish WATCH (shows both sides)"
+  }
+}

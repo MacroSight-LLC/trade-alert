@@ -39,6 +39,7 @@ from db import (
     get_symbol_performance,
     get_winrate_by_bucket,
 )
+from db_legacy import get_legacy_recent_alerts, get_legacy_summary_stats
 from log_config import configure_logging
 
 configure_logging()
@@ -443,6 +444,28 @@ def api_kpis(request: Request) -> dict[str, Any]:
     return _cached_json("dashboard:api:kpis", _build)
 
 
+legacy_router = APIRouter(prefix="/api/legacy", dependencies=[Depends(_require_api_key)])
+
+
+@legacy_router.get("/summary")
+@limiter.limit(_RATE_LIMIT)
+def api_legacy_summary(request: Request) -> dict[str, Any]:
+    """Aggregate KPIs for curated trial/dev alerts (legacy_alerts table)."""
+    data = get_legacy_summary_stats()
+    data["tier"] = "legacy"
+    return _clean_dict(data)
+
+
+@legacy_router.get("/alerts")
+@limiter.limit(_RATE_LIMIT)
+def api_legacy_alerts(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+) -> list[dict]:
+    """Return cherry-picked legacy alerts; does not include prod alerts."""
+    return _clean_rows(get_legacy_recent_alerts(limit))
+
+
 @router.get("/circuit-breaker")
 @limiter.limit(_RATE_LIMIT)
 def api_circuit_breaker(request: Request) -> dict[str, Any]:
@@ -457,6 +480,7 @@ def api_circuit_breaker(request: Request) -> dict[str, Any]:
 
 
 app.include_router(router)
+app.include_router(legacy_router)
 
 
 # ── Serve the dashboard HTML ────────────────────────────────────────────

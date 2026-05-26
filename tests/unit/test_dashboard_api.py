@@ -283,3 +283,61 @@ class TestAlertsEndpoint:
     def test_limit_too_large(self) -> None:
         resp = client.get("/api/alerts?limit=1000")
         assert resp.status_code == 422
+
+
+# ── /api/legacy/* ────────────────────────────────────────────────────
+
+
+_MOCK_LEGACY_SUMMARY = {
+    "total_alerts": 8,
+    "resolved": 3,
+    "wins": 2,
+    "losses": 1,
+    "scratches": 0,
+    "overall_winrate": Decimal("0.6667"),
+    "avg_edge": Decimal("0.8100"),
+    "avg_pnl": None,
+    "earliest": datetime(2026, 4, 8, 10, 0, 0, tzinfo=UTC),
+    "latest": datetime(2026, 4, 10, 18, 0, 0, tzinfo=UTC),
+}
+
+
+class TestLegacyEndpoints:
+    """Tests for GET /api/legacy/summary and /api/legacy/alerts."""
+
+    @patch("dashboard_api.get_legacy_summary_stats", return_value=_MOCK_LEGACY_SUMMARY)
+    def test_legacy_summary(self, _mock: MagicMock) -> None:
+        resp = client.get("/api/legacy/summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tier"] == "legacy"
+        assert data["total_alerts"] == 8
+        assert data["overall_winrate"] == pytest.approx(0.6667)
+
+    @patch(
+        "dashboard_api.get_legacy_recent_alerts",
+        return_value=[
+            {
+                "id": 1,
+                "symbol": "AMD",
+                "direction": "LONG",
+                "edge_probability": Decimal("0.85"),
+                "confidence": Decimal("0.80"),
+                "timeframe": "15m",
+                "thesis": "Trial run.",
+                "entry": {"level": 100.0, "stop": 98.0, "target": 105.0},
+                "created_at": datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC),
+                "legacy_note": "AMD — max sentiment",
+                "source_alert_id": 5,
+                "source_dump": "trade_alert_20260410_030000.dump",
+            },
+        ],
+    )
+    def test_legacy_alerts(self, _mock: MagicMock) -> None:
+        resp = client.get("/api/legacy/alerts?limit=10")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["symbol"] == "AMD"
+        assert data[0]["legacy_note"] == "AMD — max sentiment"
+        _mock.assert_called_once_with(10)
