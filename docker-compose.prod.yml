@@ -588,6 +588,7 @@ services:
       - ./gates:/app/gates
       - ./resilience:/app/resilience
       - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./mcp:/app/mcp
       - ./gate_config.py:/app/gate_config.py
       - ./workflow_template.py:/app/workflow_template.py
       - ./llm_client.py:/app/llm_client.py
@@ -666,6 +667,7 @@ services:
       - ./gates:/app/gates
       - ./resilience:/app/resilience
       - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./mcp:/app/mcp
       - ./gate_config.py:/app/gate_config.py
       - ./workflow_template.py:/app/workflow_template.py
       - ./llm_client.py:/app/llm_client.py
@@ -760,6 +762,7 @@ services:
       - ./gates:/app/gates
       - ./resilience:/app/resilience
       - ./workflow_sandbox.py:/app/workflow_sandbox.py
+      - ./mcp:/app/mcp
       - ./gate_config.py:/app/gate_config.py
       - ./workflow_template.py:/app/workflow_template.py
       - ./llm_client.py:/app/llm_client.py

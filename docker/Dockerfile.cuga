@@ -71,6 +71,7 @@ COPY execution_mapper.py /app/execution_mapper.py
 COPY execution_trigger.py /app/execution_trigger.py
 COPY execution_webhook.py /app/execution_webhook.py
 COPY workflow_sandbox.py /app/workflow_sandbox.py
+COPY mcp/ /app/mcp/
 COPY resilience/ /app/resilience/
 COPY scripts/vault_exec.py /app/scripts/vault_exec.py
 COPY vault_env_loader.py /app/vault_env_loader.py
